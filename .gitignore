@@ -1,0 +1,29 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Configs with secrets
+configs/config.yaml
+.env
+
+# Logs
+*.log
+logs/
+
+# Go
+vendor/
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Docker
+docker-compose.override.yml
+
+nul

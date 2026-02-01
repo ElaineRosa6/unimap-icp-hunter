@@ -1,0 +1,134 @@
+# UniMap + ICP-Hunter 配置文件示例
+# 请复制此文件为 config.yaml 并根据实际环境修改
+
+app:
+  name: "unimap-icp-hunter"
+  env: "prod"
+  port: 8080
+  log_level: "info"
+  log_path: "./logs/app.log"
+
+database:
+  host: "mysql-host"
+  port: 3306
+  username: "unimap_user"
+  password: "your_secure_password"
+  name: "unimap_icp_hunter"
+  charset: "utf8mb4"
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600s
+
+redis:
+  host: "redis-host"
+  port: 6379
+  password: "your_redis_password"
+  db: 0
+  pool_size: 50
+  min_idle_conns: 5
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+
+storage:
+  endpoint: "minio-host:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "unimap-icp-hunter"
+  use_ssl: false
+  region: "us-east-1"
+
+unimap:
+  engines:
+    fofa:
+      enabled: true
+      base_url: "https://fofa.info"
+      api_key: "${FOFA_API_KEY}"  # 从环境变量读取
+      email: "${FOFA_EMAIL}"
+      qps: 1
+      timeout: 10s
+      max_retries: 3
+
+    hunter:
+      enabled: true
+      base_url: "https://hunter.qianxin.com"
+      api_key: "${HUNTER_API_KEY}"  # 从环境变量读取
+      qps: 1
+      timeout: 10s
+      max_retries: 3
+
+icp_hunter:
+  executor:
+    worker_pool_size: 200
+    queue_name: "stream:icp:probe"
+    consumer_group: "icp_workers"
+
+  analyzer:
+    icp_patterns:
+      - '京ICP备\d{6,}-\d{1,3}号'
+      - '沪ICP备\d{6,}号'
+      - '粤ICP备\d{6,}号'
+      - '浙ICP备\d{6,}号'
+      - '.ICP备\d{8,}-\d{1,5}号'
+
+  screenshot:
+    enabled: true
+    timeout: 15s
+
+  notification:
+    email:
+      enabled: true
+      smtp_host: "smtp.gmail.com"
+      smtp_port: 587
+      username: "your-email@gmail.com"
+      password: "your-app-password"
+      from: "your-email@gmail.com"
+      to: ["admin@example.com"]
+      daily_report: true
+      report_time: "08:00"
+
+    webhook:
+      enabled: true
+      url: "https://oapi.dingtalk.com/robot/send?access_token=your_token"
+      secret: "your_secret"
+      type: "dingtalk"
+
+scheduler:
+  daily_scan:
+    enabled: true
+    cron: "0 2 * * *"
+    concurrency:
+      engine_calls: 3
+      queue_push_batch: 50
+      queue_push_interval: "5s"
+
+  report:
+    enabled: true
+    cron: "0 8 * * *"
+
+monitor:
+  prometheus:
+    enabled: true
+    endpoint: "/metrics"
+    port: 9090
+
+  health:
+    enabled: true
+    endpoint: "/health"
+
+security:
+  rate_limit:
+    global_qps: 10
+    per_engine_qps:
+      fofa: 2
+      hunter: 2
+    probe_rate:
+      max_concurrent: 200
+      max_per_minute: 6000
+
+  sensitive_exclude:
+    enabled: true
+    domains:
+      - ".gov.cn"
+      - ".edu.cn"
+      - ".mil.cn"

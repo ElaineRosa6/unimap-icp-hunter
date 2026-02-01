@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go version:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go clean:*)",
+      "Bash(del:*)",
+      "Bash(go build:*)",
+      "Bash(python3:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(python:*)",
+      "Bash(xxd:*)",
+      "Bash(printf '\\\\t\\\\tCount\\(\\\\®istered\\)\\\\n')"
+    ]
+  }
+}
