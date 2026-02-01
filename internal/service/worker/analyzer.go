@@ -12,13 +12,13 @@ import (
 
 // ContentAnalyzer 内容分析器
 type ContentAnalyzer struct {
-	icpPatterns        []*regexp.Regexp
-	uncertainPatterns  []*regexp.Regexp
-	whitelistIPs       []string
-	whitelistDomains   []string
-	whitelistASNs      []string
-	whitelistOrgs      []string
-	logger             *zap.Logger
+	icpPatterns       []*regexp.Regexp
+	uncertainPatterns []*regexp.Regexp
+	whitelistIPs      []string
+	whitelistDomains  []string
+	whitelistASNs     []string
+	whitelistOrgs     []string
+	logger            *zap.Logger
 }
 
 // NewContentAnalyzer 创建内容分析器

@@ -14,19 +14,18 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/service/scheduler"
 	"github.com/unimap-icp-hunter/project/internal/service/worker"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 // ICPService ICP-Hunter核心服务
 type ICPService struct {
-	repo        repository.Repository
-	redis       *redis.Client
+	repo         repository.Repository
+	redis        *redis.Client
 	orchestrator *adapter.EngineOrchestrator
-	merger      *unimap.ResultMerger
-	scheduler   *scheduler.ScanScheduler
-	worker      *worker.ProbeExecutor
-	notifier    *notification.Notifier
-	logger      *zap.Logger
+	merger       *unimap.ResultMerger
+	scheduler    *scheduler.ScanScheduler
+	worker       *worker.ProbeExecutor
+	notifier     *notification.Notifier
+	logger       *zap.Logger
 }
 
 // NewICPService 创建ICP服务
@@ -41,14 +40,14 @@ func NewICPService(
 	logger *zap.Logger,
 ) *ICPService {
 	return &ICPService{
-		repo:        repo,
-		redis:       redis,
+		repo:         repo,
+		redis:        redis,
 		orchestrator: orchestrator,
-		merger:      merger,
-		scheduler:   scheduler,
-		worker:      worker,
-		notifier:    notifier,
-		logger:      logger,
+		merger:       merger,
+		scheduler:    scheduler,
+		worker:       worker,
+		notifier:     notifier,
+		logger:       logger,
 	}
 }
 
@@ -206,12 +205,12 @@ func (s *ICPService) GetDailyReport(ctx context.Context, date time.Time) (*notif
 
 	// 转换为通知服务的格式
 	dailyStats := notification.DailyStats{
-		Date:             date.Format("2006-01-02"),
-		NewUnregistered:  stats["new_unregistered"].(int),
+		Date:              date.Format("2006-01-02"),
+		NewUnregistered:   stats["new_unregistered"].(int),
 		TotalUnregistered: stats["unregistered"].(int),
-		TotalRegistered:  stats["registered"].(int),
-		TotalScanned:     stats["total_scanned"].(int),
-		GenerateTime:     time.Now().Format("2006-01-02 15:04:05"),
+		TotalRegistered:   stats["registered"].(int),
+		TotalScanned:      stats["total_scanned"].(int),
+		GenerateTime:      time.Now().Format("2006-01-02 15:04:05"),
 	}
 
 	// 转换省份统计
@@ -240,7 +239,7 @@ func (s *ICPService) GetDailyReport(ctx context.Context, date time.Time) (*notif
 		})
 	}
 
-	return dailyStats, nil
+	return &dailyStats, nil
 }
 
 // generateAndSendDailyReport 生成并发送日报
@@ -296,10 +295,10 @@ func (s *ICPService) GetScanStats(ctx context.Context) (map[string]interface{}, 
 	}
 
 	result := map[string]interface{}{
-		"today_stats":      stats,
-		"queue_length":     queueLen,
-		"active_policies":  len(policies),
-		"timestamp":        time.Now().Format("2006-01-02 15:04:05"),
+		"today_stats":     stats,
+		"queue_length":    queueLen,
+		"active_policies": len(policies),
+		"timestamp":       time.Now().Format("2006-01-02 15:04:05"),
 	}
 
 	return result, nil
@@ -331,4 +330,14 @@ func (s *ICPService) GetUnregisteredSites(ctx context.Context, page, pageSize in
 	err := s.repo.GetDB().Raw(query, pageSize, offset).Scan(&results).Error
 
 	return results, err
+}
+
+// GetScheduler returns the scheduler instance
+func (s *ICPService) GetScheduler() *scheduler.ScanScheduler {
+	return s.scheduler
+}
+
+// GetNotifier returns the notifier instance
+func (s *ICPService) GetNotifier() *notification.Notifier {
+	return s.notifier
 }

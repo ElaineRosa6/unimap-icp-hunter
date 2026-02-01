@@ -140,12 +140,12 @@ func (f *FofaAdapter) Search(query string, page, pageSize int) (*model.EngineRes
 
 	resp, err := f.client.R().
 		SetQueryParams(map[string]string{
-			"email":      f.email,
-			"key":        f.apiKey,
-			"qbase64":    encodedQuery,
-			"page":       fmt.Sprintf("%d", page),
-			"size":       fmt.Sprintf("%d", pageSize),
-			"fields":     "ip,port,protocol,domain,title,server,header,body,country,region,city,asn,org,isp,status_code",
+			"email":   f.email,
+			"key":     f.apiKey,
+			"qbase64": encodedQuery,
+			"page":    fmt.Sprintf("%d", page),
+			"size":    fmt.Sprintf("%d", pageSize),
+			"fields":  "ip,port,protocol,domain,title,server,header,body,country,region,city,asn,org,isp,status_code",
 		}).
 		Get(url)
 
@@ -164,10 +164,10 @@ func (f *FofaAdapter) Search(query string, page, pageSize int) (*model.EngineRes
 	}
 
 	var result struct {
-		Mode   string        `json:"mode"`
+		Mode    string          `json:"mode"`
 		Results [][]interface{} `json:"results"`
-		Total  int           `json:"total"`
-		Err    string        `json:"error"`
+		Total   int             `json:"total"`
+		Err     string          `json:"error"`
 	}
 
 	if err := json.Unmarshal(resp.Body(), &result); err != nil {

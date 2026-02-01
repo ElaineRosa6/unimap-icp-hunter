@@ -38,10 +38,10 @@ type ProbeConfig struct {
 
 // HTTPConfig HTTP请求配置
 type HTTPConfig struct {
-	Timeout         time.Duration
-	MaxRedirects    int
-	UserAgent       string
-	FollowRedirects bool
+	Timeout          time.Duration
+	MaxRedirects     int
+	UserAgent        string
+	FollowRedirects  bool
 	DisableTLSVerify bool
 }
 

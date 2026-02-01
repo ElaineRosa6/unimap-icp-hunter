@@ -180,8 +180,8 @@ func (g *PolicyGenerator) GeneratePriorityPolicies() []PolicyConfig {
 		pageSize   int
 		maxRecords int
 	}{
-		{[]int{80, 443}, 1, 200, 10000},      // 高优先级
-		{[]int{8080, 8443}, 2, 100, 5000},    // 中优先级
+		{[]int{80, 443}, 1, 200, 10000},        // 高优先级
+		{[]int{8080, 8443}, 2, 100, 5000},      // 中优先级
 		{[]int{8000, 9000, 7000}, 3, 50, 2000}, // 低优先级
 	}
 

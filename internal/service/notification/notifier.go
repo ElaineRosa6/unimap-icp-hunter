@@ -27,15 +27,15 @@ type NotifyConfig struct {
 
 // EmailConfig 邮件配置
 type EmailConfig struct {
-	Enabled      bool     `yaml:"enabled"`
-	SMTPHost     string   `yaml:"smtp_host"`
-	SMTPPort     int      `yaml:"smtp_port"`
-	Username     string   `yaml:"username"`
-	Password     string   `yaml:"password"`
-	From         string   `yaml:"from"`
-	To           []string `yaml:"to"`
-	DailyReport  bool     `yaml:"daily_report"`
-	ReportTime   string   `yaml:"report_time"`
+	Enabled     bool     `yaml:"enabled"`
+	SMTPHost    string   `yaml:"smtp_host"`
+	SMTPPort    int      `yaml:"smtp_port"`
+	Username    string   `yaml:"username"`
+	Password    string   `yaml:"password"`
+	From        string   `yaml:"from"`
+	To          []string `yaml:"to"`
+	DailyReport bool     `yaml:"daily_report"`
+	ReportTime  string   `yaml:"report_time"`
 }
 
 // WebhookConfig Webhook配置
@@ -363,15 +363,15 @@ func (n *Notifier) generateReportHTML(stats *DailyStats) (string, error) {
 
 // DailyStats 日报统计
 type DailyStats struct {
-	Date             string
-	NewUnregistered  int
+	Date              string
+	NewUnregistered   int
 	TotalUnregistered int
-	TotalRegistered  int
-	TotalScanned     int
-	ProvinceStats    []ProvinceStat
-	PortStats        []PortStat
-	TopServers       []ServerStat
-	GenerateTime     string
+	TotalRegistered   int
+	TotalScanned      int
+	ProvinceStats     []ProvinceStat
+	PortStats         []PortStat
+	TopServers        []ServerStat
+	GenerateTime      string
 }
 
 // ProvinceStat 省份统计

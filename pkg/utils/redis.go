@@ -29,11 +29,11 @@ func NewRedisClient(config *viper.Viper) *redis.Client {
 
 // RedisLock Redis分布式锁
 type RedisLock struct {
-	client    *redis.Client
-	key       string
-	value     string
-	expire    time.Duration
-	acquired  bool
+	client   *redis.Client
+	key      string
+	value    string
+	expire   time.Duration
+	acquired bool
 }
 
 // NewRedisLock 创建分布式锁

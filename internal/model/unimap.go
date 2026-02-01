@@ -2,9 +2,9 @@ package model
 
 // UQLNode UQL语法树节点
 type UQLNode struct {
-	Type     string      `json:"type"`     // operator, field, value
-	Value    string      `json:"value"`    // 字段名或操作符
-	Children []*UQLNode  `json:"children"` // 子节点
+	Type     string     `json:"type"`     // operator, field, value
+	Value    string     `json:"value"`    // 字段名或操作符
+	Children []*UQLNode `json:"children"` // 子节点
 }
 
 // UQLAST UQL抽象语法树
@@ -32,24 +32,24 @@ type EngineResult struct {
 
 // UnifiedAsset 统一资产结构 (用于引擎适配器返回)
 type UnifiedAsset struct {
-	IP           string            `json:"ip"`
-	Port         int               `json:"port"`
-	Protocol     string            `json:"protocol"`
-	Host         string            `json:"host"`
-	URL          string            `json:"url"`
-	Title        string            `json:"title"`
-	BodySnippet  string            `json:"body_snippet"`
-	Server       string            `json:"server"`
-	Headers      map[string]string `json:"headers"`
-	StatusCode   int               `json:"status_code"`
-	CountryCode  string            `json:"country_code"`
-	Region       string            `json:"region"`
-	City         string            `json:"city"`
-	ASN          string            `json:"asn"`
-	Org          string            `json:"org"`
-	ISP          string            `json:"isp"`
-	Source       string            `json:"source"`
-	Extra        map[string]interface{} `json:"extra"`
+	IP          string                 `json:"ip"`
+	Port        int                    `json:"port"`
+	Protocol    string                 `json:"protocol"`
+	Host        string                 `json:"host"`
+	URL         string                 `json:"url"`
+	Title       string                 `json:"title"`
+	BodySnippet string                 `json:"body_snippet"`
+	Server      string                 `json:"server"`
+	Headers     map[string]string      `json:"headers"`
+	StatusCode  int                    `json:"status_code"`
+	CountryCode string                 `json:"country_code"`
+	Region      string                 `json:"region"`
+	City        string                 `json:"city"`
+	ASN         string                 `json:"asn"`
+	Org         string                 `json:"org"`
+	ISP         string                 `json:"isp"`
+	Source      string                 `json:"source"`
+	Extra       map[string]interface{} `json:"extra"`
 }
 
 // EngineAdapter 引擎适配器接口
@@ -62,25 +62,25 @@ type EngineAdapter interface {
 
 // FieldMapping 引擎字段映射
 type FieldMapping struct {
-	Unified  string   `yaml:"unified"`
-	Engine   string   `yaml:"engine"`
-	Fields   []string `yaml:"fields"`
+	Unified string   `yaml:"unified"`
+	Engine  string   `yaml:"engine"`
+	Fields  []string `yaml:"fields"`
 }
 
 // EngineConfig 引擎配置
 type EngineConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	BaseURL   string `yaml:"base_url"`
-	APIKey    string `yaml:"api_key"`
-	Email     string `yaml:"email"`
-	QPS       int    `yaml:"qps"`
-	Timeout   int    `yaml:"timeout"`
-	MaxRetries int   `yaml:"max_retries"`
+	Enabled    bool   `yaml:"enabled"`
+	BaseURL    string `yaml:"base_url"`
+	APIKey     string `yaml:"api_key"`
+	Email      string `yaml:"email"`
+	QPS        int    `yaml:"qps"`
+	Timeout    int    `yaml:"timeout"`
+	MaxRetries int    `yaml:"max_retries"`
 }
 
 // MergeResult 归并结果
 type MergeResult struct {
-	Assets    map[string]*UnifiedAsset `json:"assets"` // key: ip:port
-	Total     int                      `json:"total"`
-	Duplicates int                     `json:"duplicates"`
+	Assets     map[string]*UnifiedAsset `json:"assets"` // key: ip:port
+	Total      int                      `json:"total"`
+	Duplicates int                      `json:"duplicates"`
 }
