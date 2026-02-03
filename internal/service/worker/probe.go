@@ -161,6 +161,8 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 		task := &model.ProbeTask{}
 
 		// 解析字段
+		// Note: Parsing failures are logged but tasks continue with zero values
+		// This allows the system to be resilient to malformed data while maintaining visibility
 		if val, ok := msg.Values[model.StreamFieldTaskID].(string); ok {
 			task.TaskID = val
 		}

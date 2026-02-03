@@ -137,7 +137,7 @@ func (o *EngineOrchestrator) SearchEnginesWithPagination(queries []model.EngineQ
 				// Send error result for non-existent adapter
 				resultsChan <- &model.EngineResult{
 					EngineName: query.EngineName,
-					Error:      fmt.Sprintf("adapter not found: %s", query.EngineName),
+					Error:      fmt.Sprintf("failed to find adapter: %s", query.EngineName),
 				}
 				return
 			}
