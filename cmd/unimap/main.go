@@ -297,7 +297,11 @@ func initLogger() {
 	config.EncoderConfig.TimeKey = "timestamp"
 	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
-	logger, _ = config.Build()
+	var err error
+	logger, err = config.Build()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to initialize logger: %v", err))
+	}
 }
 
 func main() {

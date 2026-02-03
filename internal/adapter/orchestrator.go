@@ -134,6 +134,11 @@ func (o *EngineOrchestrator) SearchEnginesWithPagination(queries []model.EngineQ
 
 			adapter, exists := o.GetAdapter(query.EngineName)
 			if !exists {
+				// Send error result for non-existent adapter
+				resultsChan <- &model.EngineResult{
+					EngineName: query.EngineName,
+					Error:      fmt.Sprintf("adapter not found: %s", query.EngineName),
+				}
 				return
 			}
 
@@ -141,6 +146,11 @@ func (o *EngineOrchestrator) SearchEnginesWithPagination(queries []model.EngineQ
 			for page := 1; page <= maxPages; page++ {
 				result, err := adapter.Search(query.Query, page, pageSize)
 				if err != nil {
+					// Send error result instead of silently breaking
+					resultsChan <- &model.EngineResult{
+						EngineName: query.EngineName,
+						Error:      fmt.Sprintf("search failed on page %d: %v", page, err),
+					}
 					break
 				}
 
