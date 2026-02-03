@@ -43,6 +43,7 @@ type Repository interface {
 	IsWhitelisted(ctx context.Context, ip, domain, asn, org string) (bool, error)
 
 	// Stats 统�相关
+	GetDailyStats(ctx context.Context, date time.Time) (map[string]interface{}, error)
 	GetProvinceStats(ctx context.Context, date time.Time) ([]map[string]interface{}, error)
 	GetPortStats(ctx context.Context, date time.Time) ([]map[string]interface{}, error)
 	GetTopServers(ctx context.Context, date time.Time, limit int) ([]map[string]interface{}, error)
@@ -359,7 +360,7 @@ func (r *GORMRepository) GetDailyStats(ctx context.Context, date time.Time) (map
 	var registered int64
 	r.db.WithContext(ctx).Model(&model.ICPCheck{}).
 		Where("is_registered = 1 AND check_time >= ? AND check_time < ?", start, end).
-		Count(&istered)
+		Count(&registered)
 	stats["registered"] = registered
 
 	// 新增未备案（首次发现）

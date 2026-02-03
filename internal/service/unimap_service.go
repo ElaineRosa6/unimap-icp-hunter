@@ -117,9 +117,9 @@ func (s *UniMapService) GetEngineStatus() map[string]interface{} {
 		adapter, exists := s.orchestrator.GetAdapter(name)
 		if exists {
 			status[name] = map[string]interface{}{
-				"enabled":  true,
-				"adapter":  adapter.Name(),
-				"status":   "active",
+				"enabled": true,
+				"adapter": adapter.Name(),
+				"status":  "active",
 			}
 		}
 	}

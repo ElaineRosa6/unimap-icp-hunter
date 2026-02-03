@@ -5,6 +5,8 @@
 *.dylib
 bin/
 dist/
+unimap-api
+icp-hunter
 
 # Configs with secrets
 configs/config.yaml
@@ -17,13 +19,20 @@ logs/
 # Go
 vendor/
 
+# Test coverage
+*.out
+coverage.html
+
 # OS/IDE
 .DS_Store
 .vscode/
 .idea/
 *.swp
+*~
 
 # Docker
 docker-compose.override.yml
 
-nul
+# Temporary files
+tmp/
+*.tmp

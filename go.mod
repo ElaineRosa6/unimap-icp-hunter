@@ -3,7 +3,6 @@ module github.com/unimap-icp-hunter/project
 go 1.21
 
 require (
-
 	// HTTP客户端
 	github.com/go-resty/resty/v2 v2.11.0
 	github.com/go-sql-driver/mysql v1.7.1 // indirect

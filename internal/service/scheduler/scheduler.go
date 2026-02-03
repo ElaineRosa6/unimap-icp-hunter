@@ -16,25 +16,25 @@ import (
 
 // ScanScheduler 扫描任务调度器
 type ScanScheduler struct {
-	cron           *cron.Cron
-	orchestrator   *adapter.EngineOrchestrator
-	merger         *unimap.ResultMerger
-	redisClient    *redis.Client
-	config         *SchedulerConfig
-	logger         *zap.Logger
-	mu             sync.Mutex
-	running        bool
+	cron         *cron.Cron
+	orchestrator *adapter.EngineOrchestrator
+	merger       *unimap.ResultMerger
+	redisClient  *redis.Client
+	config       *SchedulerConfig
+	logger       *zap.Logger
+	mu           sync.Mutex
+	running      bool
 }
 
 // SchedulerConfig 调度器配置
 type SchedulerConfig struct {
-	Policies []PolicyConfig `yaml:"policies"`
+	Policies  []PolicyConfig `yaml:"policies"`
 	DailyScan struct {
-		Enabled bool   `yaml:"enabled"`
-		Cron    string `yaml:"cron"`
+		Enabled     bool   `yaml:"enabled"`
+		Cron        string `yaml:"cron"`
 		Concurrency struct {
-			EngineCalls      int           `yaml:"engine_calls"`
-			QueuePushBatch   int           `yaml:"queue_push_batch"`
+			EngineCalls       int           `yaml:"engine_calls"`
+			QueuePushBatch    int           `yaml:"queue_push_batch"`
 			QueuePushInterval time.Duration `yaml:"queue_push_interval"`
 		} `yaml:"concurrency"`
 	} `yaml:"daily_scan"`

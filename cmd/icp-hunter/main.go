@@ -116,14 +116,14 @@ var scanNowCmd = &cobra.Command{
 			// 执行单个策略
 			policyName := args[0]
 			fmt.Printf("执行策略: %s\n", policyName)
-			err = svc.scheduler.ExecuteImmediate(ctx, policyName)
+			err = svc.GetScheduler().ExecuteImmediate(ctx, policyName)
 		} else {
 			// 执行所有策略
 			fmt.Println("执行所有已启用策略...")
-			policies := svc.scheduler.ListPolicies()
+			policies := svc.GetScheduler().ListPolicies()
 			for _, p := range policies {
 				fmt.Printf("  - %s\n", p.Name)
-				if err := svc.scheduler.ExecuteImmediate(ctx, p.Name); err != nil {
+				if err := svc.GetScheduler().ExecuteImmediate(ctx, p.Name); err != nil {
 					logger.Error("Failed to execute policy", zap.String("policy", p.Name), zap.Error(err))
 				}
 			}
@@ -259,7 +259,7 @@ var reportCmd = &cobra.Command{
 
 		// 发送报告
 		if cmd.Flag("send").Value.String() == "true" {
-			if err := svc.notifier.SendDailyReport(stats); err != nil {
+			if err := svc.GetNotifier().SendDailyReport(stats); err != nil {
 				logger.Error("Failed to send report", zap.Error(err))
 			} else {
 				fmt.Println("\n报告已发送")
@@ -603,11 +603,11 @@ func initICPService() (*service.ICPService, error) {
 
 	// 创建通知服务
 	notifyConfig := notification.NotifyConfig{}
-	if err := viper.UnmarshalKey("icp_hunter.notification", notifyConfig); err != nil {
+	if err := viper.UnmarshalKey("icp_hunter.notification", &notifyConfig); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal notification config: %v", err)
 	}
 
-	notifier := notification.NewNotifier(notifyConfig, logger)
+	notifier := notification.NewNotifier(&notifyConfig, logger)
 
 	// 创建ICP服务
 	icpService := service.NewICPService(
@@ -622,4 +622,12 @@ func initICPService() (*service.ICPService, error) {
 	)
 
 	return icpService, nil
+}
+
+// main is the entry point for the application
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

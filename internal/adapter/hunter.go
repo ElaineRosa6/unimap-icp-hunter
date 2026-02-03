@@ -135,9 +135,9 @@ func (h *HunterAdapter) Search(query string, page, pageSize int) (*model.EngineR
 	// 实际需要根据Hunter API文档调整
 	resp, err := h.client.R().
 		SetQueryParams(map[string]string{
-			"api-key": h.apiKey,
-			"query":   query,
-			"page":    fmt.Sprintf("%d", page),
+			"api-key":   h.apiKey,
+			"query":     query,
+			"page":      fmt.Sprintf("%d", page),
 			"page_size": fmt.Sprintf("%d", pageSize),
 		}).
 		Get(url)
@@ -158,11 +158,11 @@ func (h *HunterAdapter) Search(query string, page, pageSize int) (*model.EngineR
 
 	// Hunter返回格式解析
 	var result struct {
-		Code    int                    `json:"code"`
-		Message string                 `json:"message"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
 		Data    struct {
-			Total  int                      `json:"total"`
-			Items  []map[string]interface{} `json:"items"`
+			Total int                      `json:"total"`
+			Items []map[string]interface{} `json:"items"`
 		} `json:"data"`
 	}
 

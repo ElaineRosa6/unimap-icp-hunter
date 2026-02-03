@@ -27,14 +27,14 @@ const (
 
 // Redis Key 前缀
 const (
-	KeyPrefixDailyCheck = "icp:daily:"      // 每日去重缓存
-	KeyPrefixLock       = "icp:lock:"       // 分布式锁
-	KeyPrefixStat       = "icp:stat:"       // 统计缓存
+	KeyPrefixDailyCheck = "icp:daily:" // 每日去重缓存
+	KeyPrefixLock       = "icp:lock:"  // 分布式锁
+	KeyPrefixStat       = "icp:stat:"  // 统计缓存
 )
 
 // CacheEntry 缓存条目
 type CacheEntry struct {
 	IsRegistered int    `json:"is_registered"`
-	ICPCode     string `json:"icp_code"`
-	CheckTime   int64  `json:"check_time"`
+	ICPCode      string `json:"icp_code"`
+	CheckTime    int64  `json:"check_time"`
 }
