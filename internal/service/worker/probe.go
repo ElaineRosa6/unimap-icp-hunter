@@ -173,6 +173,8 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 		if val, ok := msg.Values[model.StreamFieldPort].(string); ok {
 			if port, err := strconv.Atoi(val); err == nil {
 				task.Port = port
+			} else {
+				p.logger.Warn("Failed to parse port", zap.String("value", val), zap.Error(err))
 			}
 		} else if val, ok := msg.Values[model.StreamFieldPort].(int64); ok {
 			task.Port = int(val)
@@ -183,6 +185,8 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 		if val, ok := msg.Values[model.StreamFieldPolicy].(string); ok {
 			if policyID, err := strconv.ParseUint(val, 10, 32); err == nil {
 				task.PolicyID = uint(policyID)
+			} else {
+				p.logger.Warn("Failed to parse policy ID", zap.String("value", val), zap.Error(err))
 			}
 		} else if val, ok := msg.Values[model.StreamFieldPolicy].(int64); ok {
 			task.PolicyID = uint(val)
@@ -190,6 +194,8 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 		if val, ok := msg.Values[model.StreamFieldRetry].(string); ok {
 			if retryCount, err := strconv.Atoi(val); err == nil {
 				task.RetryCount = retryCount
+			} else {
+				p.logger.Warn("Failed to parse retry count", zap.String("value", val), zap.Error(err))
 			}
 		} else if val, ok := msg.Values[model.StreamFieldRetry].(int64); ok {
 			task.RetryCount = int(val)
