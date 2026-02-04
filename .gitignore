@@ -5,9 +5,9 @@
 *.dylib
 bin/
 dist/
-unimap-api
-icp-hunter
-unimap-gui
+/unimap-api
+/icp-hunter
+/unimap-gui
 
 # Configs with secrets
 configs/config.yaml
