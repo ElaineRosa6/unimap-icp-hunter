@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
-	"strconv"
+	"strings"
 
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/plugin"
@@ -318,9 +318,7 @@ func (p *EnrichmentProcessor) generateFingerprint(asset model.UnifiedAsset) stri
 // normalizeCountryCode 规范化国家代码
 func (p *EnrichmentProcessor) normalizeCountryCode(code string) string {
 	// 将国家代码转换为大写
-	return regexp.MustCompile(`[a-z]+`).ReplaceAllStringFunc(code, func(s string) string {
-		return fmt.Sprintf("%s", strconv.QuoteToASCII(s))
-	})
+	return strings.ToUpper(code)
 }
 
 // guessServiceType 推测服务类型
