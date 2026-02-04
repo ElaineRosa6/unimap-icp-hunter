@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/unimap-icp-hunter/project/internal/model"
 )
 
 // PluginManager 插件管理器 - 管理插件的加载、启动、停止和健康检查

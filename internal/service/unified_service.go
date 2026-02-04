@@ -15,8 +15,8 @@ import (
 type UnifiedService struct {
 	pluginManager *plugin.PluginManager
 	orchestrator  *adapter.EngineOrchestrator
-	parser        *unimap.Parser
-	merger        *unimap.Merger
+	parser        *unimap.UQLParser
+	merger        *unimap.ResultMerger
 	mu            sync.RWMutex
 }
 
@@ -25,8 +25,8 @@ func NewUnifiedService() *UnifiedService {
 	return &UnifiedService{
 		pluginManager: plugin.NewPluginManager(),
 		orchestrator:  adapter.NewEngineOrchestrator(),
-		parser:        unimap.NewParser(),
-		merger:        unimap.NewMerger(),
+		parser:        unimap.NewUQLParser(),
+		merger:        unimap.NewResultMerger(),
 	}
 }
 
@@ -99,21 +99,21 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		}
 
 		// 获取对应的适配器
-		adapterInstance, exists := s.orchestrator.GetAdapter(result.Engine)
+		adapterInstance, exists := s.orchestrator.GetAdapter(result.EngineName)
 		if !exists {
-			errors = append(errors, fmt.Sprintf("adapter for engine %s not found", result.Engine))
+			errors = append(errors, fmt.Sprintf("adapter for engine %s not found", result.EngineName))
 			continue
 		}
 
 		// 规范化结果
 		assets, err := adapterInstance.Normalize(result)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("failed to normalize results from %s: %v", result.Engine, err))
+			errors = append(errors, fmt.Sprintf("failed to normalize results from %s: %v", result.EngineName, err))
 			continue
 		}
 
 		allAssets = append(allAssets, assets...)
-		engineStats[result.Engine] = len(assets)
+		engineStats[result.EngineName] = len(assets)
 	}
 
 	// 如果需要处理数据
