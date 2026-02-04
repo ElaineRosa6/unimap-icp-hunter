@@ -1,0 +1,308 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/core/unimap"
+	"github.com/unimap-icp-hunter/project/internal/model"
+	"github.com/unimap-icp-hunter/project/internal/plugin"
+)
+
+// UnifiedService 统一服务层 - 为 CLI、GUI 和 Web 提供统一接口
+type UnifiedService struct {
+	pluginManager *plugin.PluginManager
+	orchestrator  *adapter.EngineOrchestrator
+	parser        *unimap.Parser
+	merger        *unimap.Merger
+	mu            sync.RWMutex
+}
+
+// NewUnifiedService 创建统一服务
+func NewUnifiedService() *UnifiedService {
+	return &UnifiedService{
+		pluginManager: plugin.NewPluginManager(),
+		orchestrator:  adapter.NewEngineOrchestrator(),
+		parser:        unimap.NewParser(),
+		merger:        unimap.NewMerger(),
+	}
+}
+
+// QueryRequest 查询请求
+type QueryRequest struct {
+	Query       string   // UQL 查询语句
+	Engines     []string // 要使用的引擎列表
+	PageSize    int      // 每页大小
+	ProcessData bool     // 是否处理数据（去重、清洗等）
+}
+
+// QueryResponse 查询响应
+type QueryResponse struct {
+	Assets      []model.UnifiedAsset // 查询结果
+	TotalCount  int                  // 总数量
+	EngineStats map[string]int       // 各引擎统计
+	Errors      []string             // 错误信息
+}
+
+// Query 执行查询
+func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryResponse, error) {
+	// 验证请求
+	if req.Query == "" {
+		return nil, fmt.Errorf("query cannot be empty")
+	}
+	if len(req.Engines) == 0 {
+		return nil, fmt.Errorf("at least one engine must be specified")
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 100
+	}
+
+	// 触发查询前钩子
+	if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{
+		"query":   req.Query,
+		"engines": req.Engines,
+	}); err != nil {
+		return nil, fmt.Errorf("pre-query hook failed: %w", err)
+	}
+
+	// 解析 UQL
+	ast, err := s.parser.Parse(req.Query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse query: %w", err)
+	}
+
+	// 转换为各引擎查询
+	queries, err := s.orchestrator.TranslateQuery(ast, req.Engines)
+	if err != nil {
+		return nil, fmt.Errorf("failed to translate query: %w", err)
+	}
+
+	// 并行搜索
+	engineResults, err := s.orchestrator.SearchEngines(queries, req.PageSize)
+	if err != nil {
+		// 记录错误但继续处理
+		s.pluginManager.GetHooks().TriggerHook(plugin.HookQueryError, "query", map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
+	// 规范化和合并结果
+	var allAssets []model.UnifiedAsset
+	engineStats := make(map[string]int)
+	var errors []string
+
+	for _, result := range engineResults {
+		if result == nil {
+			continue
+		}
+
+		// 获取对应的适配器
+		adapterInstance, exists := s.orchestrator.GetAdapter(result.Engine)
+		if !exists {
+			errors = append(errors, fmt.Sprintf("adapter for engine %s not found", result.Engine))
+			continue
+		}
+
+		// 规范化结果
+		assets, err := adapterInstance.Normalize(result)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("failed to normalize results from %s: %v", result.Engine, err))
+			continue
+		}
+
+		allAssets = append(allAssets, assets...)
+		engineStats[result.Engine] = len(assets)
+	}
+
+	// 如果需要处理数据
+	if req.ProcessData {
+		allAssets, err = s.processAssets(ctx, allAssets)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("data processing failed: %v", err))
+		}
+	}
+
+	// 触发查询后钩子
+	s.pluginManager.GetHooks().TriggerHook(plugin.HookAfterQuery, "query", map[string]interface{}{
+		"result_count": len(allAssets),
+		"engines":      req.Engines,
+	})
+
+	return &QueryResponse{
+		Assets:      allAssets,
+		TotalCount:  len(allAssets),
+		EngineStats: engineStats,
+		Errors:      errors,
+	}, nil
+}
+
+// processAssets 处理资产数据
+func (s *UnifiedService) processAssets(ctx context.Context, assets []model.UnifiedAsset) ([]model.UnifiedAsset, error) {
+	// 触发处理前钩子
+	if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeProcess, "process", nil); err != nil {
+		return assets, err
+	}
+
+	// 获取所有处理器插件
+	processors := s.pluginManager.GetRegistry().GetProcessorPlugins()
+	if len(processors) == 0 {
+		return assets, nil
+	}
+
+	// 创建处理管道
+	pipeline := plugin.NewProcessorPipeline(processors)
+
+	// 执行处理
+	result, err := pipeline.Process(ctx, assets)
+	if err != nil {
+		return assets, err
+	}
+
+	// 触发处理后钩子
+	s.pluginManager.GetHooks().TriggerHook(plugin.HookAfterProcess, "process", map[string]interface{}{
+		"original_count": len(assets),
+		"processed_count": len(result),
+	})
+
+	return result, nil
+}
+
+// ExportRequest 导出请求
+type ExportRequest struct {
+	Assets     []model.UnifiedAsset // 要导出的资产
+	Format     string               // 导出格式
+	OutputPath string               // 输出路径
+}
+
+// Export 导出数据
+func (s *UnifiedService) Export(ctx context.Context, req ExportRequest) error {
+	// 查找支持该格式的导出器
+	exporters := s.pluginManager.GetRegistry().GetExporterPlugins()
+	
+	for _, exporter := range exporters {
+		formats := exporter.SupportedFormats()
+		for _, format := range formats {
+			if format == req.Format {
+				return exporter.Export(req.Assets, req.OutputPath)
+			}
+		}
+	}
+
+	return fmt.Errorf("no exporter found for format: %s", req.Format)
+}
+
+// RegisterEngine 注册引擎插件
+func (s *UnifiedService) RegisterEngine(engine plugin.EnginePlugin, config map[string]interface{}) error {
+	// 加载插件
+	if err := s.pluginManager.LoadPlugin(engine, config); err != nil {
+		return err
+	}
+
+	// 启动插件
+	if err := s.pluginManager.StartPlugin(engine.Name()); err != nil {
+		return err
+	}
+
+	// 注册到编排器
+	// 创建适配器包装器
+	wrapper := &enginePluginAdapter{engine: engine}
+	s.orchestrator.RegisterAdapter(wrapper)
+
+	return nil
+}
+
+// RegisterProcessor 注册处理器插件
+func (s *UnifiedService) RegisterProcessor(processor plugin.ProcessorPlugin, config map[string]interface{}) error {
+	// 加载插件
+	if err := s.pluginManager.LoadPlugin(processor, config); err != nil {
+		return err
+	}
+
+	// 启动插件
+	return s.pluginManager.StartPlugin(processor.Name())
+}
+
+// RegisterExporter 注册导出器插件
+func (s *UnifiedService) RegisterExporter(exporter plugin.ExporterPlugin, config map[string]interface{}) error {
+	// 加载插件
+	if err := s.pluginManager.LoadPlugin(exporter, config); err != nil {
+		return err
+	}
+
+	// 启动插件
+	return s.pluginManager.StartPlugin(exporter.Name())
+}
+
+// ListEngines 列出所有引擎
+func (s *UnifiedService) ListEngines() []map[string]interface{} {
+	engines := s.pluginManager.GetRegistry().GetEnginePlugins()
+	result := make([]map[string]interface{}, 0, len(engines))
+
+	for _, engine := range engines {
+		result = append(result, map[string]interface{}{
+			"name":        engine.Name(),
+			"version":     engine.Version(),
+			"description": engine.Description(),
+			"author":      engine.Author(),
+			"fields":      engine.SupportedFields(),
+			"max_page_size": engine.MaxPageSize(),
+		})
+	}
+
+	return result
+}
+
+// ListProcessors 列出所有处理器
+func (s *UnifiedService) ListProcessors() []map[string]interface{} {
+	processors := s.pluginManager.GetRegistry().GetProcessorPlugins()
+	result := make([]map[string]interface{}, 0, len(processors))
+
+	for _, processor := range processors {
+		result = append(result, map[string]interface{}{
+			"name":        processor.Name(),
+			"version":     processor.Version(),
+			"description": processor.Description(),
+			"priority":    processor.Priority(),
+		})
+	}
+
+	return result
+}
+
+// HealthCheck 健康检查
+func (s *UnifiedService) HealthCheck() map[string]plugin.HealthStatus {
+	return s.pluginManager.HealthCheck()
+}
+
+// Shutdown 关闭服务
+func (s *UnifiedService) Shutdown() error {
+	return s.pluginManager.Shutdown()
+}
+
+// GetPluginManager 获取插件管理器
+func (s *UnifiedService) GetPluginManager() *plugin.PluginManager {
+	return s.pluginManager
+}
+
+// enginePluginAdapter 引擎插件适配器，将插件接口转换为 adapter.EngineAdapter
+type enginePluginAdapter struct {
+	engine plugin.EnginePlugin
+}
+
+func (a *enginePluginAdapter) Name() string {
+	return a.engine.Name()
+}
+
+func (a *enginePluginAdapter) Translate(ast *model.UQLAST) (string, error) {
+	return a.engine.Translate(ast)
+}
+
+func (a *enginePluginAdapter) Search(query string, page, pageSize int) (*model.EngineResult, error) {
+	return a.engine.Search(query, page, pageSize)
+}
+
+func (a *enginePluginAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, error) {
+	return a.engine.Normalize(raw)
+}
