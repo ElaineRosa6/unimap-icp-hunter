@@ -209,27 +209,28 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 			// 执行查询
 			results := []model.UnifiedAsset{}
 			for _, engineName := range selectedEngines {
-				adapter := state.Orchestrator.GetAdapter(engineName)
-				if adapter == nil {
+				engineAdapter := state.Orchestrator.GetAdapter(engineName)
+				if engineAdapter == nil {
+					statusLabel.SetText(fmt.Sprintf("%s 引擎未正确初始化，跳过", engineName))
 					continue
 				}
 
 				// 转换查询
-				engineQuery, err := adapter.Translate(ast)
+				engineQuery, err := engineAdapter.Translate(ast)
 				if err != nil {
 					statusLabel.SetText(fmt.Sprintf("%s 转换失败: %v", engineName, err))
 					continue
 				}
 
 				// 执行搜索
-				rawResult, err := adapter.Search(engineQuery, 1, 100)
+				rawResult, err := engineAdapter.Search(engineQuery, 1, 100)
 				if err != nil {
 					statusLabel.SetText(fmt.Sprintf("%s 查询失败: %v", engineName, err))
 					continue
 				}
 
 				// 标准化结果
-				assets, err := adapter.Normalize(rawResult)
+				assets, err := engineAdapter.Normalize(rawResult)
 				if err != nil {
 					statusLabel.SetText(fmt.Sprintf("%s 结果解析失败: %v", engineName, err))
 					continue

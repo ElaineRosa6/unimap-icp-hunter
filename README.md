@@ -2,9 +2,13 @@
 
 基于多引擎的统一网络资产测绘与未备案网站自动化检测系统
 
+> **🎯 新版本发布**: 如果您只需要网络空间资产查询功能（无需 ICP 检测、数据库、Docker 等），请查看 [UniMap Light 轻量版](README_LIGHT.md)，这是一个极简的 GUI 单可执行文件版本。
+
 ## 项目简介
 
 **UniMap + ICP-Hunter** 是一个集成了多引擎网络资产测绘和自动化ICP备案检测的综合系统。系统采用 Go 语言开发，支持 FOFA、Hunter、ZoomEye、Quake 等多个搜索引擎，通过统一查询语言 (UQL) 进行资产发现，并自动检测目标网站的 ICP 备案状态。
+
+> **注意**: 本 README 描述的是完整版系统（包含 ICP 检测、数据库、Docker 部署等功能）。如果这些依赖文件已被移除，说明仓库已转换为轻量版，请参考 [README_LIGHT.md](README_LIGHT.md)。
 
 ### 核心功能
 
