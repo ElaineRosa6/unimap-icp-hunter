@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,8 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 		task := &model.ProbeTask{}
 
 		// 解析字段
+		// Note: Parsing failures are logged but tasks continue with zero values
+		// This allows the system to be resilient to malformed data while maintaining visibility
 		if val, ok := msg.Values[model.StreamFieldTaskID].(string); ok {
 			task.TaskID = val
 		}
@@ -170,7 +173,11 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 			task.IP = val
 		}
 		if val, ok := msg.Values[model.StreamFieldPort].(string); ok {
-			fmt.Sscanf(val, "%d", &task.Port)
+			if port, err := strconv.Atoi(val); err == nil {
+				task.Port = port
+			} else {
+				p.logger.Warn("Failed to parse port", zap.String("value", val), zap.Error(err))
+			}
 		} else if val, ok := msg.Values[model.StreamFieldPort].(int64); ok {
 			task.Port = int(val)
 		}
@@ -178,12 +185,20 @@ func (p *ProbeExecutor) readTask(ctx context.Context) ([]*model.ProbeTask, error
 			task.Protocol = val
 		}
 		if val, ok := msg.Values[model.StreamFieldPolicy].(string); ok {
-			fmt.Sscanf(val, "%d", &task.PolicyID)
+			if policyID, err := strconv.ParseUint(val, 10, 32); err == nil {
+				task.PolicyID = uint(policyID)
+			} else {
+				p.logger.Warn("Failed to parse policy ID", zap.String("value", val), zap.Error(err))
+			}
 		} else if val, ok := msg.Values[model.StreamFieldPolicy].(int64); ok {
 			task.PolicyID = uint(val)
 		}
 		if val, ok := msg.Values[model.StreamFieldRetry].(string); ok {
-			fmt.Sscanf(val, "%d", &task.RetryCount)
+			if retryCount, err := strconv.Atoi(val); err == nil {
+				task.RetryCount = retryCount
+			} else {
+				p.logger.Warn("Failed to parse retry count", zap.String("value", val), zap.Error(err))
+			}
 		} else if val, ok := msg.Values[model.StreamFieldRetry].(int64); ok {
 			task.RetryCount = int(val)
 		}
@@ -354,7 +369,9 @@ func (p *ProbeExecutor) retryTask(ctx context.Context, task *model.ProbeTask) {
 
 // ackTask 确认任务完成
 func (p *ProbeExecutor) ackTask(ctx context.Context, messageID string) {
-	p.redisClient.XAck(ctx, p.config.QueueName, p.config.ConsumerGroup, messageID)
+	if err := p.redisClient.XAck(ctx, p.config.QueueName, p.config.ConsumerGroup, messageID).Err(); err != nil {
+		p.logger.Error("Failed to acknowledge task", zap.String("message_id", messageID), zap.Error(err))
+	}
 }
 
 // recordFailure 记录失败任务
