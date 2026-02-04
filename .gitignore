@@ -5,8 +5,9 @@
 *.dylib
 bin/
 dist/
-unimap-api
-icp-hunter
+/unimap-api
+/icp-hunter
+/unimap-gui
 
 # Configs with secrets
 configs/config.yaml
@@ -36,3 +37,7 @@ docker-compose.override.yml
 # Temporary files
 tmp/
 *.tmp
+
+# Export files (for testing)
+*.xlsx
+*.json
