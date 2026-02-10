@@ -1,0 +1,94 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/config"
+	"github.com/unimap-icp-hunter/project/internal/service"
+	"github.com/unimap-icp-hunter/project/web"
+)
+
+const configPath = "configs/config.yaml"
+
+func main() {
+	// 加载配置
+	cfgManager := config.NewManager(configPath)
+	if err := cfgManager.Load(); err != nil {
+		fmt.Println("Warning: Failed to load config from", configPath, ":", err)
+	}
+	cfg := cfgManager.GetConfig()
+
+	// 创建统一服务
+	svc := service.NewUnifiedService()
+
+	// 注册引擎适配器
+	if cfg != nil {
+		registerEngines(svc, cfg)
+	}
+
+	// 从服务中获取编排器
+	orchestrator := svc.GetOrchestrator()
+
+	// 创建Web服务器
+	server, err := web.NewServer(8080, svc, orchestrator)
+	if err != nil {
+		log.Fatalf("Failed to initialize Web server: %v", err)
+	}
+
+	// 启动Web服务器
+	fmt.Println("Starting Web server on :8080...")
+	if err := server.Start(); err != nil {
+		log.Fatalf("Failed to start Web server: %v", err)
+	}
+}
+
+// registerEngines 注册引擎适配器
+func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
+	// 注册FOFA
+	if cfg.Engines.Fofa.Enabled && cfg.Engines.Fofa.APIKey != "" {
+		svc.RegisterAdapter(adapter.NewFofaAdapter(
+			cfg.Engines.Fofa.BaseURL,
+			cfg.Engines.Fofa.APIKey,
+			cfg.Engines.Fofa.Email,
+			cfg.Engines.Fofa.QPS,
+			time.Duration(cfg.Engines.Fofa.Timeout)*time.Second,
+		))
+		fmt.Println("FOFA engine registered")
+	}
+
+	// 注册Hunter
+	if cfg.Engines.Hunter.Enabled && cfg.Engines.Hunter.APIKey != "" {
+		svc.RegisterAdapter(adapter.NewHunterAdapter(
+			cfg.Engines.Hunter.BaseURL,
+			cfg.Engines.Hunter.APIKey,
+			cfg.Engines.Hunter.QPS,
+			time.Duration(cfg.Engines.Hunter.Timeout)*time.Second,
+		))
+		fmt.Println("Hunter engine registered")
+	}
+
+	// 注册ZoomEye
+	if cfg.Engines.Zoomeye.Enabled && cfg.Engines.Zoomeye.APIKey != "" {
+		svc.RegisterAdapter(adapter.NewZoomEyeAdapter(
+			cfg.Engines.Zoomeye.BaseURL,
+			cfg.Engines.Zoomeye.APIKey,
+			cfg.Engines.Zoomeye.QPS,
+			time.Duration(cfg.Engines.Zoomeye.Timeout)*time.Second,
+		))
+		fmt.Println("ZoomEye engine registered")
+	}
+
+	// 注册Quake
+	if cfg.Engines.Quake.Enabled && cfg.Engines.Quake.APIKey != "" {
+		svc.RegisterAdapter(adapter.NewQuakeAdapter(
+			cfg.Engines.Quake.BaseURL,
+			cfg.Engines.Quake.APIKey,
+			cfg.Engines.Quake.QPS,
+			time.Duration(cfg.Engines.Quake.Timeout)*time.Second,
+		))
+		fmt.Println("Quake engine registered")
+	}
+}

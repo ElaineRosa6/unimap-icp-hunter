@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>配额管理 - UniMap</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.staticVersion}}">
+</head>
+<body>
+	<header>
+		<h1>UniMap - 多引擎网络资产查询</h1>
+		<nav>
+			<a href="/">首页</a>
+			<a href="/quota" class="active">查看配额</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="quota-info">
+			<h2>引擎配额</h2>
+			<div class="quota-actions">
+				<button type="button" class="btn btn-primary" id="btn-refresh-quota">刷新配额</button>
+				<button type="button" class="btn btn-secondary" id="btn-export-quota">导出配额</button>
+				<button type="button" class="btn btn-info" id="btn-quota-settings">配额设置</button>
+			</div>
+			
+			<!-- 配额概览 -->
+			<div class="quota-overview">
+				<div class="overview-item">
+					<span class="overview-label">总剩余配额：</span>
+					<span class="overview-value" id="total-remaining">--</span>
+				</div>
+				<div class="overview-item">
+					<span class="overview-label">总已用配额：</span>
+					<span class="overview-value" id="total-used">--</span>
+				</div>
+				<div class="overview-item">
+					<span class="overview-label">总配额：</span>
+					<span class="overview-value" id="total-quota">--</span>
+				</div>
+				<div class="overview-item">
+					<span class="overview-label">整体使用率：</span>
+					<span class="overview-value" id="total-usage-rate">--</span>
+				</div>
+			</div>
+			
+			<!-- 配额使用趋势 -->
+			<div class="quota-trend">
+				<h3>配额使用趋势</h3>
+				<div class="trend-chart" id="quota-trend-chart">
+					<!-- 这里将通过JavaScript渲染趋势图 -->
+					<div class="chart-placeholder">加载趋势图中...</div>
+				</div>
+			</div>
+			
+			<!-- 引擎配额详情 -->
+			<div class="quota-grid">
+				{{range .engines}}
+					{{$engine := .}}
+					{{$quota := index $.quotaInfo $engine}}
+					{{$err := index $.errorInfo $engine}}
+					<div class="quota-item">
+						<div class="quota-header">
+							<h3>{{$engine}}</h3>
+							<span class="quota-status" id="quota-status-{{$engine}}">{{if $quota}}正常{{else if $err}}异常{{else}}未知{{end}}</span>
+						</div>
+						{{with $quota}}
+							<div class="quota-details">
+								<div class="quota-row">
+									<span class="label">剩余配额：</span>
+									<span class="value">{{.Remaining}} {{.Unit}}</span>
+								</div>
+								<div class="quota-row">
+									<span class="label">已用配额：</span>
+									<span class="value">{{.Used}} {{.Unit}}</span>
+								</div>
+								<div class="quota-row">
+									<span class="label">总配额：</span>
+									<span class="value">{{.Total}} {{.Unit}}</span>
+								</div>
+								<div class="quota-row">
+									<span class="label">使用率：</span>
+									<span class="value">{{if gt .Total 0}}{{printf "%.1f" (div (float .Used) (float .Total) | mul 100)}}{{else}}0{{end}}%</span>
+								</div>
+								{{if .Expiry}}
+								<div class="quota-row">
+									<span class="label">过期时间：</span>
+									<span class="value">{{.Expiry}}</span>
+								</div>
+								{{end}}
+								<div class="quota-bar">
+									<div class="quota-progress" style="width: {{if gt .Total 0}}{{printf "%.1f" (div (float .Used) (float .Total) | mul 100)}}{{else}}0{{end}}%"></div>
+								</div>
+								<div class="quota-alert">
+									<label class="alert-label">
+										<input type="checkbox" name="quota-alert" value="{{$engine}}">
+										启用配额预警
+									</label>
+									<input type="number" name="alert-threshold" placeholder="预警阈值（%）" min="1" max="99" value="80">
+								</div>
+							</div>
+						{{else}}
+							<div class="quota-error">
+								{{$err}}
+							</div>
+						{{end}}
+					</div>
+				{{end}}
+			</div>
+		</section>
+
+		<section class="quota-tips">
+			<h2>配额使用提示</h2>
+			<ul>
+				<li>FOFA：使用F点作为配额单位，查询消耗F点</li>
+				<li>Hunter：使用积分作为配额单位，查询消耗积分</li>
+				<li>ZoomEye：需要验证手机号并充值积分</li>
+				<li>Quake：提供免费配额，超出后需要付费</li>
+				<li>建议合理设置查询条件，避免过度消耗配额</li>
+				<li>使用缓存功能可以减少重复查询的配额消耗</li>
+				<li>定期检查配额使用情况，避免配额耗尽影响正常使用</li>
+				<li>设置配额预警，及时了解配额使用状态</li>
+			</ul>
+		</section>
+
+		<!-- 配额设置模态框 -->
+		<div id="quota-settings-modal" class="modal">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h3>配额设置</h3>
+					<button type="button" class="close-btn">&times;</button>
+				</div>
+				<div class="modal-body">
+					<div class="setting-group">
+						<label class="setting-label">自动刷新间隔：</label>
+						<select name="refresh-interval">
+							<option value="30000">30秒</option>
+							<option value="60000" selected>1分钟</option>
+							<option value="300000">5分钟</option>
+							<option value="600000">10分钟</option>
+							<option value="0">关闭自动刷新</option>
+						</select>
+					</div>
+					<div class="setting-group">
+						<label class="setting-label">默认预警阈值：</label>
+						<input type="number" name="default-threshold" min="1" max="99" value="80">
+					</div>
+					<div class="setting-group">
+						<label class="setting-label">
+							<input type="checkbox" name="email-alert" value="true">
+							启用邮件预警
+						</label>
+					</div>
+					<div class="setting-group">
+						<label class="setting-label">预警邮件：</label>
+						<input type="email" name="alert-email" placeholder="输入预警邮件地址">
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-primary" id="btn-save-settings">保存设置</button>
+					<button type="button" class="btn btn-secondary close-btn">取消</button>
+				</div>
+			</div>
+		</div>
+	</main>
+
+	<footer>
+		<p>&copy; 2026 UniMap - 多引擎网络资产查询系统</p>
+	</footer>
+
+	<script src="/static/js/main.js?v={{.staticVersion}}"></script>
+</body>
+</html>

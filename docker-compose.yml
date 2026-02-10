@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  unimap:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./configs/config.yaml:/app/configs/config.yaml
+      - ./web:/app/web
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/health >/dev/null 2>&1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：添加NGINX作为反向代理
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - unimap
+  #   restart: unless-stopped
+
+volumes:
+  logs:

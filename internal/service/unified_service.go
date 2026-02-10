@@ -3,12 +3,16 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
 	"github.com/unimap-icp-hunter/project/internal/core/unimap"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/plugin"
+	"github.com/unimap-icp-hunter/project/internal/utils"
 )
 
 // UnifiedService 统一服务层 - 为 CLI、GUI 和 Web 提供统一接口
@@ -17,17 +21,37 @@ type UnifiedService struct {
 	orchestrator  *adapter.EngineOrchestrator
 	parser        *unimap.UQLParser
 	merger        *unimap.ResultMerger
+	cache         utils.QueryCache
 	mu            sync.RWMutex
 }
 
 // NewUnifiedService 创建统一服务
 func NewUnifiedService() *UnifiedService {
+	// 初始化缓存
+	cache := utils.NewCache(
+		false,         // 暂时不使用Redis
+		"", "", 0, "", // Redis配置
+		1000,          // 内存缓存最大大小
+		5*time.Minute, // 清理间隔
+	)
+
 	return &UnifiedService{
 		pluginManager: plugin.NewPluginManager(),
 		orchestrator:  adapter.NewEngineOrchestrator(),
 		parser:        unimap.NewUQLParser(),
 		merger:        unimap.NewResultMerger(),
+		cache:         cache,
 	}
+}
+
+// RegisterAdapter 注册引擎适配器
+func (s *UnifiedService) RegisterAdapter(adapter adapter.EngineAdapter) {
+	s.orchestrator.RegisterAdapter(adapter)
+}
+
+// GetOrchestrator 获取引擎编排器
+func (s *UnifiedService) GetOrchestrator() *adapter.EngineOrchestrator {
+	return s.orchestrator
 }
 
 // QueryRequest 查询请求
@@ -59,10 +83,48 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		req.PageSize = 100
 	}
 
+	// 尝试从缓存获取结果
+	sortedEngines := make([]string, len(req.Engines))
+	copy(sortedEngines, req.Engines)
+	sort.Strings(sortedEngines)
+
+	cacheKey := fmt.Sprintf("%s:%s:%d", strings.Join(sortedEngines, ","), req.Query, req.PageSize)
+	if cachedAssets, found := s.cache.Get(cacheKey); found {
+		// 触发查询前钩子
+		if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{
+			"query":   req.Query,
+			"engines": req.Engines,
+			"cached":  true,
+		}); err != nil {
+			return nil, fmt.Errorf("pre-query hook failed: %w", err)
+		}
+
+		// 构建缓存响应
+		engineStats := make(map[string]int)
+		for _, engine := range req.Engines {
+			engineStats[engine] = 0
+		}
+
+		// 触发查询后钩子
+		s.pluginManager.GetHooks().TriggerHook(plugin.HookAfterQuery, "query", map[string]interface{}{
+			"result_count": len(cachedAssets),
+			"engines":      req.Engines,
+			"cached":       true,
+		})
+
+		return &QueryResponse{
+			Assets:      cachedAssets,
+			TotalCount:  len(cachedAssets),
+			EngineStats: engineStats,
+			Errors:      []string{},
+		}, nil
+	}
+
 	// 触发查询前钩子
 	if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{
 		"query":   req.Query,
 		"engines": req.Engines,
+		"cached":  false,
 	}); err != nil {
 		return nil, fmt.Errorf("pre-query hook failed: %w", err)
 	}
@@ -124,10 +186,16 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		}
 	}
 
+	// 将结果存入缓存
+	if len(allAssets) > 0 {
+		s.cache.Set(cacheKey, allAssets, 30*time.Minute)
+	}
+
 	// 触发查询后钩子
 	s.pluginManager.GetHooks().TriggerHook(plugin.HookAfterQuery, "query", map[string]interface{}{
 		"result_count": len(allAssets),
 		"engines":      req.Engines,
+		"cached":       false,
 	})
 
 	return &QueryResponse{
@@ -142,7 +210,7 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 func (s *UnifiedService) processAssets(ctx context.Context, assets []model.UnifiedAsset) ([]model.UnifiedAsset, error) {
 	// 触发处理前钩子
 	if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeProcess, "process", nil); err != nil {
-		return assets, err
+		return assets, fmt.Errorf("pre-process hook failed: %w", err)
 	}
 
 	// 获取所有处理器插件
@@ -157,12 +225,12 @@ func (s *UnifiedService) processAssets(ctx context.Context, assets []model.Unifi
 	// 执行处理
 	result, err := pipeline.Process(ctx, assets)
 	if err != nil {
-		return assets, err
+		return assets, fmt.Errorf("processor pipeline failed: %w", err)
 	}
 
 	// 触发处理后钩子
 	s.pluginManager.GetHooks().TriggerHook(plugin.HookAfterProcess, "process", map[string]interface{}{
-		"original_count": len(assets),
+		"original_count":  len(assets),
 		"processed_count": len(result),
 	})
 
@@ -178,19 +246,39 @@ type ExportRequest struct {
 
 // Export 导出数据
 func (s *UnifiedService) Export(ctx context.Context, req ExportRequest) error {
+	// 验证请求
+	if len(req.Assets) == 0 {
+		return fmt.Errorf("no assets to export")
+	}
+	if req.Format == "" {
+		return fmt.Errorf("export format cannot be empty")
+	}
+	if req.OutputPath == "" {
+		return fmt.Errorf("output path cannot be empty")
+	}
+
 	// 查找支持该格式的导出器
 	exporters := s.pluginManager.GetRegistry().GetExporterPlugins()
-	
+	if len(exporters) == 0 {
+		return fmt.Errorf("no exporters registered")
+	}
+
+	supportedFormats := []string{}
 	for _, exporter := range exporters {
 		formats := exporter.SupportedFormats()
+		supportedFormats = append(supportedFormats, formats...)
 		for _, format := range formats {
 			if format == req.Format {
-				return exporter.Export(req.Assets, req.OutputPath)
+				err := exporter.Export(req.Assets, req.OutputPath)
+				if err != nil {
+					return fmt.Errorf("exporter %s failed: %w", exporter.Name(), err)
+				}
+				return nil
 			}
 		}
 	}
 
-	return fmt.Errorf("no exporter found for format: %s", req.Format)
+	return fmt.Errorf("no exporter found for format: %s, supported formats: %s", req.Format, strings.Join(supportedFormats, ", "))
 }
 
 // RegisterEngine 注册引擎插件
@@ -242,11 +330,11 @@ func (s *UnifiedService) ListEngines() []map[string]interface{} {
 
 	for _, engine := range engines {
 		result = append(result, map[string]interface{}{
-			"name":        engine.Name(),
-			"version":     engine.Version(),
-			"description": engine.Description(),
-			"author":      engine.Author(),
-			"fields":      engine.SupportedFields(),
+			"name":          engine.Name(),
+			"version":       engine.Version(),
+			"description":   engine.Description(),
+			"author":        engine.Author(),
+			"fields":        engine.SupportedFields(),
 			"max_page_size": engine.MaxPageSize(),
 		})
 	}
@@ -305,4 +393,21 @@ func (a *enginePluginAdapter) Search(query string, page, pageSize int) (*model.E
 
 func (a *enginePluginAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, error) {
 	return a.engine.Normalize(raw)
+}
+
+func (a *enginePluginAdapter) GetQuota() (*model.QuotaInfo, error) {
+	// 检查引擎插件是否实现了GetQuota方法
+	if quotaPlugin, ok := a.engine.(interface {
+		GetQuota() (*model.QuotaInfo, error)
+	}); ok {
+		return quotaPlugin.GetQuota()
+	}
+	// 如果引擎插件没有实现GetQuota方法，返回默认值
+	return &model.QuotaInfo{
+		Remaining: 0,
+		Total:     0,
+		Used:      0,
+		Unit:      "queries",
+		Expiry:    "",
+	}, nil
 }

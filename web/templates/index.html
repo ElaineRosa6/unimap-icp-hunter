@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>UniMap - 多引擎网络资产查询</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.staticVersion}}">
+</head>
+<body>
+	<header>
+		<h1>UniMap - 多引擎网络资产查询</h1>
+		<p>支持 FOFA、Hunter、ZoomEye、Quake 等多个搜索引擎的统一查询接口</p>
+	</header>
+
+	<main>
+		<section class="query-form">
+			<h2>查询表单</h2>
+			<form action="/query" method="POST">
+				<div class="form-group">
+					<label for="query">UQL 查询语句</label>
+					<div class="code-editor">
+						<textarea id="query" name="query" rows="4" placeholder="例如：country=\"CN\" && port=\"80\" && protocol=\"http\"" required></textarea>
+						<div class="editor-toolbar">
+							<button type="button" class="toolbar-btn" data-action="clear">清空</button>
+							<button type="button" class="toolbar-btn" data-action="format">格式化</button>
+							<button type="button" class="toolbar-btn" data-action="history">历史</button>
+						</div>
+					</div>
+					<small class="form-text">UQL 语法：支持 =, !=, ~= (包含), IN 等操作符</small>
+				</div>
+
+				<div class="form-group">
+					<label>选择引擎 (支持多选)</label>
+					<div class="engine-selector">
+						{{range .engines}}
+							<div class="engine-option">
+								<input type="checkbox" id="engine-{{.}}" name="engines" value="{{.}}" checked>
+								<label for="engine-{{.}}">{{.}}</label>
+								<span class="engine-status" id="status-{{.}}">✓</span>
+							</div>
+						{{end}}
+					</div>
+				</div>
+
+				<div class="form-group">
+					<div class="query-options">
+						<label class="option-label">
+							<input type="checkbox" name="use-cache" value="true" checked>
+							使用缓存
+						</label>
+						<label class="option-label">
+							<input type="checkbox" name="process-data" value="true" checked>
+							处理数据（去重、清洗）
+						</label>
+					</div>
+				</div>
+
+				<div class="form-group">
+					<button type="submit" class="btn btn-primary">执行查询</button>
+					<a href="/quota" class="btn btn-secondary">查看配额</a>
+					<button type="button" class="btn btn-info" id="btn-save-query">保存查询</button>
+				</div>
+			</form>
+		</section>
+
+		<!-- 查询历史记录 -->
+		<div id="query-history" class="modal">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h3>查询历史</h3>
+					<button type="button" class="close-btn">&times;</button>
+				</div>
+				<div class="modal-body">
+					<ul id="history-list"></ul>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary close-btn">关闭</button>
+					<button type="button" class="btn btn-danger" id="btn-clear-history">清空历史</button>
+				</div>
+			</div>
+		</div>
+
+		<section class="examples">
+			<h2>查询示例</h2>
+			<div class="example-list">
+				<div class="example-item">
+					<code>country="CN" && port="80" && protocol="http"</code>
+					<p>查询中国境内开放80端口的HTTP服务</p>
+				</div>
+				<div class="example-item">
+					<code>title~="登录" && country="CN"</code>
+					<p>查询中国境内标题包含"登录"的网站</p>
+				</div>
+				<div class="example-item">
+					<code>server="nginx" && port IN ["80", "443"]</code>
+					<p>查询使用nginx服务器且开放80或443端口的服务</p>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<p>&copy; 2026 UniMap - 多引擎网络资产查询系统</p>
+	</footer>
+
+	<script src="/static/js/main.js?v={{.staticVersion}}"></script>
+</body>
+</html>

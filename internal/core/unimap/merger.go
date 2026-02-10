@@ -6,444 +6,260 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/unimap-icp-hunter/project/internal/adapter"
 	"github.com/unimap-icp-hunter/project/internal/model"
+	"github.com/unimap-icp-hunter/project/internal/utils"
 )
 
 // ResultMerger 结果归并与去重
 type ResultMerger struct {
-	mu sync.RWMutex
+	mu               sync.RWMutex
+	assetPool        *utils.AssetPool
+	slicePool        *utils.SlicePool
+	mapPool          *utils.MapPool
+	interfaceMapPool *utils.InterfaceMapPool
+}
+
+// 引擎优先级（数字越小优先级越高）
+var enginePriorities = map[string]int{
+	"fofa":    1,
+	"hunter":  2,
+	"zoomeye": 3,
+	"quake":   4,
 }
 
 // NewResultMerger 创建归并器
 func NewResultMerger() *ResultMerger {
-	return &ResultMerger{}
+	return &ResultMerger{
+		assetPool:        utils.NewAssetPool(),
+		slicePool:        utils.NewSlicePool(),
+		mapPool:          utils.NewMapPool(),
+		interfaceMapPool: utils.NewInterfaceMapPool(),
+	}
 }
 
 // Merge 归并多个引擎的结果
-func (m *ResultMerger) Merge(results []*model.EngineResult) *model.MergeResult {
+func (m *ResultMerger) Merge(assets []model.UnifiedAsset) *model.MergeResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	assetMap := make(map[string]*model.UnifiedAsset)
 	duplicates := 0
 
+	// 使用对象池获取sourceStats映射
+	sourceStats := m.interfaceMapPool.Get()
+	defer m.interfaceMapPool.Put(sourceStats)
+
+	for _, asset := range assets {
+		// 增加来源统计
+		if count, exists := sourceStats[asset.Source].(int); exists {
+			sourceStats[asset.Source] = count + 1
+		} else {
+			sourceStats[asset.Source] = 1
+		}
+
+		// 生成去重键
+		key := m.generateKey(asset)
+
+		if existing, exists := assetMap[key]; exists {
+			// 合并已有记录
+			m.mergeAssets(existing, asset)
+			duplicates++
+		} else {
+			// 从对象池获取资产对象
+			newAsset := m.assetPool.Get()
+			// 复制资产数据
+			m.copyAsset(newAsset, asset)
+			assetMap[key] = newAsset
+		}
+	}
+
+	// 对结果进行排序
+	mergedResult := &model.MergeResult{
+		Assets:     assetMap,
+		Total:      len(assetMap),
+		Duplicates: duplicates,
+	}
+
+	// 添加来源统计信息到Extra字段
+	for _, asset := range assetMap {
+		if asset.Extra == nil {
+			asset.Extra = m.interfaceMapPool.Get()
+		}
+		asset.Extra["source_stats"] = sourceStats
+	}
+
+	return mergedResult
+}
+
+// copyAsset 复制资产数据
+func (m *ResultMerger) copyAsset(dest *model.UnifiedAsset, src model.UnifiedAsset) {
+	dest.IP = src.IP
+	dest.Port = src.Port
+	dest.Protocol = src.Protocol
+	dest.Host = src.Host
+	dest.URL = src.URL
+	dest.Title = src.Title
+	dest.BodySnippet = src.BodySnippet
+	dest.Server = src.Server
+	dest.StatusCode = src.StatusCode
+	dest.CountryCode = src.CountryCode
+	dest.Region = src.Region
+	dest.City = src.City
+	dest.ASN = src.ASN
+	dest.Org = src.Org
+	dest.ISP = src.ISP
+	dest.Source = src.Source
+
+	// 复制Headers
+	if src.Headers != nil {
+		for k, v := range src.Headers {
+			dest.Headers[k] = v
+		}
+	}
+
+	// 复制Extra
+	if src.Extra != nil {
+		for k, v := range src.Extra {
+			dest.Extra[k] = v
+		}
+	}
+}
+
+// MergeEngineResults 归并多个引擎的原始结果（兼容旧接口）
+func (m *ResultMerger) MergeEngineResults(results []*model.EngineResult, adapters map[string]adapter.EngineAdapter) *model.MergeResult {
+	// 使用对象池获取资产切片
+	allAssetsSlice := m.slicePool.Get()
+	defer m.slicePool.Put(allAssetsSlice)
+
 	for _, result := range results {
 		if result == nil || result.Error != "" {
 			continue
 		}
 
-		assets, err := m.normalizeEngineResult(result)
-		if err != nil {
-			continue
-		}
-
-		for _, asset := range assets {
-			key := fmt.Sprintf("%s:%d", asset.IP, asset.Port)
-
-			if existing, exists := assetMap[key]; exists {
-				// 合并已有记录
-				m.mergeAssets(existing, asset)
-				duplicates++
-			} else {
-				assetMap[key] = &asset
+		// 使用适配器进行标准化
+		if engineAdapter, exists := adapters[result.EngineName]; exists {
+			assets, err := engineAdapter.Normalize(result)
+			if err == nil && len(assets) > 0 {
+				*allAssetsSlice = append(*allAssetsSlice, assets...)
 			}
 		}
 	}
 
-	return &model.MergeResult{
-		Assets:     assetMap,
-		Total:      len(assetMap),
-		Duplicates: duplicates,
-	}
+	return m.Merge(*allAssetsSlice)
 }
 
-// normalizeEngineResult 标准化引擎结果
-func (m *ResultMerger) normalizeEngineResult(result *model.EngineResult) ([]model.UnifiedAsset, error) {
-	assets := []model.UnifiedAsset{}
-
-	// 根据引擎名称调用对应的标准化逻辑
-	switch result.EngineName {
-	case "fofa":
-		return m.normalizeFofa(result)
-	case "hunter":
-		return m.normalizeHunter(result)
-	case "zoomeye":
-		return m.normalizeZoomEye(result)
-	case "quake":
-		return m.normalizeQuake(result)
-	default:
-		return assets, fmt.Errorf("unknown engine: %s", result.EngineName)
-	}
-}
-
-// normalizeFofa 标准化FOFA结果
-func (m *ResultMerger) normalizeFofa(result *model.EngineResult) ([]model.UnifiedAsset, error) {
-	assets := []model.UnifiedAsset{}
-
-	for _, item := range result.RawData {
-		data, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		asset := model.UnifiedAsset{
-			Source: "fofa",
-		}
-
-		// 提取IP
-		if ip, ok := data["ip"].(string); ok {
-			asset.IP = ip
-		}
-
-		// 提取Port
-		if port, ok := data["port"].(float64); ok {
-			asset.Port = int(port)
-		} else if port, ok := data["port"].(int); ok {
-			asset.Port = port
-		}
-
-		// 提取协议
-		if proto, ok := data["protocol"].(string); ok {
-			asset.Protocol = proto
-		}
-
-		// 提取域名
-		if domain, ok := data["domain"].(string); ok {
-			asset.Host = domain
-		}
-
-		// 构建URL
-		if asset.Protocol == "https" {
-			asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-			if asset.Host != "" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.Host, asset.Port)
-			}
-		} else {
-			asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-			if asset.Host != "" {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.Host, asset.Port)
-			}
-		}
-
-		// Web信息
-		if title, ok := data["title"].(string); ok {
-			asset.Title = title
-		}
-		if server, ok := data["server"].(string); ok {
-			asset.Server = server
-		}
-		if body, ok := data["body"].(string); ok {
-			if len(body) > 200 {
-				asset.BodySnippet = body[:200]
-			} else {
-				asset.BodySnippet = body
-			}
-		}
-		if status, ok := data["status_code"].(float64); ok {
-			asset.StatusCode = int(status)
-		}
-
-		// 地理信息
-		if country, ok := data["country"].(string); ok {
-			asset.CountryCode = country
-		}
-		if region, ok := data["region"].(string); ok {
-			asset.Region = region
-		}
-		if city, ok := data["city"].(string); ok {
-			asset.City = city
-		}
-		if asn, ok := data["asn"].(string); ok {
-			asset.ASN = asn
-		}
-		if org, ok := data["org"].(string); ok {
-			asset.Org = org
-		}
-		if isp, ok := data["isp"].(string); ok {
-			asset.ISP = isp
-		}
-
-		// Extra
-		asset.Extra = data
-
-		if asset.IP != "" && asset.Port > 0 {
-			assets = append(assets, asset)
-		}
+// generateKey 生成资产去重键
+func (m *ResultMerger) generateKey(asset model.UnifiedAsset) string {
+	// 主要基于IP和端口去重
+	if asset.IP != "" && asset.Port > 0 {
+		return fmt.Sprintf("%s:%d", asset.IP, asset.Port)
 	}
 
-	return assets, nil
-}
-
-// normalizeHunter 标准化Hunter结果
-func (m *ResultMerger) normalizeHunter(result *model.EngineResult) ([]model.UnifiedAsset, error) {
-	assets := []model.UnifiedAsset{}
-
-	for _, item := range result.RawData {
-		data, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		asset := model.UnifiedAsset{
-			Source: "hunter",
-		}
-
-		// Hunter的字段结构可能不同，需要根据实际API调整
-		// 这里假设web字段包含Web信息
-		if web, ok := data["web"].(map[string]interface{}); ok {
-			if ip, ok := web["ip"].(string); ok {
-				asset.IP = ip
-			}
-			if port, ok := web["port"].(float64); ok {
-				asset.Port = int(port)
-			}
-			if proto, ok := web["protocol"].(string); ok {
-				asset.Protocol = proto
-			}
-			if domain, ok := web["domain"].(string); ok {
-				asset.Host = domain
-			}
-			if title, ok := web["title"].(string); ok {
-				asset.Title = title
-			}
-			if server, ok := web["server"].(string); ok {
-				asset.Server = server
-			}
-			if status, ok := web["status_code"].(float64); ok {
-				asset.StatusCode = int(status)
-			}
-		}
-
-		// 位置信息
-		if location, ok := data["location"].(map[string]interface{}); ok {
-			if country, ok := location["country_cn"].(string); ok {
-				asset.CountryCode = country
-			}
-			if province, ok := location["province_cn"].(string); ok {
-				asset.Region = province
-			}
-			if city, ok := location["city_cn"].(string); ok {
-				asset.City = city
-			}
-		}
-
-		// ASN等
-		if asn, ok := data["asn"].(string); ok {
-			asset.ASN = asn
-		}
-		if org, ok := data["org"].(string); ok {
-			asset.Org = org
-		}
-		if isp, ok := data["isp"].(string); ok {
-			asset.ISP = isp
-		}
-
-		// 构建URL
-		if asset.IP != "" && asset.Port > 0 {
-			if asset.Protocol == "" {
-				if asset.Port == 443 {
-					asset.Protocol = "https"
-				} else {
-					asset.Protocol = "http"
-				}
-			}
-
-			if asset.Protocol == "https" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("https://%s:%d", asset.Host, asset.Port)
-				}
-			} else {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("http://%s:%d", asset.Host, asset.Port)
-				}
-			}
-
-			asset.Extra = data
-			assets = append(assets, asset)
-		}
+	// 如果没有IP和端口，基于URL去重
+	if asset.URL != "" {
+		return fmt.Sprintf("url:%s", asset.URL)
 	}
 
-	return assets, nil
-}
-
-// normalizeZoomEye 标准化ZoomEye结果
-func (m *ResultMerger) normalizeZoomEye(result *model.EngineResult) ([]model.UnifiedAsset, error) {
-	assets := []model.UnifiedAsset{}
-
-	for _, item := range result.RawData {
-		data, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		asset := model.UnifiedAsset{
-			Source: "zoomeye",
-		}
-
-		// ZoomEye的字段结构
-		if ip, ok := data["ip"].(string); ok {
-			asset.IP = ip
-		}
-
-		if portinfo, ok := data["portinfo"].(map[string]interface{}); ok {
-			if port, ok := portinfo["port"].(float64); ok {
-				asset.Port = int(port)
-			}
-			if service, ok := portinfo["service"].(string); ok {
-				asset.Protocol = service
-			}
-			if hostname, ok := portinfo["hostname"].(string); ok {
-				asset.Host = hostname
-			}
-		}
-
-		if app, ok := data["app"].(string); ok {
-			asset.Server = app
-		}
-
-		if asset.IP != "" && asset.Port > 0 {
-			if asset.Protocol == "" {
-				if asset.Port == 443 {
-					asset.Protocol = "https"
-				} else {
-					asset.Protocol = "http"
-				}
-			}
-
-			if asset.Protocol == "https" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("https://%s:%d", asset.Host, asset.Port)
-				}
-			} else {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("http://%s:%d", asset.Host, asset.Port)
-				}
-			}
-
-			asset.Extra = data
-			assets = append(assets, asset)
-		}
+	// 如果没有IP、端口和URL，基于Host去重
+	if asset.Host != "" {
+		return fmt.Sprintf("host:%s", asset.Host)
 	}
 
-	return assets, nil
-}
-
-// normalizeQuake 标准化Quake结果
-func (m *ResultMerger) normalizeQuake(result *model.EngineResult) ([]model.UnifiedAsset, error) {
-	assets := []model.UnifiedAsset{}
-
-	for _, item := range result.RawData {
-		data, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		asset := model.UnifiedAsset{
-			Source: "quake",
-		}
-
-		if ip, ok := data["ip"].(string); ok {
-			asset.IP = ip
-		}
-		if port, ok := data["port"].(float64); ok {
-			asset.Port = int(port)
-		}
-		if service, ok := data["service"].(map[string]interface{}); ok {
-			if name, ok := service["name"].(string); ok {
-				asset.Protocol = name
-			}
-			if http, ok := service["http"].(map[string]interface{}); ok {
-				if title, ok := http["title"].(string); ok {
-					asset.Title = title
-				}
-				if server, ok := http["server"].(string); ok {
-					asset.Server = server
-				}
-			}
-		}
-
-		if asset.IP != "" && asset.Port > 0 {
-			if asset.Protocol == "" {
-				if asset.Port == 443 {
-					asset.Protocol = "https"
-				} else {
-					asset.Protocol = "http"
-				}
-			}
-
-			if asset.Protocol == "https" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-			} else {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-			}
-
-			asset.Extra = data
-			assets = append(assets, asset)
-		}
-	}
-
-	return assets, nil
+	// 兜底方案，使用所有可用字段
+	return fmt.Sprintf("%s:%d:%s:%s", asset.IP, asset.Port, asset.Host, asset.URL)
 }
 
 // mergeAssets 合并两个资产信息
 func (m *ResultMerger) mergeAssets(existing *model.UnifiedAsset, new model.UnifiedAsset) {
-	// 字段优先级策略：保留非空值，如果都有则保留更新时间较新的（这里简化为保留已有）
-
 	// 合并来源
 	if !contains(existing.Source, new.Source) {
 		existing.Source += "," + new.Source
 	}
 
-	// 补全缺失字段
-	if existing.Title == "" && new.Title != "" {
+	// 基于引擎优先级合并字段
+	existingPriority := m.getMinPriority(existing.Source)
+	newPriority := m.getMinPriority(new.Source)
+
+	// 优先保留高优先级引擎的字段值
+	if newPriority < existingPriority {
+		// 新引擎优先级更高，优先使用其字段
+		m.updateAssetFields(existing, new, true)
+	} else {
+		// 新引擎优先级相同或更低，只补全缺失字段
+		m.updateAssetFields(existing, new, false)
+	}
+}
+
+// getMinPriority 获取多个来源中的最小优先级（最高优先级）
+func (m *ResultMerger) getMinPriority(sources string) int {
+	minPriority := 999
+	sourceList := strings.Split(sources, ",")
+
+	for _, source := range sourceList {
+		source = strings.TrimSpace(source)
+		if priority, exists := enginePriorities[source]; exists && priority < minPriority {
+			minPriority = priority
+		}
+	}
+
+	return minPriority
+}
+
+// updateAssetFields 更新资产字段
+func (m *ResultMerger) updateAssetFields(existing *model.UnifiedAsset, new model.UnifiedAsset, override bool) {
+	// 补全或覆盖字段
+	if override || existing.Title == "" {
 		existing.Title = new.Title
 	}
-	if existing.Server == "" && new.Server != "" {
+	if override || existing.Server == "" {
 		existing.Server = new.Server
 	}
-	if existing.BodySnippet == "" && new.BodySnippet != "" {
+	if override || existing.BodySnippet == "" {
 		existing.BodySnippet = new.BodySnippet
 	}
-	if existing.StatusCode == 0 && new.StatusCode != 0 {
+	if override || existing.StatusCode == 0 {
 		existing.StatusCode = new.StatusCode
 	}
-	if existing.Host == "" && new.Host != "" {
+	if override || existing.Host == "" {
 		existing.Host = new.Host
 	}
-	if existing.URL == "" && new.URL != "" {
+	if override || existing.URL == "" {
 		existing.URL = new.URL
 	}
-	if existing.Protocol == "" && new.Protocol != "" {
+	if override || existing.Protocol == "" {
 		existing.Protocol = new.Protocol
 	}
 
 	// 地理信息
-	if existing.CountryCode == "" && new.CountryCode != "" {
+	if override || existing.CountryCode == "" {
 		existing.CountryCode = new.CountryCode
 	}
-	if existing.Region == "" && new.Region != "" {
+	if override || existing.Region == "" {
 		existing.Region = new.Region
 	}
-	if existing.City == "" && new.City != "" {
+	if override || existing.City == "" {
 		existing.City = new.City
 	}
-	if existing.ASN == "" && new.ASN != "" {
+	if override || existing.ASN == "" {
 		existing.ASN = new.ASN
 	}
-	if existing.Org == "" && new.Org != "" {
+	if override || existing.Org == "" {
 		existing.Org = new.Org
 	}
-	if existing.ISP == "" && new.ISP != "" {
+	if override || existing.ISP == "" {
 		existing.ISP = new.ISP
 	}
 
 	// 合并Headers
 	if existing.Headers == nil {
-		existing.Headers = new.Headers
+		if new.Headers != nil {
+			existing.Headers = m.mapPool.Get()
+			// 复制Headers
+			for k, v := range new.Headers {
+				existing.Headers[k] = v
+			}
+		}
 	} else if new.Headers != nil {
 		for k, v := range new.Headers {
 			if _, exists := existing.Headers[k]; !exists {
@@ -454,7 +270,13 @@ func (m *ResultMerger) mergeAssets(existing *model.UnifiedAsset, new model.Unifi
 
 	// 合并Extra
 	if existing.Extra == nil {
-		existing.Extra = new.Extra
+		if new.Extra != nil {
+			existing.Extra = m.interfaceMapPool.Get()
+			// 复制Extra
+			for k, v := range new.Extra {
+				existing.Extra[k] = v
+			}
+		}
 	} else if new.Extra != nil {
 		for k, v := range new.Extra {
 			if _, exists := existing.Extra[k]; !exists {
@@ -483,4 +305,24 @@ func (m *ResultMerger) SortAssets(assets []*model.UnifiedAsset) {
 		}
 		return assets[i].Port < assets[j].Port
 	})
+}
+
+// GetSortedAssets 获取排序后的资产列表
+func (m *ResultMerger) GetSortedAssets(mergeResult *model.MergeResult) []*model.UnifiedAsset {
+	assets := make([]*model.UnifiedAsset, 0, len(mergeResult.Assets))
+	for _, asset := range mergeResult.Assets {
+		assets = append(assets, asset)
+	}
+
+	m.SortAssets(assets)
+	return assets
+}
+
+// GetSourceStats 获取各引擎的结果统计
+func (m *ResultMerger) GetSourceStats(assets []model.UnifiedAsset) map[string]int {
+	stats := make(map[string]int)
+	for _, asset := range assets {
+		stats[asset.Source]++
+	}
+	return stats
 }

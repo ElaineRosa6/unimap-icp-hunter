@@ -24,7 +24,7 @@
 
 ## 技术栈
 
-- **语言**: Go 1.21+
+- **语言**: Go 1.22+
 - **Web 框架**: Gin
 - **CLI 框架**: Cobra + Viper
 - **数据库**: MySQL 8.0 (GORM)
@@ -97,6 +97,8 @@ unimap-icp-hunter/
 ### 1. 环境配置
 
 创建 `.env` 文件：
+
+GUI 编译/依赖（跨平台）请看 [GUI_BUILD.md](GUI_BUILD.md)。
 
 ```bash
 # FOFA API 配置
@@ -499,6 +501,33 @@ func (n *Notifier) SendToNewChannel(message string) error {
     // 实现新渠道
 }
 ```
+
+### 本地验证与 CI
+
+本仓库已内置 GitHub Actions 工作流用于持续集成。
+
+**本地代码检查（推荐在提交前执行）**：
+
+```bash
+go vet ./...
+go test ./...
+```
+
+**CI（GitHub Actions）**：
+
+- 默认工作流：`.github/workflows/ci.yml`（push / PR 自动运行）
+  - `go vet ./...`
+  - `go test ./...`
+  - `go mod tidy` 结果必须保持仓库干净（防止遗漏依赖变更）
+- GUI 构建工作流：`.github/workflows/gui-build.yml`（手动触发）
+  - 用于验证 `cmd/unimap-gui` 的 `-tags gui` 构建，避免默认 CI 因 cgo/OpenGL 环境差异失败
+
+**GUI 构建说明**：
+
+- 默认构建不启用 GUI（不需要 OpenGL/cgo 依赖）：
+  - `go run ./cmd/unimap-gui` 会输出提示信息
+- 启用 GUI 构建：
+  - `go run -tags gui ./cmd/unimap-gui`
 
 ## 许可证
 

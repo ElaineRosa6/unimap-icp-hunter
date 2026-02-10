@@ -52,12 +52,22 @@ type UnifiedAsset struct {
 	Extra       map[string]interface{} `json:"extra"`
 }
 
+// QuotaInfo 引擎配额信息
+type QuotaInfo struct {
+	Remaining int    `json:"remaining"` // 剩余配额
+	Total     int    `json:"total"`     // 总配额
+	Used      int    `json:"used"`      // 已使用配额
+	Unit      string `json:"unit"`      // 配额单位（如 "times", "assets"）
+	Expiry    string `json:"expiry"`    // 过期时间
+}
+
 // EngineAdapter 引擎适配器接口
 type EngineAdapter interface {
 	Name() string
 	Translate(ast *UQLAST) (string, error)
 	Search(query string, page, pageSize int) (*EngineResult, error)
 	Normalize(raw *EngineResult) ([]UnifiedAsset, error)
+	GetQuota() (*QuotaInfo, error) // 获取配额信息
 }
 
 // FieldMapping 引擎字段映射

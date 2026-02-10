@@ -51,7 +51,8 @@ func (p *UQLParser) tokenize(query string) []string {
 	inBrackets := false
 	escape := false
 
-	for _, ch := range query {
+	for i := 0; i < len(query); i++ {
+		ch := rune(query[i])
 		if escape {
 			current += string(ch)
 			escape = false
@@ -95,15 +96,18 @@ func (p *UQLParser) tokenize(query string) []string {
 				current = ""
 			}
 			// 处理多字符操作符
-			if ch == '&' && p.peekNext(query, ch) == '&' {
+			if ch == '&' && i+1 < len(query) && rune(query[i+1]) == '&' {
 				tokens = append(tokens, "&&")
 				current = ""
 				// 跳过下一个&
+				i++
 				continue
 			}
-			if ch == '|' && p.peekNext(query, ch) == '|' {
+			if ch == '|' && i+1 < len(query) && rune(query[i+1]) == '|' {
 				tokens = append(tokens, "||")
 				current = ""
+				// 跳过下一个|
+				i++
 				continue
 			}
 			tokens = append(tokens, string(ch))
@@ -120,11 +124,6 @@ func (p *UQLParser) tokenize(query string) []string {
 	return tokens
 }
 
-func (p *UQLParser) peekNext(query string, current rune) rune {
-	// 简化实现，实际应该维护索引
-	return ' ' // 占位
-}
-
 // buildAST 从token构建AST
 func (p *UQLParser) buildAST(tokens []string) (*model.UQLNode, error) {
 	if len(tokens) == 0 {
@@ -132,7 +131,7 @@ func (p *UQLParser) buildAST(tokens []string) (*model.UQLNode, error) {
 	}
 
 	// 简单的递归下降解析
-	// 支持: field="value", field IN [values], (condition), condition && condition
+	// 支持: field="value", field IN [values], (condition), condition && condition, !=, <>, CONTAINS等
 
 	var parseExpr func(int) (*model.UQLNode, int, error)
 
@@ -194,8 +193,8 @@ func (p *UQLParser) buildAST(tokens []string) (*model.UQLNode, error) {
 			return node, end + 1, nil
 		}
 
-		// 处理等号操作符
-		if operator == "=" || operator == "==" {
+		// 处理各种操作符
+		if operator == "=" || operator == "==" || operator == "!=" || operator == "<>" || strings.ToUpper(operator) == "CONTAINS" {
 			if start+2 >= len(tokens) {
 				return nil, start, fmt.Errorf("missing value")
 			}
@@ -217,6 +216,7 @@ func (p *UQLParser) buildAST(tokens []string) (*model.UQLNode, error) {
 	// 构建完整AST，处理AND/OR
 	var root *model.UQLNode
 	index := 0
+	var pendingLogicalOp string = ""
 
 	for index < len(tokens) {
 		node, next, err := parseExpr(index)
@@ -227,11 +227,16 @@ func (p *UQLParser) buildAST(tokens []string) (*model.UQLNode, error) {
 		if root == nil {
 			root = node
 		} else {
-			// 需要找到前面的AND/OR
-			// 这里简化处理，实际应该在parseExpr中处理
+			// 如果有等待的逻辑操作符，使用它
+			op := "AND"
+			if pendingLogicalOp != "" {
+				op = pendingLogicalOp
+				pendingLogicalOp = ""
+			}
+
 			root = &model.UQLNode{
 				Type:     "logical",
-				Value:    "AND",
+				Value:    op,
 				Children: []*model.UQLNode{root, node},
 			}
 		}
@@ -240,12 +245,13 @@ func (p *UQLParser) buildAST(tokens []string) (*model.UQLNode, error) {
 
 		// 检查是否有AND/OR
 		if index < len(tokens) {
-			if tokens[index] == "&&" || strings.ToUpper(tokens[index]) == "AND" {
+			token := tokens[index]
+			upper := strings.ToUpper(token)
+			if token == "&&" || upper == "AND" {
+				pendingLogicalOp = "AND"
 				index++
-			} else if tokens[index] == "||" || strings.ToUpper(tokens[index]) == "OR" {
-				// OR操作
-				root.Type = "logical"
-				root.Value = "OR"
+			} else if token == "||" || upper == "OR" {
+				pendingLogicalOp = "OR"
 				index++
 			}
 		}

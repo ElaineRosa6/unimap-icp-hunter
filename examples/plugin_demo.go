@@ -12,14 +12,15 @@ import (
 )
 
 func main() {
-	fmt.Println("=== UniMap 插件系统示例 ===\n")
+	fmt.Println("=== UniMap 插件系统示例 ===")
+	fmt.Println()
 
 	// 1. 创建统一服务
 	svc := service.NewUnifiedService()
 
 	// 2. 注册数据处理器
 	fmt.Println("注册数据处理器...")
-	
+
 	// 数据清洗处理器
 	cleaner := processors.NewDataCleaningProcessor()
 	if err := svc.RegisterProcessor(cleaner, map[string]interface{}{
@@ -87,7 +88,7 @@ func main() {
 
 	// 数据处理后钩子
 	hooks.RegisterHook(plugin.HookAfterProcess, func(pluginName string, data map[string]interface{}) error {
-		fmt.Printf("→ 数据处理完成: 原始=%v, 处理后=%v\n", 
+		fmt.Printf("→ 数据处理完成: 原始=%v, 处理后=%v\n",
 			data["original_count"], data["processed_count"])
 		return nil
 	})
@@ -97,29 +98,29 @@ func main() {
 	fmt.Println("\n已注册的处理器:")
 	processors := svc.ListProcessors()
 	for _, proc := range processors {
-		fmt.Printf("  - %s (v%s) [优先级: %d]\n", 
+		fmt.Printf("  - %s (v%s) [优先级: %d]\n",
 			proc["name"], proc["version"], proc["priority"])
 		fmt.Printf("    %s\n", proc["description"])
 	}
 
 	// 5. 模拟查询和数据处理
 	fmt.Println("\n执行模拟查询...")
-	
+
 	// 创建模拟数据
 	mockAssets := []model.UnifiedAsset{
 		{
 			IP:          "192.168.1.1",
 			Port:        80,
 			Protocol:    "HTTP",
-			Host:        "example.com ",  // 注意空格
+			Host:        "example.com ", // 注意空格
 			Title:       "  Example Site  ",
 			CountryCode: "cn",
 			Source:      "mock",
 		},
 		{
-			IP:          "192.168.1.1",  // 重复
+			IP:          "192.168.1.1", // 重复
 			Port:        80,
-			Protocol:    "http",  // 小写
+			Protocol:    "http", // 小写
 			Host:        "example.com",
 			Title:       "Example Site",
 			CountryCode: "CN",
@@ -135,16 +136,16 @@ func main() {
 			Source:      "mock",
 		},
 		{
-			IP:          "",  // 空 IP
-			Port:        0,
-			Host:        "",
-			Title:       "",
-			Source:      "mock",
+			IP:     "", // 空 IP
+			Port:   0,
+			Host:   "",
+			Title:  "",
+			Source: "mock",
 		},
 	}
 
 	fmt.Printf("原始数据: %d 条\n", len(mockAssets))
-	
+
 	// 手动调用处理管道
 	ctx := context.Background()
 	processedAssets, err := processAssets(svc, ctx, mockAssets)
@@ -153,7 +154,7 @@ func main() {
 	}
 
 	fmt.Printf("\n处理后数据: %d 条\n", len(processedAssets))
-	
+
 	// 6. 显示处理结果
 	fmt.Println("\n处理结果:")
 	for i, asset := range processedAssets {

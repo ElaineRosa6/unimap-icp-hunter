@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>查询结果 - UniMap</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.staticVersion}}">
+</head>
+<body>
+	<header>
+		<h1>UniMap - 多引擎网络资产查询</h1>
+		<nav>
+			<a href="/">首页</a>
+			<a href="/quota">查看配额</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="query-info">
+			<h2>查询信息</h2>
+			<p><strong>查询语句：</strong>{{.query}}</p>
+			<p><strong>使用引擎：</strong>{{join .engines ", "}}</p>
+			<p><strong>总结果数：</strong>{{.totalCount}}</p>
+		</section>
+
+		{{if .errors}}
+		<section class="errors">
+			<h3>错误信息</h3>
+			<ul>
+				{{range .errors}}
+					<li>{{.}}</li>
+				{{end}}
+			</ul>
+		</section>
+		{{end}}
+
+		<section class="engine-stats">
+			<h3>引擎统计</h3>
+			<div class="stats-grid">
+				{{range $engine, $count := .engineStats}}
+					<div class="stat-item">
+						<span class="engine-name">{{$engine}}</span>
+						<span class="count">{{$count}}</span>
+					</div>
+				{{end}}
+			</div>
+		</section>
+
+		<section class="results">
+			<h2>查询结果</h2>
+			
+			<!-- 导出选项 -->
+			<div class="export-options">
+				<button type="button" class="btn btn-success" id="btn-export-csv">导出CSV</button>
+				<button type="button" class="btn btn-success" id="btn-export-json">导出JSON</button>
+				<button type="button" class="btn btn-success" id="btn-export-excel">导出Excel</button>
+			</div>
+			
+			<!-- 筛选选项 -->
+			<div class="filter-options">
+				<div class="filter-group">
+					<label for="filter-ip">IP筛选：</label>
+					<input type="text" id="filter-ip" placeholder="输入IP地址">
+				</div>
+				<div class="filter-group">
+					<label for="filter-port">端口筛选：</label>
+					<input type="text" id="filter-port" placeholder="输入端口号">
+				</div>
+				<div class="filter-group">
+					<label for="filter-protocol">协议筛选：</label>
+					<select id="filter-protocol">
+						<option value="">全部</option>
+						<option value="http">HTTP</option>
+						<option value="https">HTTPS</option>
+						<option value="ssh">SSH</option>
+						<option value="ftp">FTP</option>
+						<option value="mysql">MySQL</option>
+						<option value="redis">Redis</option>
+						<option value="mongodb">MongoDB</option>
+					</select>
+				</div>
+				<div class="filter-group">
+					<label for="filter-source">来源筛选：</label>
+					<select id="filter-source">
+						<option value="">全部</option>
+						<option value="fofa">FOFA</option>
+						<option value="hunter">Hunter</option>
+						<option value="zoomeye">ZoomEye</option>
+						<option value="quake">Quake</option>
+					</select>
+				</div>
+				<div class="filter-group">
+					<button type="button" class="btn btn-secondary" id="btn-apply-filter">应用筛选</button>
+					<button type="button" class="btn btn-secondary" id="btn-reset-filter">重置筛选</button>
+				</div>
+			</div>
+			
+			<!-- 结果统计 -->
+			<div class="results-stats">
+				<p>显示 <span id="displayed-count">{{len .assets}}</span> 条结果，共 <span id="total-count">{{.totalCount}}</span> 条</p>
+			</div>
+			
+			{{if .assets}}
+			<table class="results-table">
+				<thead>
+					<tr>
+						<th>IP</th>
+						<th>端口</th>
+						<th>协议</th>
+						<th>主机</th>
+						<th>标题</th>
+						<th>服务器</th>
+						<th>状态码</th>
+						<th>来源</th>
+						<th>操作</th>
+					</tr>
+				</thead>
+				<tbody id="results-body">
+					{{range .assets}}
+					<tr>
+						<td>{{.IP}}</td>
+						<td>{{.Port}}</td>
+						<td>{{.Protocol}}</td>
+						<td>{{.Host}}</td>
+						<td>{{.Title}}</td>
+						<td>{{.Server}}</td>
+						<td>{{.StatusCode}}</td>
+						<td>{{.Source}}</td>
+						<td>
+							<button type="button" class="btn btn-sm btn-info" data-ip="{{.IP}}" data-port="{{.Port}}">详情</button>
+							<button type="button" class="btn btn-sm btn-success" data-ip="{{.IP}}">复制IP</button>
+						</td>
+					</tr>
+					{{end}}
+				</tbody>
+			</table>
+			
+			<!-- 分页控件 -->
+			<div class="pagination">
+				<button type="button" class="btn btn-sm btn-secondary" id="btn-prev-page" disabled>上一页</button>
+				<span class="page-info">第 <span id="current-page">1</span> 页，共 <span id="total-pages">1</span> 页</span>
+				<button type="button" class="btn btn-sm btn-secondary" id="btn-next-page" disabled>下一页</button>
+				<div class="page-size-selector">
+					<label for="page-size">每页显示：</label>
+					<select id="page-size">
+						<option value="20">20</option>
+						<option value="50" selected>50</option>
+						<option value="100">100</option>
+						<option value="200">200</option>
+					</select>
+				</div>
+			</div>
+			{{else}}
+			<p class="no-results">未找到结果</p>
+			{{end}}
+		</section>
+
+		<!-- 资产详情模态框 -->
+		<div id="asset-detail" class="modal">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h3>资产详情</h3>
+					<button type="button" class="close-btn">&times;</button>
+				</div>
+				<div class="modal-body">
+					<div id="asset-detail-content"></div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary close-btn">关闭</button>
+				</div>
+			</div>
+		</div>
+	</main>
+
+	<footer>
+		<p>&copy; 2026 UniMap - 多引擎网络资产查询系统</p>
+	</footer>
+
+	<script src="/static/js/main.js?v={{.staticVersion}}"></script>
+</body>
+</html>

@@ -18,6 +18,8 @@ cd unimap-icp-hunter
 
 # 创建环境变量文件
 cp .env.example .env
+ 
+GUI 的快速编译/启动与各系统依赖请看 [GUI_BUILD.md](GUI_BUILD.md)。
 
 # 编辑配置，填入 API Keys
 # 只需要填入以下三项:
@@ -299,6 +301,29 @@ docker exec -it icp-scheduler ./icp-hunter scan --policy http_80
 ```bash
 docker exec -it icp-scheduler ./icp-hunter stats --today
 # 预期输出: 今日扫描统计
+```
+
+---
+
+## 🧪 本地代码验证（非 Docker）
+
+如果你要修改代码并提 PR，建议在本地先跑完基础检查：
+
+```bash
+go vet ./...
+go test ./...
+```
+
+本仓库的 GitHub Actions：
+
+- 自动 CI：`.github/workflows/ci.yml`（push/PR 自动执行 vet + test，并检查 `go mod tidy` 后仓库是否干净）
+- GUI 构建：`.github/workflows/gui-build.yml`（手动触发，用于验证 `-tags gui` 的构建环境）
+
+GUI 运行方式：
+
+```bash
+# 启用 GUI（需要系统具备 cgo/OpenGL 相关依赖）
+go run -tags gui ./cmd/unimap-gui
 ```
 
 ---
