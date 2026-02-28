@@ -22,12 +22,14 @@ type EngineQuery struct {
 
 // EngineResult 引擎返回的原始结果
 type EngineResult struct {
-	EngineName string        `json:"engine_name"`
-	RawData    []interface{} `json:"raw_data"`
-	Total      int           `json:"total"`
-	Page       int           `json:"page"`
-	HasMore    bool          `json:"has_more"`
-	Error      string        `json:"error,omitempty"`
+	EngineName     string           `json:"engine_name"`
+	RawData        []interface{}    `json:"raw_data"`
+	Total          int              `json:"total"`
+	Page           int              `json:"page"`
+	HasMore        bool             `json:"has_more"`
+	Error          string           `json:"error,omitempty"`
+	Cached         bool             `json:"cached,omitempty"`         // 标记是否来自缓存
+	NormalizedData []UnifiedAsset   `json:"normalized_data,omitempty"` // 缓存命中时的标准化数据
 }
 
 // UnifiedAsset 统一资产结构 (用于引擎适配器返回)

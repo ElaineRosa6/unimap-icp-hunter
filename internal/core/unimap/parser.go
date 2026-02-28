@@ -43,7 +43,7 @@ func (p *UQLParser) Parse(query string) (*model.UQLAST, error) {
 // tokenize 将查询字符串分解为token
 func (p *UQLParser) tokenize(query string) []string {
 	// 简单的tokenize实现
-	// 支持: field="value", field="value" && field="value", field IN ["a", "b"]
+	// 支持: field="value", field="value" && field="value", field IN ["a", "b"], (condition)
 
 	tokens := []string{}
 	current := ""
@@ -70,15 +70,52 @@ func (p *UQLParser) tokenize(query string) []string {
 			continue
 		}
 
-		if ch == '[' {
-			inBrackets = true
-			current += string(ch)
+		// 在引号外时，括号作为独立token
+		if !inQuotes && ch == '(' {
+			if current != "" {
+				tokens = append(tokens, current)
+				current = ""
+			}
+			tokens = append(tokens, "(")
 			continue
 		}
 
-		if ch == ']' {
+		if !inQuotes && ch == ')' {
+			if current != "" {
+				tokens = append(tokens, current)
+				current = ""
+			}
+			tokens = append(tokens, ")")
+			continue
+		}
+
+		// 在引号外时，方括号作为独立token
+		if !inQuotes && ch == '[' {
+			if current != "" {
+				tokens = append(tokens, current)
+				current = ""
+			}
+			tokens = append(tokens, "[")
+			inBrackets = true
+			continue
+		}
+
+		if !inQuotes && ch == ']' {
+			if current != "" {
+				tokens = append(tokens, current)
+				current = ""
+			}
+			tokens = append(tokens, "]")
 			inBrackets = false
-			current += string(ch)
+			continue
+		}
+
+		// 在方括号内时，逗号作为分隔符
+		if !inQuotes && inBrackets && ch == ',' {
+			if current != "" {
+				tokens = append(tokens, current)
+				current = ""
+			}
 			continue
 		}
 

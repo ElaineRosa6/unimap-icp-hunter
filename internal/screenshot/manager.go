@@ -55,12 +55,12 @@ type Cookie struct {
 
 // Config 截图管理器配置
 type Config struct {
-	BaseDir     string
-	ChromePath  string
-	Timeout     time.Duration
-	WindowWidth int
+	BaseDir      string
+	ChromePath   string
+	Timeout      time.Duration
+	WindowWidth  int
 	WindowHeight int
-	WaitTime    time.Duration
+	WaitTime     time.Duration
 }
 
 // NewManager 创建截图管理器
@@ -109,7 +109,7 @@ func (m *Manager) CreateQueryDirectory(queryID string) (string, string, string, 
 	// 生成目录名: YYYY-MM-DD-{queryID}
 	dateStr := time.Now().Format("2006-01-02")
 	dirName := fmt.Sprintf("%s-%s", dateStr, queryID)
-	
+
 	queryDir := filepath.Join(m.baseDir, dirName)
 	searchEngineDir := filepath.Join(queryDir, string(ScreenshotTypeSearchEngine))
 	targetWebsiteDir := filepath.Join(queryDir, string(ScreenshotTypeTargetWebsite))
@@ -157,7 +157,7 @@ func (m *Manager) CaptureScreenshot(ctx context.Context, targetURL string, cooki
 	defer cancel()
 
 	var buf []byte
-	
+
 	// 构建ChromeDP动作列表
 	actions := []chromedp.Action{
 		chromedp.Navigate(targetURL),
@@ -287,7 +287,7 @@ func (m *Manager) CaptureTargetWebsite(ctx context.Context, targetURL, ip, port,
 func (m *Manager) BuildSearchEngineURL(engine, query string) string {
 	// Base64编码查询语句
 	b64Query := base64.StdEncoding.EncodeToString([]byte(query))
-	
+
 	switch strings.ToLower(engine) {
 	case "fofa":
 		return fmt.Sprintf("https://fofa.info/result?qbase64=%s", b64Query)
@@ -315,12 +315,12 @@ func (m *Manager) generateSearchEngineFilename(engine, query string) string {
 	cleanQuery = strings.ReplaceAll(cleanQuery, "<", "_")
 	cleanQuery = strings.ReplaceAll(cleanQuery, ">", "_")
 	cleanQuery = strings.ReplaceAll(cleanQuery, "|", "_")
-	
+
 	// 限制文件名长度
 	if len(cleanQuery) > 50 {
 		cleanQuery = cleanQuery[:50]
 	}
-	
+
 	timestamp := time.Now().Format("20060102_150405")
 	return fmt.Sprintf("%s_%s_%s.png", engine, cleanQuery, timestamp)
 }
@@ -331,7 +331,7 @@ func (m *Manager) generateTargetWebsiteFilename(ip, port, protocol string) strin
 	if proto == "" {
 		proto = "http"
 	}
-	
+
 	if port == "" {
 		return fmt.Sprintf("%s_%s.png", proto, ip)
 	}

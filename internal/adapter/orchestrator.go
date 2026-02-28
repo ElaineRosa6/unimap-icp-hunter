@@ -151,17 +151,16 @@ func (t *SearchTask) Execute() error {
 
 	// 检查缓存中是否存在结果
 	if cachedResults, found := t.orchestrator.cache.Get(cacheKey); found {
-		// 构建EngineResult
+		// 缓存中存储的是已标准化的UnifiedAsset列表
+		// 直接返回标准化结果，避免再次调用Normalize
 		result := &model.EngineResult{
-			EngineName: t.query.EngineName,
-			RawData:    make([]interface{}, len(cachedResults)),
-			Total:      len(cachedResults),
-			Page:       1,
-			HasMore:    false,
-		}
-		// 转换为RawData格式
-		for i, asset := range cachedResults {
-			result.RawData[i] = asset.Extra
+			EngineName:     t.query.EngineName,
+			RawData:        []interface{}{}, // 空原始数据，表示来自缓存
+			Total:          len(cachedResults),
+			Page:           1,
+			HasMore:        false,
+			Cached:         true,
+			NormalizedData: cachedResults, // 保存已标准化的数据
 		}
 
 		select {

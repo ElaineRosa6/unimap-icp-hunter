@@ -82,11 +82,17 @@ func (m *ResultMerger) Merge(assets []model.UnifiedAsset) *model.MergeResult {
 	}
 
 	// 添加来源统计信息到Extra字段
+	// 注意：需要复制sourceStats，避免所有资产指向同一个map（该map会被回收）
 	for _, asset := range assetMap {
 		if asset.Extra == nil {
 			asset.Extra = m.interfaceMapPool.Get()
 		}
-		asset.Extra["source_stats"] = sourceStats
+		// 复制sourceStats到每个资产的Extra中
+		statsCopy := make(map[string]interface{}, len(sourceStats))
+		for k, v := range sourceStats {
+			statsCopy[k] = v  
+		}
+		asset.Extra["source_stats"] = statsCopy
 	}
 
 	return mergedResult

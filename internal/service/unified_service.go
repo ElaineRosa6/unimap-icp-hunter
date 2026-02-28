@@ -88,7 +88,7 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 	copy(sortedEngines, req.Engines)
 	sort.Strings(sortedEngines)
 
-	cacheKey := fmt.Sprintf("%s:%s:%d", strings.Join(sortedEngines, ","), req.Query, req.PageSize)
+	cacheKey := fmt.Sprintf("%s:%s:%d:%t", strings.Join(sortedEngines, ","), req.Query, req.PageSize, req.ProcessData)
 	if cachedAssets, found := s.cache.Get(cacheKey); found {
 		// 触发查询前钩子
 		if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{
@@ -157,6 +157,19 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 
 	for _, result := range engineResults {
 		if result == nil {
+			continue
+		}
+
+		// 处理引擎返回的错误
+		if result.Error != "" {
+			errors = append(errors, fmt.Sprintf("engine %s error: %s", result.EngineName, result.Error))
+			continue
+		}
+
+		// 如果是缓存命中的结果，直接使用已标准化的数据
+		if result.Cached && result.NormalizedData != nil {
+			allAssets = append(allAssets, result.NormalizedData...)
+			engineStats[result.EngineName] = len(result.NormalizedData)
 			continue
 		}
 

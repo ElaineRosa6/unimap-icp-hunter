@@ -46,18 +46,18 @@ type ConnectionManager struct {
 
 // Server Web服务器
 type Server struct {
-	port             int
-	templates        *template.Template
-	service          *service.UnifiedService
-	orchestrator     *adapter.EngineOrchestrator
-	upgrader         websocket.Upgrader
-	connManager      *ConnectionManager
-	queryStatus      map[string]*QueryStatus
-	queryMutex       sync.RWMutex
-	webRoot          string
-	staticVersion    string
-	screenshotMgr    *screenshot.Manager
-	config           *config.Config
+	port          int
+	templates     *template.Template
+	service       *service.UnifiedService
+	orchestrator  *adapter.EngineOrchestrator
+	upgrader      websocket.Upgrader
+	connManager   *ConnectionManager
+	queryStatus   map[string]*QueryStatus
+	queryMutex    sync.RWMutex
+	webRoot       string
+	staticVersion string
+	screenshotMgr *screenshot.Manager
+	config        *config.Config
 }
 
 // NewServer 创建Web服务器
@@ -362,7 +362,7 @@ func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 输入验证：检查是否包含恶意字符
-	if strings.Contains(query, "'\"") || strings.Contains(query, "\\\\") {
+	if strings.Contains(query, "'") || strings.Contains(query, "\"") || strings.Contains(query, "\\") {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": "Query contains invalid characters",
@@ -538,10 +538,10 @@ func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Req
 	// 返回JSON响应
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"path":    screenshotPath,
-		"engine":  engine,
-		"query":   query,
+		"success":  true,
+		"path":     screenshotPath,
+		"engine":   engine,
+		"query":    query,
 		"query_id": queryID,
 	})
 }
@@ -633,10 +633,10 @@ func (s *Server) handleBatchScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	results := map[string]interface{}{
-		"query_id":          req.QueryID,
-		"search_engines":    []map[string]interface{}{},
-		"targets":           []map[string]interface{}{},
-		"errors":            []string{},
+		"query_id":       req.QueryID,
+		"search_engines": []map[string]interface{}{},
+		"targets":        []map[string]interface{}{},
+		"errors":         []string{},
 	}
 
 	var wg sync.WaitGroup
@@ -723,7 +723,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 输入验证：检查是否包含恶意字符
-	if strings.Contains(query, "'\"") || strings.Contains(query, "\\\\") {
+	if strings.Contains(query, "'") || strings.Contains(query, "\"") || strings.Contains(query, "\\") {
 		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
 			"error": "Query contains invalid characters",
 		})
@@ -984,7 +984,7 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 	}
 
 	// 输入验证：检查是否包含恶意字符
-	if strings.Contains(query, "'\"") || strings.Contains(query, "\\\\") {
+	if strings.Contains(query, "'") || strings.Contains(query, "\"") || strings.Contains(query, "\\") {
 		// 发送查询错误消息
 		if err := conn.WriteJSON(map[string]interface{}{
 			"type":  "query_error",
@@ -1080,9 +1080,15 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 		if st != nil {
 			statusCopy = *st
 		}
-		// 清理查询状态，避免内存泄漏
-		delete(s.queryStatus, queryID)
 		s.queryMutex.Unlock()
+
+		// 延迟清理查询状态，允许客户端在一段时间内查询已完成任务的状态
+		go func() {
+			time.Sleep(5 * time.Minute)
+			s.queryMutex.Lock()
+			delete(s.queryStatus, queryID)
+			s.queryMutex.Unlock()
+		}()
 
 		// 发送查询完成消息（发副本，避免边编码边被修改）
 		var resultsPayload map[string]interface{}
