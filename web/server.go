@@ -17,8 +17,10 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/gorilla/websocket"
 	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
+	"github.com/unimap-icp-hunter/project/internal/screenshot"
 	"github.com/unimap-icp-hunter/project/internal/service"
 )
 
@@ -44,20 +46,22 @@ type ConnectionManager struct {
 
 // Server Web服务器
 type Server struct {
-	port          int
-	templates     *template.Template
-	service       *service.UnifiedService
-	orchestrator  *adapter.EngineOrchestrator
-	upgrader      websocket.Upgrader
-	connManager   *ConnectionManager
-	queryStatus   map[string]*QueryStatus
-	queryMutex    sync.RWMutex
-	webRoot       string
-	staticVersion string
+	port             int
+	templates        *template.Template
+	service          *service.UnifiedService
+	orchestrator     *adapter.EngineOrchestrator
+	upgrader         websocket.Upgrader
+	connManager      *ConnectionManager
+	queryStatus      map[string]*QueryStatus
+	queryMutex       sync.RWMutex
+	webRoot          string
+	staticVersion    string
+	screenshotMgr    *screenshot.Manager
+	config           *config.Config
 }
 
 // NewServer 创建Web服务器
-func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.EngineOrchestrator) (*Server, error) {
+func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.EngineOrchestrator, cfg *config.Config) (*Server, error) {
 	// 创建模板函数映射
 	funcMap := template.FuncMap{
 		"mul": func(a, b float64) float64 {
@@ -95,6 +99,40 @@ func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.
 		},
 	}
 
+	// 初始化截图管理器
+	var screenshotMgr *screenshot.Manager
+	if cfg != nil && cfg.Screenshot.Enabled {
+		screenshotCfg := screenshot.Config{
+			BaseDir:      cfg.Screenshot.BaseDir,
+			ChromePath:   cfg.Screenshot.ChromePath,
+			Timeout:      time.Duration(cfg.Screenshot.Timeout) * time.Second,
+			WindowWidth:  cfg.Screenshot.WindowWidth,
+			WindowHeight: cfg.Screenshot.WindowHeight,
+			WaitTime:     time.Duration(cfg.Screenshot.WaitTime) * time.Millisecond,
+		}
+		screenshotMgr = screenshot.NewManager(screenshotCfg)
+
+		// 加载各引擎的Cookie
+		if cfg.Engines.Fofa.Enabled && len(cfg.Engines.Fofa.Cookies) > 0 {
+			fofaCookies := convertConfigCookies(cfg.Engines.Fofa.Cookies)
+			screenshotMgr.SetCookies("fofa", fofaCookies)
+		}
+		if cfg.Engines.Hunter.Enabled && len(cfg.Engines.Hunter.Cookies) > 0 {
+			hunterCookies := convertConfigCookies(cfg.Engines.Hunter.Cookies)
+			screenshotMgr.SetCookies("hunter", hunterCookies)
+		}
+		if cfg.Engines.Quake.Enabled && len(cfg.Engines.Quake.Cookies) > 0 {
+			quakeCookies := convertConfigCookies(cfg.Engines.Quake.Cookies)
+			screenshotMgr.SetCookies("quake", quakeCookies)
+		}
+		if cfg.Engines.Zoomeye.Enabled && len(cfg.Engines.Zoomeye.Cookies) > 0 {
+			zoomeyeCookies := convertConfigCookies(cfg.Engines.Zoomeye.Cookies)
+			screenshotMgr.SetCookies("zoomeye", zoomeyeCookies)
+		}
+
+		logger.Infof("Screenshot manager initialized with base dir: %s", cfg.Screenshot.BaseDir)
+	}
+
 	return &Server{
 		port:          port,
 		templates:     templates,
@@ -105,7 +143,25 @@ func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.
 		queryStatus:   make(map[string]*QueryStatus),
 		webRoot:       webRoot,
 		staticVersion: strconv.FormatInt(time.Now().Unix(), 10),
+		screenshotMgr: screenshotMgr,
+		config:        cfg,
 	}, nil
+}
+
+// convertConfigCookies 转换配置Cookie到截图管理器Cookie
+func convertConfigCookies(cfgCookies []config.Cookie) []screenshot.Cookie {
+	cookies := make([]screenshot.Cookie, len(cfgCookies))
+	for i, c := range cfgCookies {
+		cookies[i] = screenshot.Cookie{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			HTTPOnly: c.HTTPOnly,
+			Secure:   c.Secure,
+		}
+	}
+	return cookies
 }
 
 func resolveWebRoot() (string, error) {
@@ -162,6 +218,9 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/ws", s.handleWebSocket)
 	http.HandleFunc("/api/query/status", s.handleQueryStatus)
 	http.HandleFunc("/api/screenshot", s.handleScreenshot)
+	http.HandleFunc("/api/screenshot/search-engine", s.handleSearchEngineScreenshot)
+	http.HandleFunc("/api/screenshot/target", s.handleTargetScreenshot)
+	http.HandleFunc("/api/screenshot/batch", s.handleBatchScreenshot)
 	http.HandleFunc("/results", s.handleResults)
 	http.HandleFunc("/quota", s.handleQuota)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.webRoot, "static")))))
@@ -440,6 +499,195 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(buf)
+}
+
+// handleSearchEngineScreenshot 处理搜索引擎结果页面截图请求
+func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.screenshotMgr == nil {
+		http.Error(w, "Screenshot manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	engine := strings.TrimSpace(r.URL.Query().Get("engine"))
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	queryID := strings.TrimSpace(r.URL.Query().Get("query_id"))
+
+	if engine == "" || query == "" {
+		http.Error(w, "Missing engine or query parameter", http.StatusBadRequest)
+		return
+	}
+
+	// 如果没有提供queryID，生成一个
+	if queryID == "" {
+		queryID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	ctx := r.Context()
+	screenshotPath, err := s.screenshotMgr.CaptureSearchEngineResult(ctx, engine, query, queryID)
+	if err != nil {
+		logger.Errorf("Failed to capture search engine screenshot: %v", err)
+		http.Error(w, fmt.Sprintf("Screenshot failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 返回JSON响应
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"path":    screenshotPath,
+		"engine":  engine,
+		"query":   query,
+		"query_id": queryID,
+	})
+}
+
+// handleTargetScreenshot 处理目标网站截图请求（保存到文件）
+func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.screenshotMgr == nil {
+		http.Error(w, "Screenshot manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	targetURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+	port := strings.TrimSpace(r.URL.Query().Get("port"))
+	protocol := strings.TrimSpace(r.URL.Query().Get("protocol"))
+	queryID := strings.TrimSpace(r.URL.Query().Get("query_id"))
+
+	if targetURL == "" && ip == "" {
+		http.Error(w, "Missing url or ip parameter", http.StatusBadRequest)
+		return
+	}
+
+	// 如果没有提供queryID，生成一个
+	if queryID == "" {
+		queryID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	ctx := r.Context()
+	screenshotPath, err := s.screenshotMgr.CaptureTargetWebsite(ctx, targetURL, ip, port, protocol, queryID)
+	if err != nil {
+		logger.Errorf("Failed to capture target screenshot: %v", err)
+		http.Error(w, fmt.Sprintf("Screenshot failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 返回JSON响应
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"path":     screenshotPath,
+		"url":      targetURL,
+		"ip":       ip,
+		"port":     port,
+		"protocol": protocol,
+		"query_id": queryID,
+	})
+}
+
+// handleBatchScreenshot 处理批量截图请求
+func (s *Server) handleBatchScreenshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.screenshotMgr == nil {
+		http.Error(w, "Screenshot manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		QueryID string `json:"query_id"`
+		Engines []struct {
+			Engine string `json:"engine"`
+			Query  string `json:"query"`
+		} `json:"engines"`
+		Targets []struct {
+			URL      string `json:"url"`
+			IP       string `json:"ip"`
+			Port     string `json:"port"`
+			Protocol string `json:"protocol"`
+		} `json:"targets"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// 如果没有提供queryID，生成一个
+	if req.QueryID == "" {
+		req.QueryID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	ctx := r.Context()
+	results := map[string]interface{}{
+		"query_id":          req.QueryID,
+		"search_engines":    []map[string]interface{}{},
+		"targets":           []map[string]interface{}{},
+		"errors":            []string{},
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	// 截图搜索引擎结果页面
+	for _, engine := range req.Engines {
+		wg.Add(1)
+		go func(engine, query string) {
+			defer wg.Done()
+			path, err := s.screenshotMgr.CaptureSearchEngineResult(ctx, engine, query, req.QueryID)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				results["errors"] = append(results["errors"].([]string), fmt.Sprintf("%s: %v", engine, err))
+			} else {
+				results["search_engines"] = append(results["search_engines"].([]map[string]interface{}), map[string]interface{}{
+					"engine": engine,
+					"query":  query,
+					"path":   path,
+				})
+			}
+		}(engine.Engine, engine.Query)
+	}
+
+	// 截图目标网站
+	for _, target := range req.Targets {
+		wg.Add(1)
+		go func(url, ip, port, protocol string) {
+			defer wg.Done()
+			path, err := s.screenshotMgr.CaptureTargetWebsite(ctx, url, ip, port, protocol, req.QueryID)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				results["errors"] = append(results["errors"].([]string), fmt.Sprintf("%s:%s: %v", ip, port, err))
+			} else {
+				results["targets"] = append(results["targets"].([]map[string]interface{}), map[string]interface{}{
+					"url":      url,
+					"ip":       ip,
+					"port":     port,
+					"protocol": protocol,
+					"path":     path,
+				})
+			}
+		}(target.URL, target.IP, target.Port, target.Protocol)
+	}
+
+	wg.Wait()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }
 
 // handleIndex 处理首页请求

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
 )
 
@@ -55,7 +56,7 @@ func (m *PluginManager) LoadPlugin(plugin Plugin, config map[string]interface{})
 	// 触发后加载钩子
 	if err := m.hooks.TriggerHook(HookAfterLoad, plugin.Name(), nil); err != nil {
 		// 加载后钩子失败不影响插件注册
-		fmt.Printf("Warning: post-load hook failed for %s: %v\n", plugin.Name(), err)
+		logger.Warnf("Post-load hook failed for %s: %v", plugin.Name(), err)
 	}
 
 	return nil
@@ -80,7 +81,7 @@ func (m *PluginManager) StartPlugin(name string) error {
 
 	// 触发后启动钩子
 	if err := m.hooks.TriggerHook(HookAfterStart, name, nil); err != nil {
-		fmt.Printf("Warning: post-start hook failed for %s: %v\n", name, err)
+		logger.Warnf("Post-start hook failed for %s: %v", name, err)
 	}
 
 	return nil
@@ -105,7 +106,7 @@ func (m *PluginManager) StopPlugin(name string) error {
 
 	// 触发后停止钩子
 	if err := m.hooks.TriggerHook(HookAfterStop, name, nil); err != nil {
-		fmt.Printf("Warning: post-stop hook failed for %s: %v\n", name, err)
+		logger.Warnf("Post-stop hook failed for %s: %v", name, err)
 	}
 
 	return nil
@@ -130,7 +131,7 @@ func (m *PluginManager) UnloadPlugin(name string) error {
 
 	// 触发后卸载钩子
 	if err := m.hooks.TriggerHook(HookAfterUnload, name, nil); err != nil {
-		fmt.Printf("Warning: post-unload hook failed for %s: %v\n", name, err)
+		logger.Warnf("Post-unload hook failed for %s: %v", name, err)
 	}
 
 	return nil
@@ -153,7 +154,7 @@ func (m *PluginManager) StopAll() error {
 	for _, plugin := range plugins {
 		if err := m.StopPlugin(plugin.Name()); err != nil {
 			// 继续停止其他插件，但记录错误
-			fmt.Printf("Error stopping plugin %s: %v\n", plugin.Name(), err)
+			logger.Errorf("Error stopping plugin %s: %v", plugin.Name(), err)
 		}
 	}
 	return nil
@@ -184,14 +185,14 @@ func (m *PluginManager) StartHealthMonitor() {
 			case <-m.healthTicker.C:
 				results := m.HealthCheck()
 				for name, status := range results {
-					if !status.Healthy {
-						fmt.Printf("Warning: Plugin %s is unhealthy: %s\n", name, status.Message)
-						// 触发健康检查失败钩子
-						m.hooks.TriggerHook(HookHealthCheckFailed, name, map[string]interface{}{
-							"status": status,
-						})
-					}
+				if !status.Healthy {
+					logger.Warnf("Plugin %s is unhealthy: %s", name, status.Message)
+					// 触发健康检查失败钩子
+					m.hooks.TriggerHook(HookHealthCheckFailed, name, map[string]interface{}{
+						"status": status,
+					})
 				}
+			}
 			}
 		}
 	}()

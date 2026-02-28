@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
 )
 
@@ -260,7 +261,7 @@ func NewRedisCache(addr, password string, db int, prefix string) *RedisCache {
 
 	// 测试连接
 	if err := client.Ping(cache.ctx).Err(); err != nil {
-		fmt.Printf("Redis connection failed: %v, falling back to memory cache\n", err)
+		logger.Errorf("Redis connection failed: %v, falling back to memory cache", err)
 		return nil
 	}
 

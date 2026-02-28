@@ -1,40 +1,70 @@
 package adapter
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/util/workerpool"
 	"github.com/unimap-icp-hunter/project/internal/utils"
 )
 
+const (
+	// DefaultConcurrency 默认并发数
+	DefaultConcurrency = 5
+	// MaxConcurrency 最大并发数
+	MaxConcurrency = 8
+	// DefaultCacheTTL 默认缓存时间
+	DefaultCacheTTL = 30 * time.Minute
+	// DefaultRateLimitDelay 默认速率限制延迟
+	DefaultRateLimitDelay = 100 * time.Millisecond
+)
+
 // EngineOrchestrator 引擎编排器
 type EngineOrchestrator struct {
-	adapters map[string]EngineAdapter
-	mutex    sync.RWMutex
-	cache    utils.QueryCache
+	adapters    map[string]EngineAdapter
+	mutex       sync.RWMutex
+	cache       utils.QueryCache
+	concurrency int
 }
 
 // NewEngineOrchestrator 创建引擎编排器
 func NewEngineOrchestrator() *EngineOrchestrator {
-	// 默认使用内存缓存，后续可通过配置文件启用Redis
+	return NewEngineOrchestratorWithConfig(false, "", "", 0)
+}
+
+// NewEngineOrchestratorWithConfig 使用配置创建引擎编排器
+func NewEngineOrchestratorWithConfig(useRedis bool, redisAddr, redisPassword string, redisDB int) *EngineOrchestrator {
 	cache := utils.NewCache(
-		false,            // 默认不使用Redis
-		"localhost:6379", // Redis地址
-		"",               // Redis密码
-		0,                // Redis数据库
-		"unimap:",        // Redis键前缀
-		1000,             // 内存缓存最大大小
-		5*time.Minute,    // 清理间隔
+		useRedis,
+		redisAddr,
+		redisPassword,
+		redisDB,
+		"unimap:",
+		1000,
+		5*time.Minute,
 	)
 
 	return &EngineOrchestrator{
-		adapters: make(map[string]EngineAdapter),
-		cache:    cache,
+		adapters:    make(map[string]EngineAdapter),
+		cache:       cache,
+		concurrency: DefaultConcurrency,
 	}
+}
+
+// SetConcurrency 设置并发数
+func (o *EngineOrchestrator) SetConcurrency(concurrency int) {
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrency
+	}
+	if concurrency > MaxConcurrency {
+		concurrency = MaxConcurrency
+	}
+	o.concurrency = concurrency
 }
 
 // RegisterAdapter 注册引擎适配器
@@ -99,13 +129,20 @@ type SearchTask struct {
 	pageSize     int
 	resultChan   chan *model.EngineResult
 	errorChan    chan error
+	wg           *sync.WaitGroup
 }
 
 // Execute 执行搜索任务
 func (t *SearchTask) Execute() error {
+	defer t.wg.Done()
+
 	adapter, exists := t.orchestrator.GetAdapter(t.query.EngineName)
 	if !exists {
-		t.errorChan <- fmt.Errorf("adapter %s not found", t.query.EngineName)
+		select {
+		case t.errorChan <- fmt.Errorf("adapter %s not found", t.query.EngineName):
+		default:
+			logger.Errorf("Failed to send error: adapter %s not found", t.query.EngineName)
+		}
 		return nil
 	}
 
@@ -127,34 +164,51 @@ func (t *SearchTask) Execute() error {
 			result.RawData[i] = asset.Extra
 		}
 
-		t.resultChan <- result
+		select {
+		case t.resultChan <- result:
+		default:
+			logger.Errorf("Failed to send cached result: channel full")
+		}
 		return nil
 	}
 
 	// 执行搜索，获取第一页
 	result, err := adapter.Search(t.query.Query, 1, t.pageSize)
 	if err != nil {
-		t.errorChan <- fmt.Errorf("%s search error: %v", t.query.EngineName, err)
+		select {
+		case t.errorChan <- fmt.Errorf("%s search error: %v", t.query.EngineName, err):
+		default:
+			logger.Errorf("Failed to send error: %s search error: %v", t.query.EngineName, err)
+		}
 		return nil
 	}
 
 	// 标准化结果并存入缓存
 	if normalized, err := adapter.Normalize(result); err == nil && len(normalized) > 0 {
-		t.orchestrator.cache.Set(cacheKey, normalized, 30*time.Minute)
+		t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
 	}
 
-	t.resultChan <- result
+	select {
+	case t.resultChan <- result:
+	default:
+		logger.Errorf("Failed to send result: channel full")
+	}
 	return nil
 }
 
 // SearchEngines 并行搜索多个引擎
 func (o *EngineOrchestrator) SearchEngines(queries []model.EngineQuery, pageSize int) ([]*model.EngineResult, error) {
+	return o.SearchEnginesWithContext(context.Background(), queries, pageSize)
+}
+
+// SearchEnginesWithContext 带上下文的并行搜索
+func (o *EngineOrchestrator) SearchEnginesWithContext(ctx context.Context, queries []model.EngineQuery, pageSize int) ([]*model.EngineResult, error) {
 	if len(queries) == 0 {
 		return nil, fmt.Errorf("no queries provided")
 	}
 
-	// 限制并发数，最大不超过8个
-	concurrency := 5
+	// 限制并发数
+	concurrency := o.concurrency
 	if len(queries) < concurrency {
 		concurrency = len(queries)
 	}
@@ -162,56 +216,68 @@ func (o *EngineOrchestrator) SearchEngines(queries []model.EngineQuery, pageSize
 	// 创建工作池
 	pool := workerpool.NewPool(concurrency)
 	pool.Start()
-	defer pool.Stop()
 
-	// 创建结果通道
+	// 创建结果通道和错误通道
 	resultChan := make(chan *model.EngineResult, len(queries))
 	errorChan := make(chan error, len(queries))
 
+	// 使用 WaitGroup 等待所有任务完成
+	var wg sync.WaitGroup
+
 	// 提交任务
 	for _, q := range queries {
+		wg.Add(1)
 		task := &SearchTask{
 			orchestrator: o,
 			query:        q,
 			pageSize:     pageSize,
 			resultChan:   resultChan,
 			errorChan:    errorChan,
+			wg:           &wg,
 		}
 		pool.Submit(task)
 	}
 
-	// 关闭工作池并等待所有任务完成
-	pool.Stop()
-
-	// 关闭结果通道和错误通道
-	close(resultChan)
-	close(errorChan)
+	// 在 goroutine 中等待所有任务完成并关闭通道
+	go func() {
+		wg.Wait()
+		pool.Stop()
+		close(resultChan)
+		close(errorChan)
+	}()
 
 	// 收集结果
 	results := []*model.EngineResult{}
-	for result := range resultChan {
-		results = append(results, result)
-	}
-
-	// 检查是否有任何成功的结果
-	// 即使有错误，只要有部分结果成功，也返回部分结果
-	// 所有的错误已经通过日志记录（如果有日志系统的话），或者我们应该把错误也返回出去
-	// 但鉴于函数签名，我们优先返回得到的结果
-	// 如果没有任何结果且有错误，才返回错误
-
 	errs := []string{}
-	for err := range errorChan {
-		if err != nil {
-			errs = append(errs, err.Error())
+
+	// 使用 select 监听上下文取消和结果收集
+	done := false
+	for !done {
+		select {
+		case <-ctx.Done():
+			return results, fmt.Errorf("search cancelled: %w", ctx.Err())
+		case result, ok := <-resultChan:
+			if ok && result != nil {
+				results = append(results, result)
+			} else if !ok {
+				resultChan = nil
+			}
+		case err, ok := <-errorChan:
+			if ok && err != nil {
+				errs = append(errs, err.Error())
+				logger.Errorf("Engine search error: %v", err)
+			} else if !ok {
+				errorChan = nil
+			}
+		}
+		if resultChan == nil && errorChan == nil {
+			done = true
 		}
 	}
 
 	if len(results) == 0 && len(errs) > 0 {
 		return nil, fmt.Errorf("all engines failed: %s", strings.Join(errs, "; "))
 	}
-
-	// 这里可以考虑把错误信息附加到结果中，但目前架构可能不支持
-	// 或者我们可以简单地忽略部分错误，只返回成功的
 
 	return results, nil
 }
@@ -223,15 +289,22 @@ type PaginatedSearchTask struct {
 	pageSize     int
 	maxPages     int
 	resultChan   chan *model.EngineResult
+	wg           *sync.WaitGroup
 }
 
 // Execute 执行分页搜索任务
 func (t *PaginatedSearchTask) Execute() error {
+	defer t.wg.Done()
+
 	adapter, exists := t.orchestrator.GetAdapter(t.query.EngineName)
 	if !exists {
-		t.resultChan <- &model.EngineResult{
+		select {
+		case t.resultChan <- &model.EngineResult{
 			EngineName: t.query.EngineName,
 			Error:      fmt.Sprintf("failed to find adapter: %s", t.query.EngineName),
+		}:
+		default:
+			logger.Errorf("Failed to send error: adapter %s not found", t.query.EngineName)
 		}
 		return nil
 	}
@@ -256,32 +329,44 @@ func (t *PaginatedSearchTask) Execute() error {
 				result.RawData[i] = asset.Extra
 			}
 
-			t.resultChan <- result
+			select {
+			case t.resultChan <- result:
+			default:
+				logger.Errorf("Failed to send cached result: channel full")
+			}
 			continue
 		}
 
 		result, err := adapter.Search(t.query.Query, page, t.pageSize)
 		if err != nil {
-			t.resultChan <- &model.EngineResult{
+			select {
+			case t.resultChan <- &model.EngineResult{
 				EngineName: t.query.EngineName,
 				Error:      fmt.Sprintf("search failed on page %d: %v", page, err),
+			}:
+			default:
+				logger.Errorf("Failed to send error: search failed on page %d: %v", page, err)
 			}
 			break
 		}
 
 		// 标准化结果并存入缓存
 		if normalized, err := adapter.Normalize(result); err == nil && len(normalized) > 0 {
-			t.orchestrator.cache.Set(cacheKey, normalized, 30*time.Minute)
+			t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
 		}
 
-		t.resultChan <- result
+		select {
+		case t.resultChan <- result:
+		default:
+			logger.Errorf("Failed to send result: channel full")
+		}
 
 		if !result.HasMore || page >= t.maxPages {
 			break
 		}
 
 		// 简单的速率控制
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(DefaultRateLimitDelay)
 	}
 
 	return nil
@@ -289,12 +374,17 @@ func (t *PaginatedSearchTask) Execute() error {
 
 // SearchEnginesWithPagination 并行搜索多个引擎并支持分页
 func (o *EngineOrchestrator) SearchEnginesWithPagination(queries []model.EngineQuery, pageSize, maxPages int) ([]*model.EngineResult, error) {
+	return o.SearchEnginesWithPaginationAndContext(context.Background(), queries, pageSize, maxPages)
+}
+
+// SearchEnginesWithPaginationAndContext 带上下文的分页搜索
+func (o *EngineOrchestrator) SearchEnginesWithPaginationAndContext(ctx context.Context, queries []model.EngineQuery, pageSize, maxPages int) ([]*model.EngineResult, error) {
 	if len(queries) == 0 {
 		return nil, fmt.Errorf("no queries provided")
 	}
 
-	// 限制并发数，最大不超过8个
-	concurrency := 5
+	// 限制并发数
+	concurrency := o.concurrency
 	if len(queries) < concurrency {
 		concurrency = len(queries)
 	}
@@ -306,31 +396,47 @@ func (o *EngineOrchestrator) SearchEnginesWithPagination(queries []model.EngineQ
 	// 创建结果通道
 	resultsChan := make(chan *model.EngineResult, len(queries)*maxPages)
 
+	// 使用 WaitGroup 等待所有任务完成
+	var wg sync.WaitGroup
+
 	// 提交任务
 	for _, q := range queries {
+		wg.Add(1)
 		task := &PaginatedSearchTask{
 			orchestrator: o,
 			query:        q,
 			pageSize:     pageSize,
 			maxPages:     maxPages,
 			resultChan:   resultsChan,
+			wg:           &wg,
 		}
 		pool.Submit(task)
 	}
 
-	// 关闭工作池并等待所有任务完成
-	pool.Stop()
-
-	// 关闭结果通道
-	close(resultsChan)
+	// 在 goroutine 中等待所有任务完成并关闭通道
+	go func() {
+		wg.Wait()
+		pool.Stop()
+		close(resultsChan)
+	}()
 
 	// 收集结果
 	results := []*model.EngineResult{}
-	for result := range resultsChan {
-		results = append(results, result)
-	}
 
-	return results, nil
+	// 使用 select 监听上下文取消和结果收集
+	for {
+		select {
+		case <-ctx.Done():
+			return results, fmt.Errorf("search cancelled: %w", ctx.Err())
+		case result, ok := <-resultsChan:
+			if !ok {
+				return results, nil
+			}
+			if result != nil {
+				results = append(results, result)
+			}
+		}
+	}
 }
 
 // NormalizeResults 标准化引擎结果

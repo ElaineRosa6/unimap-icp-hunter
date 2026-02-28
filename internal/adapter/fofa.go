@@ -13,6 +13,13 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/utils"
 )
 
+const (
+	// FofaDefaultTimeout FOFA默认超时
+	FofaDefaultTimeout = 30 * time.Second
+	// FofaDefaultQPS FOFA默认QPS
+	FofaDefaultQPS = 3
+)
+
 // FofaAdapter FOFA引擎适配器
 type FofaAdapter struct {
 	client  *resty.Client
@@ -396,8 +403,8 @@ func (f *FofaAdapter) GetQuota() (*model.QuotaInfo, error) {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode(), resp.String())
 	}
 
-	// 打印响应体，方便调试
-	fmt.Printf("FOFA quota response: %s\n", resp.String())
+	// 记录响应体，方便调试
+	logger.Debugf("FOFA quota response: %s", resp.String())
 
 	// FOFA quota response structure
 	var result struct {

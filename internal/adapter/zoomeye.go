@@ -169,8 +169,8 @@ func (z *ZoomEyeAdapter) Search(query string, page, pageSize int) (*model.Engine
 			"pagesize": pageSize,
 		}
 
-		// 打印请求信息，方便调试
-		fmt.Printf("ZoomEye search request: URL=%s, Query=%s, EncodedQuery=%s, Page=%d, PageSize=%d\n", url, query, encodedQuery, page, pageSize)
+		// 记录请求信息，方便调试
+		logger.Debugf("ZoomEye search request: URL=%s, Query=%s, EncodedQuery=%s, Page=%d, PageSize=%d", url, query, encodedQuery, page, pageSize)
 
 		resp, err := z.client.R().
 			SetHeader("Content-Type", "application/json").

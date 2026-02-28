@@ -433,6 +433,28 @@ function showResults(data) {
 			`;
 		}
 		
+		// 添加截图操作栏
+		html += `
+			<div class="screenshot-actions" style="margin: 15px 0; padding: 15px; background: #f0f8ff; border-radius: 4px; border: 1px solid #b0d4f1;">
+				<h4 style="margin-bottom: 10px;">📸 截图功能</h4>
+				<div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+					<button type="button" id="btn-screenshot-all" class="btn btn-primary" onclick="captureAllScreenshots()">
+						批量截图所有结果
+					</button>
+					<button type="button" id="btn-screenshot-search-engines" class="btn btn-info" onclick="captureSearchEngineScreenshots()">
+						截图搜索引擎结果页
+					</button>
+					<span id="screenshot-status" style="margin-left: 10px; color: #666;"></span>
+				</div>
+				<div id="screenshot-progress" style="margin-top: 10px; display: none;">
+					<div class="progress-container" style="width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden;">
+						<div id="screenshot-progress-bar" style="width: 0%; height: 100%; background: #007bff; transition: width 0.3s;"></div>
+					</div>
+					<p id="screenshot-progress-text" style="margin-top: 5px; font-size: 0.9em; color: #666;"></p>
+				</div>
+			</div>
+		`;
+
 		// 添加返回按钮
 		html += `
 			<div class="results-footer">
@@ -442,6 +464,14 @@ function showResults(data) {
 		
 		// 更新结果内容
 		resultsContent.innerHTML = html;
+		
+		// 保存当前查询数据供截图使用
+		window.currentQueryData = {
+			query: data.query || '',
+			engines: data.engines || [],
+			assets: assets,
+			queryID: 'query_' + Date.now()
+		};
 		
 		// 初始化结果表格功能
 		initResultsTable();
@@ -1522,4 +1552,121 @@ function viewScreenshot(url, ip, port, protocol) {
 		`;
 	};
 	img.src = apiUrl;
+}
+
+// 截图搜索引擎结果页面
+function captureSearchEngineScreenshots() {
+	if (!window.currentQueryData) {
+		showMessage('没有可用的查询数据', 'warning');
+		return;
+	}
+
+	const { query, engines, queryID } = window.currentQueryData;
+	if (!engines || engines.length === 0) {
+		showMessage('没有可用的搜索引擎', 'warning');
+		return;
+	}
+
+	const statusEl = document.getElementById('screenshot-status');
+	const progressEl = document.getElementById('screenshot-progress');
+	const progressBar = document.getElementById('screenshot-progress-bar');
+	const progressText = document.getElementById('screenshot-progress-text');
+
+	statusEl.textContent = '正在截图搜索引擎结果页...';
+	progressEl.style.display = 'block';
+
+	let completed = 0;
+	const total = engines.length;
+
+	engines.forEach((engine, index) => {
+		setTimeout(() => {
+			fetch(`/api/screenshot/search-engine?engine=${encodeURIComponent(engine)}&query=${encodeURIComponent(query)}&query_id=${queryID}`)
+				.then(response => response.json())
+				.then(data => {
+					completed++;
+					const percent = (completed / total) * 100;
+					progressBar.style.width = percent + '%';
+					progressText.textContent = `已完成 ${completed}/${total}: ${engine}`;
+
+					if (completed === total) {
+						statusEl.textContent = '搜索引擎结果页截图完成!';
+						showMessage('搜索引擎结果页截图完成!', 'success');
+					}
+				})
+				.catch(err => {
+					completed++;
+					logger.error(`截图 ${engine} 失败:`, err);
+					if (completed === total) {
+						statusEl.textContent = '截图完成(部分失败)';
+					}
+				});
+		}, index * 2000); // 每个引擎间隔2秒，避免并发过高
+	});
+}
+
+// 批量截图所有目标
+function captureAllScreenshots() {
+	if (!window.currentQueryData) {
+		showMessage('没有可用的查询数据', 'warning');
+		return;
+	}
+
+	const { assets, queryID } = window.currentQueryData;
+	if (!assets || assets.length === 0) {
+		showMessage('没有可截图的目标', 'warning');
+		return;
+	}
+
+	// 先截图搜索引擎结果页
+	captureSearchEngineScreenshots();
+
+	// 然后批量截图目标
+	const statusEl = document.getElementById('screenshot-status');
+	const progressEl = document.getElementById('screenshot-progress');
+	const progressBar = document.getElementById('screenshot-progress-bar');
+	const progressText = document.getElementById('screenshot-progress-text');
+
+	statusEl.textContent = '正在批量截图目标网站...';
+	progressEl.style.display = 'block';
+
+	// 准备批量截图请求
+	const targets = assets.map(asset => ({
+		url: asset.url || asset.URL || '',
+		ip: asset.ip || asset.IP || '',
+		port: String(asset.port || asset.Port || ''),
+		protocol: asset.protocol || asset.Protocol || 'http'
+	})).filter(t => t.ip); // 只保留有IP的目标
+
+	// 分批处理，每批5个
+	const batchSize = 5;
+	let completed = 0;
+	const total = targets.length;
+
+	function processBatch(startIndex) {
+		if (startIndex >= total) {
+			statusEl.textContent = '所有截图完成!';
+			showMessage(`批量截图完成! 共 ${total} 个目标`, 'success');
+			return;
+		}
+
+		const batch = targets.slice(startIndex, startIndex + batchSize);
+		const promises = batch.map(target => 
+			fetch(`/api/screenshot/target?url=${encodeURIComponent(target.url)}&ip=${encodeURIComponent(target.ip)}&port=${encodeURIComponent(target.port)}&protocol=${encodeURIComponent(target.protocol)}&query_id=${queryID}`)
+				.then(response => response.json())
+				.catch(err => ({ error: err.message }))
+		);
+
+		Promise.all(promises).then(results => {
+			completed += batch.length;
+			const percent = (completed / total) * 100;
+			progressBar.style.width = percent + '%';
+			progressText.textContent = `已截图目标: ${completed}/${total}`;
+
+			// 继续下一批
+			setTimeout(() => processBatch(startIndex + batchSize), 1000);
+		});
+	}
+
+	// 等待搜索引擎截图完成后再开始目标截图
+	setTimeout(() => processBatch(0), engines.length * 2000 + 1000);
 }

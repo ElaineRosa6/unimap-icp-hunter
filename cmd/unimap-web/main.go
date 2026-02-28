@@ -33,7 +33,7 @@ func main() {
 	orchestrator := svc.GetOrchestrator()
 
 	// 创建Web服务器
-	server, err := web.NewServer(8080, svc, orchestrator)
+	server, err := web.NewServer(8080, svc, orchestrator, cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize Web server: %v", err)
 	}

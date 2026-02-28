@@ -18,6 +18,7 @@ type Config struct {
 			BaseURL string `yaml:"base_url"`
 			QPS     int    `yaml:"qps"`
 			Timeout int    `yaml:"timeout"`
+			Cookies []Cookie `yaml:"cookies"`
 		} `yaml:"quake"`
 		Zoomeye struct {
 			Enabled bool   `yaml:"enabled"`
@@ -25,6 +26,7 @@ type Config struct {
 			BaseURL string `yaml:"base_url"`
 			QPS     int    `yaml:"qps"`
 			Timeout int    `yaml:"timeout"`
+			Cookies []Cookie `yaml:"cookies"`
 		} `yaml:"zoomeye"`
 		Hunter struct {
 			Enabled bool   `yaml:"enabled"`
@@ -32,16 +34,18 @@ type Config struct {
 			BaseURL string `yaml:"base_url"`
 			QPS     int    `yaml:"qps"`
 			Timeout int    `yaml:"timeout"`
+			Cookies []Cookie `yaml:"cookies"`
 		} `yaml:"hunter"`
 		Fofa struct {
-			Enabled   bool   `yaml:"enabled"`
-			APIKey    string `yaml:"api_key"`
-			Email     string `yaml:"email"`
-			BaseURL   string `yaml:"base_url"`
-			WebURL    string `yaml:"web_url"`
-			QPS       int    `yaml:"qps"`
-			Timeout   int    `yaml:"timeout"`
-			UseWebAPI bool   `yaml:"use_web_api"`
+			Enabled   bool     `yaml:"enabled"`
+			APIKey    string   `yaml:"api_key"`
+			Email     string   `yaml:"email"`
+			BaseURL   string   `yaml:"base_url"`
+			WebURL    string   `yaml:"web_url"`
+			QPS       int      `yaml:"qps"`
+			Timeout   int      `yaml:"timeout"`
+			UseWebAPI bool     `yaml:"use_web_api"`
+			Cookies   []Cookie `yaml:"cookies"`
 		} `yaml:"fofa"`
 	} `yaml:"engines"`
 
@@ -59,6 +63,33 @@ type Config struct {
 		Encoding string `yaml:"encoding"` // console, json
 		File     string `yaml:"file"`     // 可选的日志文件路径
 	} `yaml:"log"`
+
+	// 截图配置
+	Screenshot struct {
+		Enabled      bool   `yaml:"enabled"`
+		BaseDir      string `yaml:"base_dir"`
+		ChromePath   string `yaml:"chrome_path"`
+		Timeout      int    `yaml:"timeout"`
+		WindowWidth  int    `yaml:"window_width"`
+		WindowHeight int    `yaml:"window_height"`
+		WaitTime     int    `yaml:"wait_time"`
+		// 自动截图配置
+		AutoCapture struct {
+			Enabled              bool `yaml:"enabled"`
+			CaptureSearchResults bool `yaml:"capture_search_results"`
+			CaptureTargets       bool `yaml:"capture_targets"`
+		} `yaml:"auto_capture"`
+	} `yaml:"screenshot"`
+}
+
+// Cookie Cookie配置
+type Cookie struct {
+	Name     string `yaml:"name"`
+	Value    string `yaml:"value"`
+	Domain   string `yaml:"domain"`
+	Path     string `yaml:"path"`
+	HTTPOnly bool   `yaml:"http_only"`
+	Secure   bool   `yaml:"secure"`
 }
 
 // Manager 配置管理器
@@ -234,6 +265,23 @@ func (m *Manager) applyDefaults(config *Config) {
 		config.Log.Encoding = "console"
 	}
 	// Log.File 默认为空，表示只输出到标准输出
+
+	// 默认截图配置
+	if config.Screenshot.BaseDir == "" {
+		config.Screenshot.BaseDir = "./screenshots"
+	}
+	if config.Screenshot.Timeout == 0 {
+		config.Screenshot.Timeout = 30
+	}
+	if config.Screenshot.WindowWidth == 0 {
+		config.Screenshot.WindowWidth = 1365
+	}
+	if config.Screenshot.WindowHeight == 0 {
+		config.Screenshot.WindowHeight = 768
+	}
+	if config.Screenshot.WaitTime == 0 {
+		config.Screenshot.WaitTime = 500
+	}
 }
 
 // validate 验证配置有效性
