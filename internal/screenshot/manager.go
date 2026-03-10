@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/chromedp/chromedp"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 	"github.com/unimap-icp-hunter/project/internal/logger"
 )
 
@@ -23,6 +25,8 @@ const (
 	ScreenshotTypeSearchEngine ScreenshotType = "search-engine-results"
 	// ScreenshotTypeTargetWebsite 目标网站截图
 	ScreenshotTypeTargetWebsite ScreenshotType = "target-websites"
+	// ScreenshotTypeBatchUpload 批量上传URL截图
+	ScreenshotTypeBatchUpload ScreenshotType = "batch-upload"
 )
 
 // EngineWebURL 搜索引擎Web界面URL模板
@@ -35,6 +39,10 @@ type EngineWebURL struct {
 type Manager struct {
 	baseDir        string
 	chromePath     string
+	userDataDir    string
+	profileDir     string
+	remoteDebugURL string
+	headless       bool
 	cookies        map[string][]Cookie // 各引擎的Cookie
 	cookiesMutex   sync.RWMutex
 	timeout        time.Duration
@@ -55,12 +63,16 @@ type Cookie struct {
 
 // Config 截图管理器配置
 type Config struct {
-	BaseDir      string
-	ChromePath   string
-	Timeout      time.Duration
-	WindowWidth  int
-	WindowHeight int
-	WaitTime     time.Duration
+	BaseDir        string
+	ChromePath     string
+	UserDataDir    string
+	ProfileDir     string
+	RemoteDebugURL string
+	Headless       bool
+	Timeout        time.Duration
+	WindowWidth    int
+	WindowHeight   int
+	WaitTime       time.Duration
 }
 
 // NewManager 创建截图管理器
@@ -79,13 +91,17 @@ func NewManager(cfg Config) *Manager {
 	}
 
 	return &Manager{
-		baseDir:      cfg.BaseDir,
-		chromePath:   cfg.ChromePath,
-		cookies:      make(map[string][]Cookie),
-		timeout:      cfg.Timeout,
-		windowWidth:  cfg.WindowWidth,
-		windowHeight: cfg.WindowHeight,
-		waitTime:     cfg.WaitTime,
+		baseDir:        cfg.BaseDir,
+		chromePath:     cfg.ChromePath,
+		userDataDir:    cfg.UserDataDir,
+		profileDir:     cfg.ProfileDir,
+		remoteDebugURL: cfg.RemoteDebugURL,
+		headless:       cfg.Headless,
+		cookies:        make(map[string][]Cookie),
+		timeout:        cfg.Timeout,
+		windowWidth:    cfg.WindowWidth,
+		windowHeight:   cfg.WindowHeight,
+		waitTime:       cfg.WaitTime,
 	}
 }
 
@@ -125,50 +141,47 @@ func (m *Manager) CreateQueryDirectory(queryID string) (string, string, string, 
 	return queryDir, searchEngineDir, targetWebsiteDir, nil
 }
 
+// CreateBatchUploadDirectory 创建批量上传截图目录
+// 返回: 批量上传目录路径, 错误
+func (m *Manager) CreateBatchUploadDirectory(batchID string) (string, error) {
+	// 生成目录名: batch-YYYY-MM-DD-{batchID}
+	dateStr := time.Now().Format("2006-01-02")
+	dirName := fmt.Sprintf("batch-%s-%s", dateStr, batchID)
+
+	batchDir := filepath.Join(m.baseDir, dirName)
+
+	// 创建目录
+	if err := os.MkdirAll(batchDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory %s: %w", batchDir, err)
+	}
+
+	return batchDir, nil
+}
+
 // CaptureScreenshot 截图指定URL
 func (m *Manager) CaptureScreenshot(ctx context.Context, targetURL string, cookies []Cookie) ([]byte, error) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-setuid-sandbox", true),
-		chromedp.WindowSize(m.windowWidth, m.windowHeight),
-	)
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
 
-	// 使用指定的Chrome路径
-	if m.chromePath != "" {
-		opts = append(opts, chromedp.ExecPath(m.chromePath))
+	allocCtx, allocCancel, err := m.newAllocator(ctx)
+	if err != nil {
+		return nil, err
 	}
-
-	// 从环境变量获取Chrome路径
-	if chromePath := os.Getenv("UNIMAP_CHROME_PATH"); chromePath != "" && m.chromePath == "" {
-		opts = append(opts, chromedp.ExecPath(chromePath))
-	}
-
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
 
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	// 设置超时
-	ctx, cancel = context.WithTimeout(ctx, m.timeout)
-	defer cancel()
+	ctx, taskCancel := chromedp.NewContext(allocCtx)
+	defer taskCancel()
 
 	var buf []byte
 
 	// 构建ChromeDP动作列表
-	actions := []chromedp.Action{
-		chromedp.Navigate(targetURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(m.waitTime),
-	}
+	actions := []chromedp.Action{}
 
-	// 如果有Cookie，先设置Cookie
-	if len(cookies) > 0 {
-		// 需要先导航到目标域名才能设置Cookie
-		actions = append([]chromedp.Action{
+	// 只有在非CDP模式且提供了Cookie时才设置Cookie
+	// CDP模式下浏览器已保持登录状态，无需设置Cookie
+	if len(cookies) > 0 && !m.isCDPMode() {
+		// 需要先导航到目标域名才能设置Cookie，设置后再重新加载页面
+		actions = append(actions,
 			chromedp.Navigate(targetURL),
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				for _, cookie := range cookies {
@@ -184,8 +197,19 @@ func (m *Manager) CaptureScreenshot(ctx context.Context, targetURL string, cooki
 				}
 				return nil
 			}),
-		}, actions[1:]...) // 替换第一个Navigate
+			chromedp.Navigate(targetURL),
+		)
+	} else {
+		if m.isCDPMode() && len(cookies) > 0 {
+			logger.Infof("Using CDP mode, skipping cookie setup (browser already logged in)")
+		}
+		actions = append(actions, chromedp.Navigate(targetURL))
 	}
+
+	actions = append(actions,
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(m.waitTime),
+	)
 
 	// 添加截图动作
 	actions = append(actions, chromedp.CaptureScreenshot(&buf))
@@ -195,6 +219,228 @@ func (m *Manager) CaptureScreenshot(ctx context.Context, targetURL string, cooki
 	}
 
 	return buf, nil
+}
+
+// ValidateSearchEngineResult 验证Cookie是否能访问搜索结果页
+func (m *Manager) ValidateSearchEngineResult(ctx context.Context, engine, query string, cookies []Cookie) (bool, string, string, error) {
+	if strings.TrimSpace(query) == "" {
+		return false, "", "empty query", fmt.Errorf("query cannot be empty")
+	}
+
+	searchURL := m.BuildSearchEngineURL(engine, query)
+	if searchURL == "" {
+		return false, "", "unsupported engine", fmt.Errorf("unsupported engine: %s", engine)
+	}
+
+	if len(cookies) == 0 && m.userDataDir == "" && m.remoteDebugURL == "" && os.Getenv("UNIMAP_CHROME_REMOTE_DEBUG_URL") == "" {
+		return false, "", "cookie not set", nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
+
+	title := ""
+	html := ""
+	if err := m.loadPageContent(ctx, searchURL, cookies, &title, &html); err != nil {
+		return false, title, "load failed", err
+	}
+
+	text := strings.ToLower(html)
+	if strings.Contains(text, "login") || strings.Contains(text, "sign in") || strings.Contains(text, "\u767b\u5f55") || strings.Contains(text, "\u8bf7\u767b\u5f55") {
+		return false, title, "login required", nil
+	}
+
+	if len(html) < 1500 {
+		return false, title, "page content too short", nil
+	}
+
+	return true, title, "ok", nil
+}
+
+// isCDPMode 判断是否使用CDP远程调试模式
+func (m *Manager) isCDPMode() bool {
+	return m.remoteDebugURL != ""
+}
+
+func (m *Manager) loadPageContent(ctx context.Context, targetURL string, cookies []Cookie, title *string, html *string) error {
+	allocCtx, allocCancel, err := m.newAllocator(ctx)
+	if err != nil {
+		return err
+	}
+	defer allocCancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	actions := []chromedp.Action{}
+
+	// 只有在非CDP模式且提供了Cookie时才设置Cookie
+	// CDP模式下浏览器已保持登录状态，无需设置Cookie
+	if len(cookies) > 0 && !m.isCDPMode() {
+		actions = append(actions,
+			chromedp.Navigate(targetURL),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				for _, cookie := range cookies {
+					err := network.SetCookie(cookie.Name, cookie.Value).
+						WithDomain(cookie.Domain).
+						WithPath(cookie.Path).
+						WithHTTPOnly(cookie.HTTPOnly).
+						WithSecure(cookie.Secure).
+						Do(ctx)
+					if err != nil {
+						logger.Warnf("Failed to set cookie %s: %v", cookie.Name, err)
+					}
+				}
+				return nil
+			}),
+			chromedp.Navigate(targetURL),
+		)
+	} else {
+		if m.isCDPMode() && len(cookies) > 0 {
+			logger.Infof("Using CDP mode, skipping cookie setup (browser already logged in)")
+		}
+		actions = append(actions, chromedp.Navigate(targetURL))
+	}
+
+	actions = append(actions,
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(m.waitTime),
+		chromedp.Title(title),
+		chromedp.OuterHTML("html", html, chromedp.ByQuery),
+	)
+
+	return chromedp.Run(ctx, actions...)
+}
+
+func (m *Manager) buildExecAllocatorOptions() []chromedp.ExecAllocatorOption {
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", m.headless),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.WindowSize(m.windowWidth, m.windowHeight),
+	)
+
+	if m.userDataDir != "" {
+		opts = append(opts, chromedp.UserDataDir(m.userDataDir))
+	}
+	if m.profileDir != "" {
+		opts = append(opts, chromedp.Flag("profile-directory", m.profileDir))
+	}
+
+	// 确定Chrome路径
+	chromePath := m.chromePath
+	if chromePath == "" {
+		chromePath = os.Getenv("UNIMAP_CHROME_PATH")
+	}
+	if chromePath == "" {
+		chromePath = findChromePath()
+	}
+	if chromePath != "" {
+		opts = append(opts, chromedp.ExecPath(chromePath))
+	}
+
+	if userData := os.Getenv("UNIMAP_CHROME_USER_DATA_DIR"); userData != "" && m.userDataDir == "" {
+		opts = append(opts, chromedp.UserDataDir(userData))
+	}
+	if profileDir := os.Getenv("UNIMAP_CHROME_PROFILE_DIR"); profileDir != "" && m.profileDir == "" {
+		opts = append(opts, chromedp.Flag("profile-directory", profileDir))
+	}
+
+	return opts
+}
+
+// findChromePath 自动查找Chrome路径
+func findChromePath() string {
+	// Windows 常见路径
+	windowsPaths := []string{
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		`C:\Users\` + os.Getenv("USERNAME") + `\AppData\Local\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+	}
+
+	// Linux 常见路径
+	linuxPaths := []string{
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium",
+		"/usr/bin/chromium-browser",
+		"/snap/bin/chromium",
+	}
+
+	// macOS 常见路径
+	macPaths := []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+	}
+
+	var paths []string
+	if os.PathSeparator == '\\' {
+		paths = windowsPaths
+	} else if os.PathSeparator == '/' {
+		if _, err := os.Stat("/Applications"); err == nil {
+			paths = macPaths
+		} else {
+			paths = linuxPaths
+		}
+	}
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			logger.Infof("Found Chrome at: %s", path)
+			return path
+		}
+	}
+
+	return ""
+}
+
+func (m *Manager) newAllocator(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	// 检查是否配置了远程调试URL
+	remoteURL := strings.TrimSpace(m.remoteDebugURL)
+	if remoteURL == "" {
+		remoteURL = strings.TrimSpace(os.Getenv("UNIMAP_CHROME_REMOTE_DEBUG_URL"))
+	}
+
+	// 如果配置了远程调试URL，先尝试连接，失败则回退到本地启动
+	if remoteURL != "" {
+		// 测试远程调试端口是否可用
+		if isRemoteDebuggerAvailable(remoteURL) {
+			logger.Infof("Using remote Chrome debugger at: %s", remoteURL)
+			allocCtx, cancel := chromedp.NewRemoteAllocator(ctx, remoteURL)
+			return allocCtx, cancel, nil
+		}
+		logger.Warnf("Remote Chrome debugger not available at %s, falling back to local Chrome", remoteURL)
+	}
+
+	// 使用本地Chrome启动allocator
+	opts := m.buildExecAllocatorOptions()
+
+	// 确保有可用的Chrome路径
+	chromePath := findChromePath()
+	if chromePath == "" && os.Getenv("UNIMAP_CHROME_PATH") == "" {
+		return nil, nil, fmt.Errorf("Chrome not found. Please install Chrome or set UNIMAP_CHROME_PATH environment variable")
+	}
+
+	logger.Infof("Starting Chrome with options, chrome path: %s", chromePath)
+	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
+	return allocCtx, cancel, nil
+}
+
+// isRemoteDebuggerAvailable 检查远程调试端口是否可用
+func isRemoteDebuggerAvailable(remoteURL string) bool {
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Get(remoteURL + "/json/version")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // CaptureSearchEngineResult 截图搜索引擎结果页面
@@ -287,16 +533,18 @@ func (m *Manager) CaptureTargetWebsite(ctx context.Context, targetURL, ip, port,
 func (m *Manager) BuildSearchEngineURL(engine, query string) string {
 	// Base64编码查询语句
 	b64Query := base64.StdEncoding.EncodeToString([]byte(query))
+	encodedB64 := url.QueryEscape(b64Query)
+	encodedQuery := url.QueryEscape(query)
 
 	switch strings.ToLower(engine) {
 	case "fofa":
-		return fmt.Sprintf("https://fofa.info/result?qbase64=%s", b64Query)
+		return fmt.Sprintf("https://fofa.info/result?qbase64=%s", encodedB64)
 	case "hunter":
-		return fmt.Sprintf("https://hunter.qianxin.com/list?searchValue=%s", b64Query)
+		return fmt.Sprintf("https://hunter.qianxin.com/list?searchValue=%s", encodedB64)
 	case "quake":
-		return fmt.Sprintf("https://quake.360.cn/quake/#/searchResult?searchVal=%s", query)
+		return fmt.Sprintf("https://quake.360.cn/quake/#/searchResult?searchVal=%s", encodedQuery)
 	case "zoomeye":
-		return fmt.Sprintf("https://www.zoomeye.org/searchResult?q=%s", query)
+		return fmt.Sprintf("https://www.zoomeye.org/searchResult?q=%s", encodedQuery)
 	default:
 		return ""
 	}
@@ -338,6 +586,145 @@ func (m *Manager) generateTargetWebsiteFilename(ip, port, protocol string) strin
 	return fmt.Sprintf("%s_%s_%s.png", proto, ip, port)
 }
 
+// BatchScreenshotResult 批量截图结果
+type BatchScreenshotResult struct {
+	URL          string         `json:"url"`
+	Success      bool           `json:"success"`
+	FilePath     string         `json:"file_path,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Timestamp    int64          `json:"timestamp"`
+	TamperResult *TamperSummary `json:"tamper_result,omitempty"`
+}
+
+// TamperSummary 篡改检测摘要
+type TamperSummary struct {
+	Tampered         bool     `json:"tampered"`
+	FullHash         string   `json:"full_hash"`
+	BaselineHash     string   `json:"baseline_hash,omitempty"`
+	TamperedSegments []string `json:"tampered_segments,omitempty"`
+	HasBaseline      bool     `json:"has_baseline"`
+}
+
+// CaptureBatchURLs 批量截图URL列表
+func (m *Manager) CaptureBatchURLs(ctx context.Context, urls []string, batchID string, concurrency int) ([]BatchScreenshotResult, error) {
+	return m.CaptureBatchURLsWithTamper(ctx, urls, batchID, concurrency, false, nil)
+}
+
+// CaptureBatchURLsWithTamper 批量截图URL列表（带篡改检测）
+func (m *Manager) CaptureBatchURLsWithTamper(ctx context.Context, urls []string, batchID string, concurrency int, enableTamper bool, tamperDetector interface{}) ([]BatchScreenshotResult, error) {
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("no URLs provided")
+	}
+
+	if concurrency <= 0 {
+		concurrency = 5
+	}
+
+	// 创建批量上传目录
+	batchDir, err := m.CreateBatchUploadDirectory(batchID)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]BatchScreenshotResult, len(urls))
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, concurrency)
+
+	for i, targetURL := range urls {
+		wg.Add(1)
+		go func(index int, url string) {
+			defer wg.Done()
+
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			result := BatchScreenshotResult{
+				URL:       url,
+				Timestamp: time.Now().Unix(),
+			}
+
+			// 标准化URL
+			normalizedURL := m.normalizeURL(url)
+			if normalizedURL == "" {
+				result.Success = false
+				result.Error = "invalid URL"
+				results[index] = result
+				return
+			}
+
+			// 生成文件名
+			filename := m.generateBatchFilename(url, index)
+			filepath := filepath.Join(batchDir, filename)
+
+			// 截图
+			buf, err := m.CaptureScreenshot(ctx, normalizedURL, nil)
+			if err != nil {
+				result.Success = false
+				result.Error = err.Error()
+				logger.Warnf("Failed to capture screenshot for %s: %v", url, err)
+			} else {
+				// 保存文件
+				if err := os.WriteFile(filepath, buf, 0644); err != nil {
+					result.Success = false
+					result.Error = fmt.Sprintf("failed to save file: %v", err)
+				} else {
+					result.Success = true
+					result.FilePath = filepath
+					logger.Infof("Captured screenshot for %s: %s", url, filepath)
+				}
+			}
+
+			results[index] = result
+		}(i, targetURL)
+	}
+
+	wg.Wait()
+	return results, nil
+}
+
+// normalizeURL 标准化URL
+func (m *Manager) normalizeURL(targetURL string) string {
+	targetURL = strings.TrimSpace(targetURL)
+	if targetURL == "" {
+		return ""
+	}
+
+	// 添加协议前缀
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "http://" + targetURL
+	}
+
+	// 验证URL格式
+	u, err := url.Parse(targetURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+
+	return targetURL
+}
+
+// generateBatchFilename 生成批量截图文件名
+func (m *Manager) generateBatchFilename(targetURL string, index int) string {
+	// 从URL提取主机名
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Sprintf("url_%03d_%s.png", index, time.Now().Format("20060102_150405"))
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		host = "unknown"
+	}
+
+	// 清理主机名中的非法字符
+	host = strings.ReplaceAll(host, ":", "_")
+	host = strings.ReplaceAll(host, "/", "_")
+	host = strings.ReplaceAll(host, "\\", "_")
+
+	timestamp := time.Now().Format("20060102_150405")
+	return fmt.Sprintf("%03d_%s_%s.png", index, host, timestamp)
+}
+
 // GetScreenshotDirectory 获取截图根目录
 func (m *Manager) GetScreenshotDirectory() string {
 	return m.baseDir
@@ -346,4 +733,85 @@ func (m *Manager) GetScreenshotDirectory() string {
 // SetChromePath 设置Chrome路径
 func (m *Manager) SetChromePath(path string) {
 	m.chromePath = path
+}
+
+// SetRemoteDebugURL 设置远程调试地址
+func (m *Manager) SetRemoteDebugURL(remoteURL string) {
+	m.remoteDebugURL = strings.TrimSpace(remoteURL)
+}
+
+// sanitizeFilename 清理文件名中的危险字符
+func sanitizeFilename(name string) string {
+	// 替换所有可能的路径遍历字符
+	replacer := strings.NewReplacer(
+		"../", "",
+		"..\\", "",
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+		"\x00", "",
+	)
+	clean := replacer.Replace(name)
+
+	// 移除开头的点（防止隐藏文件）
+	clean = strings.TrimLeft(clean, ".")
+
+	// 限制长度
+	if len(clean) > 200 {
+		clean = clean[:200]
+	}
+
+	// 确保文件名不为空
+	if clean == "" {
+		clean = "unnamed"
+	}
+
+	return clean
+}
+
+// validatePath 验证路径是否在允许的基础目录内
+func validatePath(baseDir, targetPath string) error {
+	// 获取绝对路径
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute base path: %w", err)
+	}
+
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute target path: %w", err)
+	}
+
+	// 检查目标路径是否在基础目录内
+	if !strings.HasPrefix(absTarget, absBase) {
+		return fmt.Errorf("path traversal detected: target path is outside base directory")
+	}
+
+	return nil
+}
+
+// safeJoinPath 安全地连接路径，防止路径遍历攻击
+func safeJoinPath(baseDir string, elems []string) (string, error) {
+	// 清理每个路径元素
+	cleanElems := make([]string, len(elems))
+	for i, e := range elems {
+		cleanElems[i] = sanitizeFilename(e)
+	}
+
+	// 连接路径
+	allElems := append([]string{baseDir}, cleanElems...)
+	result := filepath.Join(allElems...)
+
+	// 验证结果路径
+	if err := validatePath(baseDir, result); err != nil {
+		return "", err
+	}
+
+	return result, nil
 }

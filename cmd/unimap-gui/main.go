@@ -421,40 +421,102 @@ func showEngineConfigDialog(window fyne.Window, state *AppState) {
 	fofaKey.SetText(state.Config.Engines.Fofa.APIKey)
 	fofaEmail := widget.NewEntry()
 	fofaEmail.SetText(state.Config.Engines.Fofa.Email)
+	fofaCookie := widget.NewMultiLineEntry()
+	fofaCookie.SetText(cookiesToHeader(state.Config.Engines.Fofa.Cookies))
+	fofaCookie.SetMinRowsVisible(2)
+	fofaCookie.SetPlaceHolder("session=xxx; token=yyy")
+	fofaCookieStatus := widget.NewLabel(cookieStatusText(fofaCookie.Text))
 
 	// Hunter
 	hunterKey := widget.NewPasswordEntry()
 	hunterKey.SetText(state.Config.Engines.Hunter.APIKey)
+	hunterCookie := widget.NewMultiLineEntry()
+	hunterCookie.SetText(cookiesToHeader(state.Config.Engines.Hunter.Cookies))
+	hunterCookie.SetMinRowsVisible(2)
+	hunterCookie.SetPlaceHolder("session=xxx; token=yyy")
+	hunterCookieStatus := widget.NewLabel(cookieStatusText(hunterCookie.Text))
 
 	// Quake
 	quakeKey := widget.NewPasswordEntry()
 	quakeKey.SetText(state.Config.Engines.Quake.APIKey)
+	quakeCookie := widget.NewMultiLineEntry()
+	quakeCookie.SetText(cookiesToHeader(state.Config.Engines.Quake.Cookies))
+	quakeCookie.SetMinRowsVisible(2)
+	quakeCookie.SetPlaceHolder("session=xxx; token=yyy")
+	quakeCookieStatus := widget.NewLabel(cookieStatusText(quakeCookie.Text))
 
 	// Zoomeye
 	zoomeyeKey := widget.NewPasswordEntry()
 	zoomeyeKey.SetText(state.Config.Engines.Zoomeye.APIKey)
+	zoomeyeCookie := widget.NewMultiLineEntry()
+	zoomeyeCookie.SetText(cookiesToHeader(state.Config.Engines.Zoomeye.Cookies))
+	zoomeyeCookie.SetMinRowsVisible(2)
+	zoomeyeCookie.SetPlaceHolder("session=xxx; token=yyy")
+	zoomeyeCookieStatus := widget.NewLabel(cookieStatusText(zoomeyeCookie.Text))
+
+	fofaCookie.OnChanged = func(value string) {
+		fofaCookieStatus.SetText(cookieStatusText(value))
+	}
+	hunterCookie.OnChanged = func(value string) {
+		hunterCookieStatus.SetText(cookieStatusText(value))
+	}
+	quakeCookie.OnChanged = func(value string) {
+		quakeCookieStatus.SetText(cookieStatusText(value))
+	}
+	zoomeyeCookie.OnChanged = func(value string) {
+		zoomeyeCookieStatus.SetText(cookieStatusText(value))
+	}
 
 	form := widget.NewForm(
 		widget.NewFormItem("FOFA Email", fofaEmail),
 		widget.NewFormItem("FOFA API Key", fofaKey),
+		widget.NewFormItem("FOFA Cookie (截图)", container.NewVBox(fofaCookie, fofaCookieStatus)),
 		widget.NewFormItem("Hunter API Key", hunterKey),
+		widget.NewFormItem("Hunter Cookie (截图)", container.NewVBox(hunterCookie, hunterCookieStatus)),
 		widget.NewFormItem("Quake API Key", quakeKey),
+		widget.NewFormItem("Quake Cookie (截图)", container.NewVBox(quakeCookie, quakeCookieStatus)),
 		widget.NewFormItem("ZoomEye API Key", zoomeyeKey),
+		widget.NewFormItem("ZoomEye Cookie (截图)", container.NewVBox(zoomeyeCookie, zoomeyeCookieStatus)),
 	)
 
 	dialog.ShowCustomConfirm("引擎配置", "保存", "取消", form, func(save bool) {
 		if save {
 			state.Config.Engines.Fofa.APIKey = fofaKey.Text
 			state.Config.Engines.Fofa.Email = fofaEmail.Text
+			state.Config.Engines.Fofa.Cookies = config.ParseCookieHeader(fofaCookie.Text, config.DefaultCookieDomain("fofa"))
 			state.Config.Engines.Hunter.APIKey = hunterKey.Text
+			state.Config.Engines.Hunter.Cookies = config.ParseCookieHeader(hunterCookie.Text, config.DefaultCookieDomain("hunter"))
 			state.Config.Engines.Quake.APIKey = quakeKey.Text
+			state.Config.Engines.Quake.Cookies = config.ParseCookieHeader(quakeCookie.Text, config.DefaultCookieDomain("quake"))
 			state.Config.Engines.Zoomeye.APIKey = zoomeyeKey.Text
+			state.Config.Engines.Zoomeye.Cookies = config.ParseCookieHeader(zoomeyeCookie.Text, config.DefaultCookieDomain("zoomeye"))
 
 			if err := state.ConfigManager.Save(); err != nil {
 				dialog.ShowError(fmt.Errorf("保存配置失败: %v", err), window)
 			}
 		}
 	}, window)
+}
+
+func cookiesToHeader(cookies []config.Cookie) string {
+	if len(cookies) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if strings.TrimSpace(c.Name) == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.Value))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func cookieStatusText(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "状态: 未配置"
+	}
+	return "状态: 已配置"
 }
 
 func showAssetDetails(window fyne.Window, asset model.UnifiedAsset) {

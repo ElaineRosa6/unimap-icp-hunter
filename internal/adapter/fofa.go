@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -206,18 +207,22 @@ func (f *FofaAdapter) Search(query string, page, pageSize int) (*model.EngineRes
 
 		// Check if Error is true (bool) or non-empty string
 		hasError := false
+		errMsg := ""
 		if b, ok := result.Err.(bool); ok {
 			hasError = b
 		} else if s, ok := result.Err.(string); ok && s != "" && s != "false" {
-			return fmt.Errorf("%s", s)
+			hasError = true
+			errMsg = s
 		}
 
 		if hasError {
-			errMsg := result.ErrMsg
+			if errMsg == "" {
+				errMsg = result.ErrMsg
+			}
 			if errMsg == "" {
 				errMsg = "FOFA API reported an error (unknown cause)"
 			}
-			return fmt.Errorf("%s", errMsg)
+			return fmt.Errorf("FOFA API error: %s", errMsg)
 		}
 
 		// 转换为通用格式
@@ -342,6 +347,9 @@ func (f *FofaAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, 
 		}
 
 		// 构建URL
+		added := false
+
+		// 优先处理有IP和端口的情况
 		if asset.IP != "" && asset.Port > 0 {
 			if asset.Protocol == "" {
 				if asset.Port == 443 {
@@ -351,28 +359,34 @@ func (f *FofaAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, 
 				}
 			}
 
-			if asset.Protocol == "https" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("https://%s:%d", asset.Host, asset.Port)
-				}
-			} else {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("http://%s:%d", asset.Host, asset.Port)
-				}
+			// 使用 url.URL 结构体安全构建 URL
+			u := &url.URL{
+				Scheme: asset.Protocol,
 			}
+			if asset.Host != "" {
+				u.Host = fmt.Sprintf("%s:%d", asset.Host, asset.Port)
+			} else {
+				u.Host = fmt.Sprintf("%s:%d", asset.IP, asset.Port)
+			}
+			asset.URL = u.String()
 
 			asset.Extra = data
 			assets = append(assets, *asset)
-		} else if asset.Host != "" {
-			// 即使没有IP和端口，只要有Host也应该添加到结果中
+			added = true
+		}
+
+		// 处理只有Host的情况
+		if !added && asset.Host != "" {
 			asset.Extra = data
 			assets = append(assets, *asset)
-		} else if asset.IP != "" {
-			// 只有IP没有端口也应该添加到结果中
+			added = true
+		}
+
+		// 处理只有IP没有端口的情况
+		if !added && asset.IP != "" {
 			asset.Extra = data
 			assets = append(assets, *asset)
+			added = true
 		}
 	}
 
@@ -428,56 +442,38 @@ func (f *FofaAdapter) GetQuota() (*model.QuotaInfo, error) {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
 
-	// 计算配额信息
-	// FOFA API的响应结构与用户界面显示的配额信息不一致
-	// 尝试获取更准确的配额信息
+	// 计算配额信息 - 简化逻辑，直接使用API返回的值
+	// FOFA API响应结构：
+	// - remain_free_point: 剩余免费点数
+	// - remain_api_query: 剩余API查询次数
+	// - remain_api_data: 剩余API数据条数
 
-	// 1. 首先尝试使用FOFA API提供的字段
-	// remain_free_point可能是免费查询点，不是Web查询次数
-	// remain_api_query是API查询次数
-
-	// 2. 根据用户提供的FOFA账户截图，Web查询次数配额是300
-	// 但API响应中没有直接提供Web查询次数的信息
-
-	// 3. 根据用户类型和API响应动态计算配额
 	total := 0
 	remain := 0
 
-	// 个人版用户逻辑
-	if result.Category == "personal" || !result.IsVIP {
-		// 个人版用户只有Web查询配额，没有API配额
-		// 根据用户界面显示，Web查询次数配额是300
-		total = 300
-		// 尝试从API响应中获取剩余配额
-		// 对于个人版用户，remain_free_point可能表示Web查询剩余次数
+	// 优先使用API查询次数
+	if result.RemainAPIQuery > 0 {
+		remain = result.RemainAPIQuery
+		// 对于付费用户，假设总配额为剩余+已用（保守估计）
+		// 由于API不直接返回总数，使用剩余作为最小估计
+		total = remain
+	} else if result.RemainFreePoint > 0 {
+		// 使用免费点数
 		remain = result.RemainFreePoint
-		if remain > total {
-			remain = total
-		}
-	} else {
-		// 付费版用户逻辑
-		if result.RemainAPIQuery > 0 {
-			remain = result.RemainAPIQuery
-			total = remain + (300 - remain) // 假设总配额为300
-		} else if result.RemainFreePoint > 0 {
-			// 如果没有API查询次数，使用免费查询点
-			remain = result.RemainFreePoint
-			total = remain
-		}
+		total = remain
 	}
 
-	// 计算已用配额
-	used := total - remain
+	// 计算已用配额（如果有总数）
+	used := 0
+	if total > 0 {
+		used = total - remain
+	}
 
 	// 确保数值合理
 	if remain < 0 {
 		remain = 0
 	}
 	if used < 0 {
-		used = 0
-	}
-	if remain > total {
-		remain = total
 		used = 0
 	}
 

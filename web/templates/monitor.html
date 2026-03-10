@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>网页监控 - UniMap</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.staticVersion}}">
+	<style>
+		.nav-links {
+			margin-bottom: 20px;
+		}
+		.nav-links a {
+			margin-right: 15px;
+			text-decoration: none;
+			color: #007bff;
+		}
+		.nav-links a:hover {
+			text-decoration: underline;
+		}
+		.url-list-container {
+			display: flex;
+			gap: 20px;
+			margin-bottom: 20px;
+		}
+		.url-input-area {
+			flex: 1;
+		}
+		.url-input-area textarea {
+			width: 100%;
+			min-height: 250px;
+			font-family: monospace;
+			font-size: 14px;
+			padding: 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			resize: vertical;
+		}
+		.url-stats {
+			width: 200px;
+			padding: 15px;
+			background: #f8f9fa;
+			border-radius: 4px;
+		}
+		.url-stats h4 {
+			margin-top: 0;
+			margin-bottom: 15px;
+		}
+		.url-stats .stat-item {
+			display: flex;
+			justify-content: space-between;
+			margin-bottom: 10px;
+		}
+		.url-stats .stat-value {
+			font-weight: bold;
+			color: #007bff;
+		}
+		.options-group {
+			display: flex;
+			gap: 20px;
+			margin-bottom: 20px;
+		}
+		.options-group .form-group {
+			flex: 1;
+		}
+		.action-buttons {
+			display: flex;
+			gap: 10px;
+			margin-bottom: 20px;
+			flex-wrap: wrap;
+		}
+		.action-buttons .btn {
+			min-width: 120px;
+		}
+		.progress-container {
+			margin: 20px 0;
+			padding: 15px;
+			background: #f8f9fa;
+			border-radius: 4px;
+			display: none;
+		}
+		.progress-container.active {
+			display: block;
+		}
+		.progress-bar {
+			width: 100%;
+			height: 20px;
+			background: #e9ecef;
+			border-radius: 10px;
+			overflow: hidden;
+		}
+		.progress-bar-fill {
+			height: 100%;
+			background: #007bff;
+			transition: width 0.3s;
+		}
+		.progress-text {
+			text-align: center;
+			margin-top: 10px;
+		}
+		.results-section {
+			margin-top: 30px;
+		}
+		.results-section h3 {
+			margin-bottom: 15px;
+			padding-bottom: 10px;
+			border-bottom: 2px solid #007bff;
+		}
+		.result-card {
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			margin-bottom: 15px;
+			overflow: hidden;
+		}
+		.result-card-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 12px 15px;
+			background: #f8f9fa;
+			border-bottom: 1px solid #ddd;
+		}
+		.result-card-header .url {
+			font-weight: bold;
+			word-break: break-all;
+			flex: 1;
+		}
+		.result-card-header .status-badge {
+			padding: 4px 12px;
+			border-radius: 20px;
+			font-size: 12px;
+			font-weight: bold;
+			margin-left: 10px;
+		}
+		.status-badge.success { background: #d4edda; color: #155724; }
+		.status-badge.warning { background: #fff3cd; color: #856404; }
+		.status-badge.danger { background: #f8d7da; color: #721c24; }
+		.status-badge.info { background: #d1ecf1; color: #0c5460; }
+		.result-card-body {
+			padding: 15px;
+		}
+		.hash-info {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+			gap: 10px;
+		}
+		.hash-item {
+			display: flex;
+			justify-content: space-between;
+			padding: 8px 12px;
+			background: #f8f9fa;
+			border-radius: 4px;
+			font-size: 13px;
+		}
+		.hash-item.tampered {
+			background: #f8d7da;
+			border: 1px solid #f5c6cb;
+		}
+		.hash-item .segment-name {
+			font-weight: bold;
+			color: #333;
+		}
+		.hash-item .segment-hash {
+			font-family: monospace;
+			color: #666;
+			max-width: 200px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.tamper-alert {
+			padding: 15px;
+			margin-bottom: 15px;
+			border-radius: 4px;
+		}
+		.tamper-alert.danger {
+			background: #f8d7da;
+			border: 1px solid #f5c6cb;
+			color: #721c24;
+		}
+		.tamper-alert.success {
+			background: #d4edda;
+			border: 1px solid #c3e6cb;
+			color: #155724;
+		}
+		.tamper-alert.info {
+			background: #d1ecf1;
+			border: 1px solid #bee5eb;
+			color: #0c5460;
+		}
+		.changes-list {
+			margin-top: 10px;
+		}
+		.change-item {
+			padding: 8px 12px;
+			margin-bottom: 5px;
+			background: #fff;
+			border-left: 3px solid #dc3545;
+			font-size: 13px;
+		}
+		.change-item.added { border-left-color: #28a745; }
+		.change-item.removed { border-left-color: #6c757d; }
+		.screenshot-result {
+			display: flex;
+			align-items: center;
+			padding: 10px 15px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			margin-bottom: 10px;
+		}
+		.screenshot-result.success { border-left: 4px solid #28a745; }
+		.screenshot-result.failed { border-left: 4px solid #dc3545; }
+		.screenshot-result .status { width: 60px; font-weight: bold; }
+		.screenshot-result .status.success { color: #28a745; }
+		.screenshot-result .status.failed { color: #dc3545; }
+		.screenshot-result .url { flex: 1; word-break: break-all; padding: 0 15px; }
+		.screenshot-result .path { font-size: 12px; color: #666; }
+		.screenshot-result .error { font-size: 12px; color: #dc3545; }
+		.tabs {
+			display: flex;
+			border-bottom: 2px solid #ddd;
+			margin-bottom: 20px;
+		}
+		.tab {
+			padding: 10px 20px;
+			cursor: pointer;
+			border: none;
+			background: none;
+			font-size: 14px;
+			color: #666;
+			border-bottom: 2px solid transparent;
+			margin-bottom: -2px;
+		}
+		.tab:hover { color: #007bff; }
+		.tab.active {
+			color: #007bff;
+			border-bottom-color: #007bff;
+		}
+		.tab-content { display: none; }
+		.tab-content.active { display: block; }
+		.summary-cards {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+			gap: 15px;
+			margin-bottom: 20px;
+		}
+		.summary-card {
+			padding: 15px;
+			background: #f8f9fa;
+			border-radius: 8px;
+			text-align: center;
+		}
+		.summary-card .value {
+			font-size: 28px;
+			font-weight: bold;
+			color: #007bff;
+		}
+		.summary-card .label {
+			font-size: 14px;
+			color: #666;
+			margin-top: 5px;
+		}
+		.summary-card.danger .value { color: #dc3545; }
+		.summary-card.success .value { color: #28a745; }
+		.summary-card.warning .value { color: #ffc107; }
+		
+		.history-controls {
+			display: flex;
+			gap: 10px;
+			margin-bottom: 15px;
+            align-items: center;
+        }
+        
+        .history-controls select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .history-item {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            overflow: hidden;
+        }
+        
+        .history-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .history-item-body {
+            padding: 15px;
+        }
+        
+        .history-item .url {
+            font-weight: bold;
+            word-break: break-all;
+        }
+        
+        .history-item .timestamp {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .history-item .hash-preview {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+	</style>
+</head>
+<body>
+	<header>
+		<h1>网页监控</h1>
+		<p>批量截图与防篡改检测</p>
+	</header>
+
+	<main>
+		<div class="nav-links">
+			<a href="/">← 返回首页</a>
+			<a href="/quota">查看配额</a>
+		</div>
+
+		<section class="query-form">
+			<h2>URL列表</h2>
+			<div class="url-list-container">
+				<div class="url-input-area">
+					<textarea id="url-list" placeholder="请输入URL列表，每行一个&#10;例如：&#10;https://www.example.com&#10;https://www.google.com&#10;example.org"></textarea>
+				</div>
+				<div class="url-stats">
+					<h4>统计信息</h4>
+					<div class="stat-item">
+						<span>总URL数:</span>
+						<span class="stat-value" id="total-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>有效URL:</span>
+						<span class="stat-value" id="valid-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>无效URL:</span>
+						<span class="stat-value" id="invalid-urls">0</span>
+					</div>
+				</div>
+			</div>
+
+			<div class="options-group">
+				<div class="form-group">
+					<label for="concurrency">并发数 (1-10)</label>
+					<input type="number" id="concurrency" min="1" max="10" value="5">
+				</div>
+				<div class="form-group">
+					<label for="batch-id">批次ID (可选)</label>
+					<input type="text" id="batch-id" placeholder="自动生成">
+				</div>
+			</div>
+
+			<div class="action-buttons">
+				<button type="button" class="btn" id="btn-tamper-check">🔍 篡改检测</button>
+				<button type="button" class="btn" id="btn-set-baseline">📌 设置基线</button>
+				<button type="button" class="btn" id="btn-batch-screenshot">📷 批量截图</button>
+				<button type="button" class="btn" id="btn-clear">🗑️ 清空</button>
+				<button type="button" class="btn" id="btn-load-example">📝 加载示例</button>
+				<button type="button" class="btn" id="btn-import-file">📁 导入文件</button>
+				<input type="file" id="file-input" accept=".txt,.csv" style="display: none;">
+			</div>
+
+			<div class="progress-container" id="progress-container">
+				<div class="progress-bar">
+					<div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+				</div>
+				<div class="progress-text" id="progress-text">准备中...</div>
+			</div>
+
+			<!-- 结果区域 -->
+			<div class="results-section" id="results-section" style="display: none;">
+				<div class="tabs">
+					<button class="tab active" data-tab="tamper">篡改检测结果</button>
+					<button class="tab" data-tab="screenshot">截图结果</button>
+					<button class="tab" data-tab="history">历史记录</button>
+				</div>
+
+				<!-- 篡改检测结果 -->
+				<div class="tab-content active" id="tamper-tab">
+					<div class="summary-cards" id="tamper-summary" style="display: none;">
+						<div class="summary-card">
+							<div class="value" id="tamper-total">0</div>
+							<div class="label">检测总数</div>
+						</div>
+						<div class="summary-card danger">
+							<div class="value" id="tamper-count">0</div>
+							<div class="label">篡改数量</div>
+						</div>
+						<div class="summary-card success">
+							<div class="value" id="tamper-safe">0</div>
+							<div class="label">安全数量</div>
+						</div>
+						<div class="summary-card warning">
+							<div class="value" id="tamper-first">0</div>
+							<div class="label">首次检测</div>
+						</div>
+					</div>
+					<div id="tamper-results"></div>
+				</div>
+
+				<!-- 截图结果 -->
+				<div class="tab-content" id="screenshot-tab">
+					<div class="summary-cards" id="screenshot-summary" style="display: none;">
+						<div class="summary-card">
+							<div class="value" id="screenshot-total">0</div>
+							<div class="label">截图总数</div>
+						</div>
+						<div class="summary-card success">
+							<div class="value" id="screenshot-success">0</div>
+							<div class="label">成功</div>
+						</div>
+						<div class="summary-card danger">
+							<div class="value" id="screenshot-failed">0</div>
+							<div class="label">失败</div>
+						</div>
+					</div>
+					<div id="screenshot-results"></div>
+				</div>
+
+				<!-- 历史记录 -->
+				<div class="tab-content" id="history-tab">
+					<div class="history-controls">
+						<select id="history-url-filter">
+							<option value="">全部URL</option>
+						</select>
+						<select id="history-type-filter">
+							<option value="">全部类型</option>
+							<option value="first_check">首次检测</option>
+							<option value="normal">正常</option>
+							<option value="tampered">篡改</option>
+						</select>
+						<button type="button" class="btn btn-secondary" id="btn-refresh-history">刷新</button>
+					</div>
+					<div id="history-results"></div>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<p>&copy; 2026 UniMap - 多引擎网络资产查询系统</p>
+	</footer>
+
+	<script>
+		document.addEventListener('DOMContentLoaded', function() {
+			const urlList = document.getElementById('url-list');
+			const totalUrlsEl = document.getElementById('total-urls');
+			const validUrlsEl = document.getElementById('valid-urls');
+			const invalidUrlsEl = document.getElementById('invalid-urls');
+			const concurrencyInput = document.getElementById('concurrency');
+			const batchIdInput = document.getElementById('batch-id');
+			const progressContainer = document.getElementById('progress-container');
+			const progressBarFill = document.getElementById('progress-bar-fill');
+			const progressText = document.getElementById('progress-text');
+			const resultsSection = document.getElementById('results-section');
+			const tamperResults = document.getElementById('tamper-results');
+			const screenshotResults = document.getElementById('screenshot-results');
+
+			let currentAction = null;
+
+			// 更新统计
+			function updateStats() {
+				const urls = urlList.value.split('\n').filter(u => u.trim() !== '');
+				const total = urls.length;
+				let valid = 0;
+				let invalid = 0;
+
+				urls.forEach(url => {
+					url = url.trim();
+					if (isValidURL(url)) {
+						valid++;
+					} else {
+						invalid++;
+					}
+				});
+
+				totalUrlsEl.textContent = total;
+				validUrlsEl.textContent = valid;
+				invalidUrlsEl.textContent = invalid;
+			}
+
+			// 验证URL
+			function isValidURL(url) {
+				url = url.trim();
+				if (!url) return false;
+				return /^(https?:\/\/)?([\w.-]+)(:\d+)?(\/.*)?$/i.test(url);
+			}
+
+			// 显示进度
+			function showProgress(text) {
+				progressContainer.classList.add('active');
+				progressBarFill.style.width = '0%';
+				progressBarFill.style.background = '#007bff';
+				progressText.textContent = text;
+			}
+
+			// 更新进度
+			function updateProgress(percent, text) {
+				progressBarFill.style.width = percent + '%';
+				if (text) progressText.textContent = text;
+			}
+
+			// 隐藏进度
+			function hideProgress() {
+				progressContainer.classList.remove('active');
+			}
+
+			// 显示错误进度
+			function showErrorProgress(text) {
+				progressBarFill.style.width = '100%';
+				progressBarFill.style.background = '#dc3545';
+				progressText.textContent = text;
+			}
+
+			// 获取有效的URL列表
+			function getValidURLs() {
+				return urlList.value.split('\n')
+					.map(u => u.trim())
+					.filter(u => u !== '' && isValidURL(u));
+			}
+
+			// 标准化URL
+			function normalizeURL(url) {
+				url = url.trim();
+				if (!url.startsWith('http://') && !url.startsWith('https://')) {
+					url = 'https://' + url;
+				}
+				return url;
+			}
+
+			// 截断hash显示
+			function truncateHash(hash, length = 16) {
+				if (!hash) return '-';
+				if (hash.length <= length) return hash;
+				return hash.substring(0, length) + '...';
+			}
+
+			// Tab切换
+			document.querySelectorAll('.tab').forEach(tab => {
+				tab.addEventListener('click', function() {
+					document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+					document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+					this.classList.add('active');
+					document.getElementById(this.dataset.tab + '-tab').classList.add('active');
+				});
+			});
+
+			// 监听输入
+			urlList.addEventListener('input', updateStats);
+
+			// 清空
+			document.getElementById('btn-clear').addEventListener('click', function() {
+				urlList.value = '';
+				updateStats();
+				resultsSection.style.display = 'none';
+				tamperResults.innerHTML = '';
+				screenshotResults.innerHTML = '';
+			});
+
+			// 加载示例
+			document.getElementById('btn-load-example').addEventListener('click', function() {
+				const examples = [
+					'https://www.baidu.com',
+					'https://www.bing.com',
+					'https://www.github.com'
+				];
+				urlList.value = examples.join('\n');
+				updateStats();
+			});
+
+			// 导入文件
+			document.getElementById('btn-import-file').addEventListener('click', function() {
+				document.getElementById('file-input').click();
+			});
+
+			document.getElementById('file-input').addEventListener('change', function(e) {
+				const file = e.target.files[0];
+				if (!file) return;
+
+				const reader = new FileReader();
+				reader.onload = function(event) {
+					const urls = event.target.result.split('\n')
+						.map(line => line.trim())
+						.filter(line => line && isValidURL(line));
+					
+					if (urls.length > 0) {
+						urlList.value = urls.join('\n');
+						updateStats();
+						alert(`成功导入 ${urls.length} 个URL`);
+					} else {
+						alert('未找到有效的URL');
+					}
+				};
+				reader.readAsText(file);
+				e.target.value = '';
+			});
+
+			// 篡改检测
+			document.getElementById('btn-tamper-check').addEventListener('click', async function() {
+				const urls = getValidURLs();
+				if (urls.length === 0) {
+					alert('请输入至少一个有效的URL');
+					return;
+				}
+
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+				showProgress('正在进行篡改检测...');
+				resultsSection.style.display = 'block';
+
+				// 切换到篡改检测tab
+				document.querySelector('.tab[data-tab="tamper"]').click();
+
+				try {
+					updateProgress(30, '正在计算网页hash...');
+					
+					const response = await fetch('/api/tamper/check', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							urls: urls.map(normalizeURL),
+							concurrency: concurrency
+						})
+					});
+
+					if (!response.ok) throw new Error('请求失败');
+
+					const data = await response.json();
+					updateProgress(100, '检测完成');
+					
+					renderTamperResults(data.results);
+
+					setTimeout(hideProgress, 1000);
+				} catch (error) {
+					showErrorProgress('检测失败: ' + error.message);
+				}
+			});
+
+			// 设置基线
+			document.getElementById('btn-set-baseline').addEventListener('click', async function() {
+				const urls = getValidURLs();
+				if (urls.length === 0) {
+					alert('请输入至少一个有效的URL');
+					return;
+				}
+
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+				showProgress('正在设置基线...');
+
+				try {
+					updateProgress(30, '正在计算并保存基线...');
+					
+					const response = await fetch('/api/tamper/baseline', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							urls: urls.map(normalizeURL),
+							concurrency: concurrency
+						})
+					});
+
+					if (!response.ok) throw new Error('请求失败');
+
+					const data = await response.json();
+					updateProgress(100, '基线设置完成');
+					
+					alert(`成功设置 ${data.results.filter(r => r.status === 'success').length} 个URL的基线`);
+					
+					setTimeout(hideProgress, 1000);
+				} catch (error) {
+					showErrorProgress('设置失败: ' + error.message);
+				}
+			});
+
+			// 批量截图
+			document.getElementById('btn-batch-screenshot').addEventListener('click', async function() {
+				const urls = getValidURLs();
+				if (urls.length === 0) {
+					alert('请输入至少一个有效的URL');
+					return;
+				}
+
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+				const batchId = batchIdInput.value.trim();
+				showProgress('正在进行批量截图...');
+				resultsSection.style.display = 'block';
+
+				// 切换到截图tab
+				document.querySelector('.tab[data-tab="screenshot"]').click();
+
+				try {
+					updateProgress(30, '正在截图...');
+					
+					const response = await fetch('/api/screenshot/batch-urls', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							urls: urls.map(normalizeURL),
+							batch_id: batchId,
+							concurrency: concurrency
+						})
+					});
+
+					if (!response.ok) throw new Error('请求失败');
+
+					const data = await response.json();
+					updateProgress(100, `完成: ${data.success} 成功, ${data.failed} 失败`);
+					
+					renderScreenshotResults(data.results);
+
+					setTimeout(hideProgress, 1000);
+				} catch (error) {
+					showErrorProgress('截图失败: ' + error.message);
+				}
+			});
+
+			// 渲染篡改检测结果
+			function renderTamperResults(results) {
+				tamperResults.innerHTML = '';
+				
+				let tamperCount = 0;
+				let safeCount = 0;
+				let firstCount = 0;
+
+				results.forEach(result => {
+					const card = document.createElement('div');
+					card.className = 'result-card';
+
+					let statusBadge = '';
+					let alertHtml = '';
+					let hashItemsHtml = '';
+
+					if (!result.current_hash || result.current_hash.status?.includes('error')) {
+						statusBadge = '<span class="status-badge danger">检测失败</span>';
+						alertHtml = `<div class="tamper-alert danger">
+							<strong>检测失败</strong><br>
+							${result.current_hash?.status || '未知错误'}
+						</div>`;
+					} else if (!result.baseline_hash) {
+						firstCount++;
+						statusBadge = '<span class="status-badge info">首次检测</span>';
+						alertHtml = `<div class="tamper-alert info">
+							<strong>首次检测</strong><br>
+							这是第一次检测该URL，已记录当前hash作为参考。建议点击"设置基线"按钮保存基线以便后续对比。
+						</div>`;
+						
+						// 显示所有分段hash
+						if (result.current_hash.segment_hashes) {
+							result.current_hash.segment_hashes.forEach(seg => {
+								hashItemsHtml += `<div class="hash-item">
+									<span class="segment-name">${seg.name}</span>
+									<span class="segment-hash" title="${seg.hash}">${truncateHash(seg.hash)}</span>
+								</div>`;
+							});
+						}
+					} else if (result.tampered) {
+						tamperCount++;
+						statusBadge = '<span class="status-badge danger">已篡改</span>';
+						alertHtml = `<div class="tamper-alert danger">
+							<strong>⚠️ 检测到篡改!</strong><br>
+							发现 ${result.tampered_segments?.length || 0} 个分段被修改
+						</div>`;
+						
+						// 显示篡改的分段
+						if (result.changes && result.changes.length > 0) {
+							alertHtml += '<div class="changes-list">';
+							result.changes.forEach(change => {
+								const changeClass = change.change_type === 'added' ? 'added' : 
+													change.change_type === 'removed' ? 'removed' : '';
+								alertHtml += `<div class="change-item ${changeClass}">
+									<strong>${change.segment}</strong>: ${change.description}
+								</div>`;
+							});
+							alertHtml += '</div>';
+						}
+
+						// 显示所有分段hash，标记篡改的
+						if (result.current_hash.segment_hashes) {
+							const tamperedSet = new Set(result.tampered_segments || []);
+							result.current_hash.segment_hashes.forEach(seg => {
+								const isTampered = tamperedSet.has(seg.name);
+								hashItemsHtml += `<div class="hash-item ${isTampered ? 'tampered' : ''}">
+									<span class="segment-name">${seg.name} ${isTampered ? '⚠️' : ''}</span>
+									<span class="segment-hash" title="${seg.hash}">${truncateHash(seg.hash)}</span>
+								</div>`;
+							});
+						}
+					} else {
+						safeCount++;
+						statusBadge = '<span class="status-badge success">安全</span>';
+						alertHtml = `<div class="tamper-alert success">
+							<strong>✓ 未检测到篡改</strong><br>
+							网页内容与基线一致
+						</div>`;
+						
+						// 显示所有分段hash
+						if (result.current_hash.segment_hashes) {
+							result.current_hash.segment_hashes.forEach(seg => {
+								hashItemsHtml += `<div class="hash-item">
+									<span class="segment-name">${seg.name}</span>
+									<span class="segment-hash" title="${seg.hash}">${truncateHash(seg.hash)}</span>
+								</div>`;
+							});
+						}
+					}
+
+					card.innerHTML = `
+						<div class="result-card-header">
+							<span class="url">${result.url}</span>
+							${statusBadge}
+						</div>
+						<div class="result-card-body">
+							${alertHtml}
+							<div class="hash-info">
+								${hashItemsHtml}
+							</div>
+						</div>
+					`;
+
+					tamperResults.appendChild(card);
+				});
+
+				// 更新统计
+				document.getElementById('tamper-summary').style.display = 'grid';
+				document.getElementById('tamper-total').textContent = results.length;
+				document.getElementById('tamper-count').textContent = tamperCount;
+				document.getElementById('tamper-safe').textContent = safeCount;
+				document.getElementById('tamper-first').textContent = firstCount;
+			}
+
+			// 渲染截图结果
+			function renderScreenshotResults(results) {
+				screenshotResults.innerHTML = '';
+				
+				let successCount = 0;
+				let failedCount = 0;
+
+				results.forEach(result => {
+					const item = document.createElement('div');
+					item.className = 'screenshot-result ' + (result.success ? 'success' : 'failed');
+
+					if (result.success) {
+						successCount++;
+						item.innerHTML = `
+							<div class="status success">成功</div>
+							<div class="url">${result.url}</div>
+							<div class="path">${result.file_path || ''}</div>
+						`;
+					} else {
+						failedCount++;
+						item.innerHTML = `
+							<div class="status failed">失败</div>
+							<div class="url">${result.url}</div>
+							<div class="error">${result.error || '未知错误'}</div>
+						`;
+					}
+
+					screenshotResults.appendChild(item);
+				});
+
+				// 更新统计
+				document.getElementById('screenshot-summary').style.display = 'grid';
+				document.getElementById('screenshot-total').textContent = results.length;
+				document.getElementById('screenshot-success').textContent = successCount;
+				document.getElementById('screenshot-failed').textContent = failedCount;
+			}
+		});
+	</script>
+</body>
+</html>

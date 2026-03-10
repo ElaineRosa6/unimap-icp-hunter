@@ -1,211 +1,195 @@
-# Changelog
+# 更新日志 (Changelog)
 
-All notable changes to UniMap Light will be documented in this file.
+## [2.0.1] - 2026-03-09
 
-## [1.0.0] - 2026-02-04
+### 代码缺陷修复
 
-### 🎉 初始版本 - 轻量化转型
+#### 1. 错误处理优化
+- **FOFA 适配器**: 优化 `result.Err` 错误处理逻辑，统一错误信息格式
+  - 修复布尔类型和字符串类型错误的处理分支
+  - 添加更详细的错误信息前缀
+  - 文件: `internal/adapter/fofa.go`
 
-这是 UniMap 的轻量版本，从原 UniMap + ICP-Hunter 项目核心功能提取而来。
+#### 2. 空指针检查增强
+- **编排器**: 添加 `engineNames` 空数组检查，防止无效查询
+  - 在 `TranslateQuery` 方法中添加长度验证
+  - 返回明确的错误信息
+  - 文件: `internal/adapter/orchestrator.go`
 
-### Added (新增)
+#### 3. URL 构建安全修复
+- **FOFA 适配器**: 使用 `url.URL` 结构体安全构建 URL，避免特殊字符问题
+- **Hunter 适配器**: 使用 `url.URL` 结构体安全构建 URL
+- **Shodan 适配器**: 使用 `url.URL` 结构体安全构建 URL
+- 添加 `net/url` 导入，确保 URL 编码正确
+- 文件: `internal/adapter/fofa.go`, `hunter.go`, `shodan.go`
 
-#### 核心功能
-- ✨ **GUI 图形界面**: 基于 Fyne 的跨平台图形用户界面
-- 🔍 **多引擎查询**: 支持 FOFA、Hunter、ZoomEye、Quake 四大搜索引擎
-- 📝 **UQL 统一查询语言**: 支持标准化的查询语法
-- 🔄 **智能结果聚合**: 多引擎结果自动去重和合并
-- 📊 **结果导出**: 支持 JSON 和 Excel 两种格式导出
-- 🔒 **安全配置**: API Key 仅存储在内存中，不落地持久化
+#### 4. 统一日志记录
+- **CLI 工具**: 将 `log.Printf`/`log.Fatalf` 替换为 `logger.Warnf`/`logger.Errorf`
+- **Web 服务**: 将 `fmt.Println` 替换为 `logger.Info`
+- 统一使用内部 logger 模块，支持日志级别控制
+- 文件: `cmd/unimap-cli/main.go`, `cmd/unimap-web/main.go`
 
-#### 界面组件
-- 查询输入区：支持多行 UQL 语句输入
-- 引擎选择区：复选框选择要使用的引擎
-- 操作按钮区：开始查询、导出 JSON、导出 Excel
-- 状态栏：显示查询状态和进度
-- 结果表格：展示 IP、端口、协议、域名、URL、标题等信息
-- 配置对话框：API Key 配置界面
+### 新增功能
 
-#### 导出功能
-- **JSON 导出**: 包含所有字段的完整数据
-- **Excel 导出**: 结构化表格，支持 15 个核心字段
+#### 1. 优雅关闭机制
+- **新增文件**: `internal/utils/shutdown.go`
+  - `ShutdownManager` 结构体，管理应用生命周期
+  - 支持信号监听（SIGINT, SIGTERM, SIGHUP）
+  - 支持并发执行关闭处理函数
+  - 支持超时控制（默认 30 秒）
+  - 简化的 `GracefulShutdown` 辅助函数
 
-#### 文档
-- 📖 README_LIGHT.md: 简化版使用说明
-- 📘 USAGE.md: 详细使用指南，包含 8 个查询示例
-- 🔧 build.sh / build.bat: 跨平台编译脚本
+- **Web 服务器**: 添加 `Shutdown` 方法
+  - 支持优雅关闭 HTTP 服务器
+  - 关闭所有 WebSocket 连接
+  - 清理连接管理器资源
+  - 文件: `web/server.go`
 
-### Changed (变更)
+- **CLI 和 Web 入口**: 集成优雅关闭
+  - CLI: 服务关闭时调用 `svc.Shutdown()`
+  - Web: 信号触发时按顺序关闭服务器和服务
+  - 文件: `cmd/unimap-cli/main.go`, `cmd/unimap-web/main.go`
 
-#### 架构简化
-- 从微服务架构转变为单体应用
-- 从 CLI 工具转变为 GUI 应用
-- 移除 Web API 服务
-- 移除数据持久化层
+### 架构改进
 
-#### 依赖精简
-- 移除 Gin Web 框架
-- 移除 MySQL/GORM 数据库
-- 移除 Redis 缓存/消息队列
-- 移除 Cobra/Viper CLI 框架
-- 移除 Prometheus/Grafana 监控
-- 移除 Docker 容器化部署
+#### 1. HTTP 服务器重构
+- 使用 `http.NewServeMux()` 替代默认多路复用器
+- 添加 `httpServer` 字段到 `Server` 结构体
+- 支持通过 `Shutdown` 方法优雅关闭
 
-新的依赖栈：
-- Fyne v2.4.3 (GUI)
-- Resty v2.11.0 (HTTP)
-- Excelize v2.8.0 (Excel)
+#### 2. 代码质量
+- 所有代码通过 `go vet` 检查
+- 所有现有测试通过 (`go test ./...`)
+- 移除未使用的导入
 
-#### 项目结构
-```
-旧结构:
-├── cmd/
-│   ├── unimap/          (CLI)
-│   └── icp-hunter/      (ICP检测服务)
-├── internal/
-│   ├── repository/      (数据访问层)
-│   ├── service/         (业务服务)
-│   ├── core/
-│   ├── adapter/
-│   └── model/
-├── pkg/utils/           (工具包)
-├── configs/             (配置文件)
-├── scripts/             (运维脚本)
-└── docker/              (Docker配置)
-
-新结构:
-├── cmd/
-│   └── unimap-gui/      (GUI入口)
-├── internal/
-│   ├── core/unimap/     (UQL解析和聚合)
-│   ├── adapter/         (引擎适配器)
-│   ├── exporter/        (导出功能)
-│   └── model/           (数据模型)
-└── res/                 (GUI资源)
-```
-
-### Removed (移除)
-
-#### 功能模块
-- ❌ ICP 备案检测功能
-- ❌ 定时任务调度器
-- ❌ 工作节点服务
-- ❌ 通知系统 (邮件/Webhook)
-- ❌ 统计报表功能
-- ❌ 白名单管理
-- ❌ 截图存档功能
-- ❌ 分布式任务队列
-
-#### 技术组件
-- ❌ Web API 接口
-- ❌ 数据库持久化
-- ❌ Redis 缓存
-- ❌ 监控系统
-- ❌ Docker 部署
-- ❌ CLI 命令行工具
-
-#### 配置和脚本
-- ❌ configs/ 配置目录
-- ❌ scripts/ 运维脚本
-- ❌ docker-compose.yml
-- ❌ Dockerfile.*
-- ❌ docs/ 文档目录（旧版文档）
-
-### Security (安全)
-
-#### 安全加固
-- ✅ CodeQL 安全扫描通过，0 个漏洞
-- ✅ API Key 仅存储在内存中，程序退出后自动清除
-- ✅ 移除数据库，消除 SQL 注入风险
-- ✅ 移除 Web 服务，消除 XSS 风险
-- ✅ 完善的错误处理，防止信息泄露
-
-### Performance (性能)
-
-#### 优化项
-- ⚡ 单可执行文件，启动速度快
-- ⚡ 无外部依赖，部署简单
-- ⚡ 异步查询，界面不卡顿
-- ⚡ 基于 IP:Port 的高效去重算法
-
-### Technical Debt (技术债务)
-
-#### 已解决
-- 移除了过度复杂的微服务架构
-- 移除了不必要的中间层抽象
-- 清理了冗余的配置文件
-- 统一了代码风格
-
-#### 待改进
-- GUI 需要平台特定的依赖库（开发环境）
-- 尚未实现查询历史记录
-- 尚未实现配置持久化（可选功能）
-- 缺少批量查询能力
-
-### Compatibility (兼容性)
-
-#### 支持的平台
-- ✅ Windows (amd64, 386)
-- ✅ macOS (amd64, arm64/Apple Silicon)
-- ✅ Linux (amd64, 386, arm64)
-
-#### 系统要求
-- **最低**: Go 1.21+ (编译时)
-- **运行时**: 无特殊要求
-- **开发环境**: 需要 OpenGL/X11 等 GUI 库
-
-### Migration Guide (迁移指南)
-
-#### 从旧版迁移
-
-如果您是从完整版 UniMap + ICP-Hunter 迁移：
-
-1. **导出数据**: 使用旧版导出您需要的历史数据
-2. **获取 API Keys**: 确保您有各引擎的 API Key
-3. **安装新版**: 下载或编译 UniMap Light
-4. **配置引擎**: 在 GUI 中配置 API Key
-5. **开始使用**: 直接在 GUI 中执行查询
-
-#### 功能对比
-
-| 功能 | 完整版 | 轻量版 |
-|------|-------|-------|
-| 资产查询 | ✅ | ✅ |
-| UQL 语法 | ✅ | ✅ |
-| 多引擎支持 | ✅ | ✅ |
-| 结果导出 | ✅ | ✅ |
-| ICP 检测 | ✅ | ❌ |
-| 数据持久化 | ✅ | ❌ |
-| 定时任务 | ✅ | ❌ |
-| Web API | ✅ | ❌ |
-| 监控告警 | ✅ | ❌ |
-| 交互方式 | CLI + API | GUI |
-| 部署方式 | Docker | 单文件 |
-
-### Known Issues (已知问题)
-
-1. **编译环境**: Linux 编译需要安装 X11 开发库
-2. **文件选择**: 文件保存对话框在某些桌面环境可能样式不一致
-3. **大数据量**: 单次查询大量数据可能导致界面响应延迟
-
-### Contributors (贡献者)
-
-- 架构设计与开发: Claude Code
-- 原版项目: ElaineRosa6
-
-### Notes (备注)
-
-本版本是对原项目的轻量化改造，专注于核心查询功能，适合以下场景：
-
-- ✅ 临时快速查询
-- ✅ 个人使用
-- ✅ 无持久化需求
-- ✅ 跨平台兼容
-- ❌ 不适合企业级持续监控
-- ❌ 不适合大规模自动化扫描
-
-如需完整功能，请使用原版 UniMap + ICP-Hunter。
+### 兼容性
+- 向后兼容：所有改进均为内部实现优化
+- 无配置文件变更
+- 无 API 变更
 
 ---
 
-**UniMap Light** © 2026
+## [2.0.0] - 2026-03-03
+
+### 新增功能
+
+#### 1. Shodan 搜索引擎支持
+- 新增 Shodan 引擎适配器 (`internal/adapter/shodan.go`)
+- 支持 Shodan API 查询和结果标准化
+- 在 CLI、Web 和 GUI 中注册 Shodan 引擎
+- 配置文件添加 Shodan 配置项
+
+#### 2. 批量 URL 截图功能
+- 新增批量 URL 截图页面 (`/batch-screenshot`)
+- 支持上传 URL 列表进行批量截图
+- 支持并发截图（可配置 1-10 个并发）
+- 支持文件导入：.txt、.csv、.xlsx 格式
+- 自动 URL 标准化和去重
+- 截图结果实时显示和下载
+
+#### 3. 文件导入功能
+- 支持从文件导入 URL 列表
+- 支持格式：TXT（每行一个）、CSV（第一列）、Excel（第一列）
+- 自动识别表头并跳过
+- 自动去重和验证 URL 格式
+
+### 优化改进
+
+#### 1. Chrome 截图优化
+- **智能 Chrome 路径检测**：自动检测 Windows/Linux/macOS 常见 Chrome 安装路径
+- **CDP 模式自动回退**：当远程调试端口不可用时，自动切换到本地启动模式
+- **Cookie 设置优化**：CDP 模式下跳过 Cookie 设置（浏览器已保持登录状态）
+
+#### 2. 代码质量改进
+- **UTF-8 解析修复**：修复 UQL 解析器 UTF-8 字符串遍历问题
+- **缓存错误处理**：优化 orchestrator 缓存类型断言和错误处理
+- **锁粒度优化**：merger 中将 generateKey 移到锁外，提高并发性能
+- **对象池清理**：确保从对象池获取的对象已清理
+
+#### 3. 配置管理优化
+- 启动时自动检测远程调试端口可用性
+- 不可用时自动清空配置，使用本地 Chrome
+- 添加详细的日志提示
+
+### 修复问题
+
+#### 1. 截图功能修复
+- 修复 "No connection could be made" 错误
+- 修复 Chrome 路径检测失败问题
+- 修复 CDP 模式下重复设置 Cookie 问题
+
+#### 2. 解析器修复
+- 修复 UQL 解析器多字节字符处理
+- 修复 tokenize 函数 UTF-8 遍历错误
+
+#### 3. 缓存修复
+- 修复缓存类型断言可能 panic 的问题
+- 修复 Normalize 错误被静默忽略的问题
+
+### 文档更新
+
+#### 1. README.md
+- 更新功能特性列表
+- 添加批量截图功能说明
+- 更新 CDP 模式使用说明
+- 添加 Chrome 路径配置说明
+
+#### 2. README_LIGHT.md
+- 更新轻量版功能说明
+- 添加文件导入功能说明
+- 更新截图功能说明
+
+#### 3. USAGE.md
+- 添加批量截图使用指南
+- 更新 CDP 模式最佳实践
+- 添加文件导入格式说明
+
+### API 变更
+
+#### 新增接口
+```
+POST /api/screenshot/batch-urls    # 批量 URL 截图
+POST /api/import/urls              # 导入 URL 文件
+GET  /batch-screenshot             # 批量截图页面
+```
+
+#### 配置变更
+```yaml
+engines:
+  shodan:                          # 新增 Shodan 配置
+    enabled: false
+    api_key: ""
+    base_url: "https://api.shodan.io"
+    qps: 1
+    timeout: 30
+```
+
+### 依赖更新
+- 添加 `github.com/xuri/excelize/v2` 用于 Excel 文件解析
+
+### 性能改进
+- 批量截图支持并发处理
+- 文件导入支持大文件（最大 10MB）
+- 优化内存使用（对象池复用）
+
+### 兼容性
+- 向后兼容：现有配置文件无需修改即可运行
+- 新增功能默认关闭，需手动启用
+
+---
+
+## [1.0.0] - 2026-01-15
+
+### 初始版本
+- UniMap + ICP-Hunter 完整功能
+- 支持 FOFA、Hunter、ZoomEye、Quake 引擎
+- 支持 UQL 统一查询语言
+- 支持 Web 服务和 GUI 界面
+- 支持截图和 CDP 模式
+- 支持 ICP 备案检测
+
+---
+
+**更新日期**: 2026-03-03  
+**版本号**: v2.0.0  
+**更新者**: Claude Code

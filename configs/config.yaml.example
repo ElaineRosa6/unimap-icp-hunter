@@ -28,3 +28,21 @@ engines:
         use_web_api: true
 system:
     max_concurrent: 10
+
+# Web 截图与 CDP 配置
+screenshot:
+    enabled: true
+    base_dir: ./screenshots
+    chrome_path: ""
+    chrome_user_data_dir: ""
+    chrome_profile_dir: "Default"
+    chrome_remote_debug_url: "http://127.0.0.1:9222"
+    headless: true
+    timeout: 30
+    window_width: 1365
+    window_height: 768
+    wait_time: 500
+    auto_capture:
+        enabled: false
+        capture_search_results: true
+        capture_targets: false

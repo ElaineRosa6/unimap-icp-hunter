@@ -98,6 +98,9 @@ func (o *EngineOrchestrator) TranslateQuery(ast *model.UQLAST, engineNames []str
 	if ast == nil {
 		return nil, fmt.Errorf("AST cannot be nil")
 	}
+	if len(engineNames) == 0 {
+		return nil, fmt.Errorf("engine names cannot be empty")
+	}
 
 	queries := []model.EngineQuery{}
 
@@ -183,7 +186,11 @@ func (t *SearchTask) Execute() error {
 	}
 
 	// 标准化结果并存入缓存
-	if normalized, err := adapter.Normalize(result); err == nil && len(normalized) > 0 {
+	normalized, err := adapter.Normalize(result)
+	if err != nil {
+		logger.Warnf("Failed to normalize results from %s: %v", t.query.EngineName, err)
+		// 标准化失败，但仍返回原始结果
+	} else if len(normalized) > 0 {
 		t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
 	}
 
@@ -315,17 +322,16 @@ func (t *PaginatedSearchTask) Execute() error {
 
 		// 检查缓存中是否存在结果
 		if cachedResults, found := t.orchestrator.cache.Get(cacheKey); found {
-			// 构建EngineResult
+			// 缓存中存储的是已标准化的UnifiedAsset列表
+			// 直接返回标准化结果，避免再次调用Normalize
 			result := &model.EngineResult{
-				EngineName: t.query.EngineName,
-				RawData:    make([]interface{}, len(cachedResults)),
-				Total:      len(cachedResults),
-				Page:       page,
-				HasMore:    page < t.maxPages,
-			}
-			// 转换为RawData格式
-			for i, asset := range cachedResults {
-				result.RawData[i] = asset.Extra
+				EngineName:     t.query.EngineName,
+				RawData:        []interface{}{},
+				Total:          len(cachedResults),
+				Page:           page,
+				HasMore:        page < t.maxPages,
+				Cached:         true,
+				NormalizedData: cachedResults,
 			}
 
 			select {
@@ -350,7 +356,11 @@ func (t *PaginatedSearchTask) Execute() error {
 		}
 
 		// 标准化结果并存入缓存
-		if normalized, err := adapter.Normalize(result); err == nil && len(normalized) > 0 {
+		normalized, err := adapter.Normalize(result)
+		if err != nil {
+			logger.Warnf("Failed to normalize results from %s page %d: %v", t.query.EngineName, page, err)
+			// 标准化失败，但仍返回原始结果
+		} else if len(normalized) > 0 {
 			t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
 		}
 
@@ -444,6 +454,11 @@ func (o *EngineOrchestrator) NormalizeResults(engineResults []*model.EngineResul
 
 	for _, result := range engineResults {
 		if result == nil || result.Error != "" {
+			continue
+		}
+
+		if result.Cached && len(result.NormalizedData) > 0 {
+			assets = append(assets, result.NormalizedData...)
 			continue
 		}
 

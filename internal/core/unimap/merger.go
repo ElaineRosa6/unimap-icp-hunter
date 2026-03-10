@@ -40,6 +40,12 @@ func NewResultMerger() *ResultMerger {
 
 // Merge 归并多个引擎的结果
 func (m *ResultMerger) Merge(assets []model.UnifiedAsset) *model.MergeResult {
+	// 预先生成所有键（不需要锁，因为generateKey不访问共享状态）
+	keys := make([]string, len(assets))
+	for i, asset := range assets {
+		keys[i] = m.generateKey(asset)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -50,7 +56,7 @@ func (m *ResultMerger) Merge(assets []model.UnifiedAsset) *model.MergeResult {
 	sourceStats := m.interfaceMapPool.Get()
 	defer m.interfaceMapPool.Put(sourceStats)
 
-	for _, asset := range assets {
+	for i, asset := range assets {
 		// 增加来源统计
 		if count, exists := sourceStats[asset.Source].(int); exists {
 			sourceStats[asset.Source] = count + 1
@@ -58,8 +64,8 @@ func (m *ResultMerger) Merge(assets []model.UnifiedAsset) *model.MergeResult {
 			sourceStats[asset.Source] = 1
 		}
 
-		// 生成去重键
-		key := m.generateKey(asset)
+		// 使用预生成的键
+		key := keys[i]
 
 		if existing, exists := assetMap[key]; exists {
 			// 合并已有记录
@@ -90,7 +96,7 @@ func (m *ResultMerger) Merge(assets []model.UnifiedAsset) *model.MergeResult {
 		// 复制sourceStats到每个资产的Extra中
 		statsCopy := make(map[string]interface{}, len(sourceStats))
 		for k, v := range sourceStats {
-			statsCopy[k] = v  
+			statsCopy[k] = v
 		}
 		asset.Extra["source_stats"] = statsCopy
 	}
@@ -140,6 +146,11 @@ func (m *ResultMerger) MergeEngineResults(results []*model.EngineResult, adapter
 
 	for _, result := range results {
 		if result == nil || result.Error != "" {
+			continue
+		}
+
+		if result.Cached && len(result.NormalizedData) > 0 {
+			*allAssetsSlice = append(*allAssetsSlice, result.NormalizedData...)
 			continue
 		}
 

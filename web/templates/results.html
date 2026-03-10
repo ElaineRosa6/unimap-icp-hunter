@@ -51,9 +51,10 @@
 			
 			<!-- 导出选项 -->
 			<div class="export-options">
-				<button type="button" class="btn btn-success" id="btn-export-csv">导出CSV</button>
-				<button type="button" class="btn btn-success" id="btn-export-json">导出JSON</button>
-				<button type="button" class="btn btn-success" id="btn-export-excel">导出Excel</button>
+				<button type="button" class="btn" id="btn-export-csv">📄 导出CSV</button>
+				<button type="button" class="btn" id="btn-export-json">📋 导出JSON</button>
+				<button type="button" class="btn" id="btn-export-excel">📊 导出Excel</button>
+				<a href="/" class="btn">🏠 返回首页</a>
 			</div>
 			
 			<!-- 筛选选项 -->
@@ -90,8 +91,8 @@
 					</select>
 				</div>
 				<div class="filter-group">
-					<button type="button" class="btn btn-secondary" id="btn-apply-filter">应用筛选</button>
-					<button type="button" class="btn btn-secondary" id="btn-reset-filter">重置筛选</button>
+					<button type="button" class="btn" id="btn-apply-filter">🔍 应用筛选</button>
+					<button type="button" class="btn" id="btn-reset-filter">🔄 重置筛选</button>
 				</div>
 			</div>
 			
@@ -127,8 +128,8 @@
 						<td>{{.StatusCode}}</td>
 						<td>{{.Source}}</td>
 						<td>
-							<button type="button" class="btn btn-sm btn-info" data-ip="{{.IP}}" data-port="{{.Port}}">详情</button>
-							<button type="button" class="btn btn-sm btn-success" data-ip="{{.IP}}">复制IP</button>
+							<button type="button" class="btn btn-sm btn-info" data-ip="{{.IP}}" data-port="{{.Port}}">📋 详情</button>
+							<button type="button" class="btn btn-sm btn-outline-success" data-ip="{{.IP}}">📋 复制IP</button>
 						</td>
 					</tr>
 					{{end}}
@@ -137,9 +138,9 @@
 			
 			<!-- 分页控件 -->
 			<div class="pagination">
-				<button type="button" class="btn btn-sm btn-secondary" id="btn-prev-page" disabled>上一页</button>
+				<button type="button" class="btn btn-sm btn-outline-primary" id="btn-prev-page" disabled>⬅️ 上一页</button>
 				<span class="page-info">第 <span id="current-page">1</span> 页，共 <span id="total-pages">1</span> 页</span>
-				<button type="button" class="btn btn-sm btn-secondary" id="btn-next-page" disabled>下一页</button>
+				<button type="button" class="btn btn-sm btn-outline-primary" id="btn-next-page" disabled>下一页 ➡️</button>
 				<div class="page-size-selector">
 					<label for="page-size">每页显示：</label>
 					<select id="page-size">
@@ -166,7 +167,7 @@
 					<div id="asset-detail-content"></div>
 				</div>
 				<div class="modal-footer">
-					<button type="button" class="btn btn-secondary close-btn">关闭</button>
+					<button type="button" class="btn btn-outline-secondary close-btn">❌ 关闭</button>
 				</div>
 			</div>
 		</div>

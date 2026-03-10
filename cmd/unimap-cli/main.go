@@ -3,16 +3,16 @@ package main
 import (
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
 	"github.com/unimap-icp-hunter/project/internal/config"
+	"github.com/unimap-icp-hunter/project/internal/exporter"
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/service"
 )
@@ -24,6 +24,10 @@ func main() {
 	limitPtr := flag.Int("l", 100, "Limit number of results")
 	outputPtr := flag.String("o", "", "Output file path (e.g., 'results.csv' or 'results.json')")
 	configPtr := flag.String("c", "configs/config.yaml", "Configuration file path")
+	fofaCookiePtr := flag.String("cookie-fofa", "", "FOFA cookie header (e.g., 'session=xxx; token=yyy')")
+	hunterCookiePtr := flag.String("cookie-hunter", "", "Hunter cookie header (e.g., 'session=xxx; token=yyy')")
+	quakeCookiePtr := flag.String("cookie-quake", "", "Quake cookie header (e.g., 'session=xxx; token=yyy')")
+	zoomeyeCookiePtr := flag.String("cookie-zoomeye", "", "ZoomEye cookie header (e.g., 'session=xxx; token=yyy')")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -42,9 +46,16 @@ func main() {
 	// Load config
 	cfgManager := config.NewManager(*configPtr)
 	if err := cfgManager.Load(); err != nil {
-		log.Printf("Warning: Failed to load config from %s: %v. Using defaults.", *configPtr, err)
+		logger.Warnf("Failed to load config from %s: %v. Using defaults.", *configPtr, err)
 	}
 	cfg := cfgManager.GetConfig()
+	if cfg != nil {
+		if applyCookiesFromFlags(cfg, *fofaCookiePtr, *hunterCookiePtr, *quakeCookiePtr, *zoomeyeCookiePtr) {
+			if err := cfgManager.Save(); err != nil {
+				logger.Warnf("Failed to save cookies to %s: %v", *configPtr, err)
+			}
+		}
+	}
 
 	// Init service
 	svc := service.NewUnifiedService()
@@ -84,7 +95,8 @@ func main() {
 	// Execute query
 	resp, err := svc.Query(ctx, req)
 	if err != nil {
-		log.Fatalf("Query failed: %v", err)
+		logger.Errorf("Query failed: %v", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Found %d results.\n", resp.TotalCount)
@@ -99,7 +111,7 @@ func main() {
 	if *outputPtr != "" {
 		err := saveResults(resp.Assets, *outputPtr)
 		if err != nil {
-			log.Printf("Failed to save results: %v", err)
+			logger.Errorf("Failed to save results: %v", err)
 		} else {
 			fmt.Printf("Results saved to %s\n", *outputPtr)
 		}
@@ -109,6 +121,32 @@ func main() {
 			fmt.Printf("%s\t%s:%d\t%s\n", asset.IP, asset.Host, asset.Port, asset.Title)
 		}
 	}
+
+	// 关闭服务
+	if err := svc.Shutdown(); err != nil {
+		logger.Warnf("Error during shutdown: %v", err)
+	}
+}
+
+func applyCookiesFromFlags(cfg *config.Config, fofa, hunter, quake, zoomeye string) bool {
+	changed := false
+	if strings.TrimSpace(fofa) != "" {
+		cfg.Engines.Fofa.Cookies = config.ParseCookieHeader(fofa, config.DefaultCookieDomain("fofa"))
+		changed = true
+	}
+	if strings.TrimSpace(hunter) != "" {
+		cfg.Engines.Hunter.Cookies = config.ParseCookieHeader(hunter, config.DefaultCookieDomain("hunter"))
+		changed = true
+	}
+	if strings.TrimSpace(quake) != "" {
+		cfg.Engines.Quake.Cookies = config.ParseCookieHeader(quake, config.DefaultCookieDomain("quake"))
+		changed = true
+	}
+	if strings.TrimSpace(zoomeye) != "" {
+		cfg.Engines.Zoomeye.Cookies = config.ParseCookieHeader(zoomeye, config.DefaultCookieDomain("zoomeye"))
+		changed = true
+	}
+	return changed
 }
 
 func getEnabledEngines(cfg *config.Config) []string {
@@ -124,6 +162,9 @@ func getEnabledEngines(cfg *config.Config) []string {
 	}
 	if cfg.Engines.Zoomeye.Enabled {
 		list = append(list, "zoomeye")
+	}
+	if cfg.Engines.Shodan.Enabled {
+		list = append(list, "shodan")
 	}
 	return list
 }
@@ -162,22 +203,41 @@ func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
 			time.Duration(cfg.Engines.Quake.Timeout)*time.Second,
 		))
 	}
+	if cfg.Engines.Shodan.Enabled {
+		svc.RegisterAdapter(adapter.NewShodanAdapter(
+			cfg.Engines.Shodan.BaseURL,
+			cfg.Engines.Shodan.APIKey,
+			cfg.Engines.Shodan.QPS,
+			time.Duration(cfg.Engines.Shodan.Timeout)*time.Second,
+		))
+	}
 }
 
 func saveResults(assets []model.UnifiedAsset, path string) error {
+	// 根据文件扩展名选择导出格式
+	lowerPath := strings.ToLower(path)
+
+	switch {
+	case strings.HasSuffix(lowerPath, ".json"):
+		exp := exporter.NewJSONExporter()
+		return exp.Export(assets, path)
+	case strings.HasSuffix(lowerPath, ".xlsx") || strings.HasSuffix(lowerPath, ".xls"):
+		exp := exporter.NewExcelExporter()
+		return exp.Export(assets, path)
+	default:
+		// CSV default
+		return saveResultsCSV(assets, path)
+	}
+}
+
+// saveResultsCSV 保存为CSV格式
+func saveResultsCSV(assets []model.UnifiedAsset, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	if strings.HasSuffix(strings.ToLower(path), ".json") {
-		enc := json.NewEncoder(f)
-		enc.SetIndent("", "  ")
-		return enc.Encode(assets)
-	}
-
-	// CSV default
 	w := csv.NewWriter(f)
 	defer w.Flush()
 

@@ -43,6 +43,50 @@
 				</div>
 
 				<div class="form-group">
+					<label>Cookie (用于搜索引擎网页截图，可选)</label>
+					<div class="query-options">
+						<label class="option-label" for="cookie-fofa">FOFA</label>
+						<span class="cookie-status {{if .cookieHasFofa}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-fofa">{{if .cookieHasFofa}}已配置{{else}}未配置{{end}}</span>
+						<input type="text" id="cookie-fofa" name="cookie_fofa" placeholder="session=xxx; token=yyy" value="{{.cookieFofa}}">
+						<label class="option-label" for="cookie-hunter">Hunter</label>
+						<span class="cookie-status {{if .cookieHasHunter}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-hunter">{{if .cookieHasHunter}}已配置{{else}}未配置{{end}}</span>
+						<input type="text" id="cookie-hunter" name="cookie_hunter" placeholder="session=xxx; token=yyy" value="{{.cookieHunter}}">
+						<label class="option-label" for="cookie-zoomeye">ZoomEye</label>
+						<span class="cookie-status {{if .cookieHasZoomeye}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-zoomeye">{{if .cookieHasZoomeye}}已配置{{else}}未配置{{end}}</span>
+						<input type="text" id="cookie-zoomeye" name="cookie_zoomeye" placeholder="session=xxx; token=yyy" value="{{.cookieZoomeye}}">
+						<label class="option-label" for="cookie-quake">Quake</label>
+						<span class="cookie-status {{if .cookieHasQuake}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-quake">{{if .cookieHasQuake}}已配置{{else}}未配置{{end}}</span>
+						<input type="text" id="cookie-quake" name="cookie_quake" placeholder="session=xxx; token=yyy" value="{{.cookieQuake}}">
+					</div>
+					<small class="form-text">格式示例：name=value; name2=value2</small>
+				</div>
+
+				<div class="form-group">
+					<label for="cookie-json">导入 Cookie JSON（浏览器导出）</label>
+					<div class="cookie-import">
+						<select id="cookie-json-engine">
+							<option value="fofa">FOFA</option>
+							<option value="hunter">Hunter</option>
+							<option value="zoomeye">ZoomEye</option>
+							<option value="quake">Quake</option>
+						</select>
+						<textarea id="cookie-json" rows="3" placeholder='[{"name":"session","value":"xxx","domain":".fofa.info","path":"/","httpOnly":true,"secure":true}]'></textarea>
+						<button type="button" class="btn btn-secondary" id="btn-import-cookie-json">导入 JSON</button>
+					</div>
+					<small class="form-text">支持浏览器导出的 JSON 数组</small>
+				</div>
+
+				<div class="form-group">
+					<label>CDP 连接（复用浏览器登录态）</label>
+					<div class="query-options">
+						<span class="cookie-status cookie-status--off" id="cdp-status">检测中</span>
+						<button type="button" class="btn btn-secondary" id="btn-connect-cdp">连接 CDP</button>
+						<span class="form-text" id="cdp-status-info"></span>
+					</div>
+					<small class="form-text">默认检测 127.0.0.1:9222。使用CDP模式时，浏览器已保持登录状态，无需再填写Cookie</small>
+				</div>
+
+				<div class="form-group">
 					<div class="query-options">
 						<label class="option-label">
 							<input type="checkbox" name="use-cache" value="true" checked>
@@ -55,11 +99,19 @@
 					</div>
 				</div>
 
-				<div class="form-group">
-					<button type="submit" class="btn btn-primary">执行查询</button>
-					<a href="/quota" class="btn btn-secondary">查看配额</a>
-					<button type="button" class="btn btn-info" id="btn-save-query">保存查询</button>
+				<div class="form-group action-buttons">
+					<button type="submit" class="btn">🔍 执行查询</button>
+					<button type="button" class="btn" id="btn-save-query">💾 保存查询</button>
+					<a href="/monitor" class="btn">🌐 网页监控</a>
+					<a href="/batch-screenshot" class="btn">📷 批量截图</a>
+					<a href="/quota" class="btn">📊 查看配额</a>
 				</div>
+				<div class="form-group cookie-actions">
+					<button type="button" class="btn btn-sm" id="btn-save-cookies">🍪 保存Cookie</button>
+					<button type="button" class="btn btn-sm" id="btn-verify-cookies">✅ 验证Cookie</button>
+					<button type="button" class="btn btn-sm" id="btn-clear-cookies">🗑️ 清空Cookie</button>
+				</div>
+				<div class="cookie-verify-result" id="cookie-verify-result"></div>
 			</form>
 		</section>
 

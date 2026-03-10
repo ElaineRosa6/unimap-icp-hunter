@@ -3,6 +3,7 @@ package adapter
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -346,17 +347,16 @@ func (s *ShodanAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset
 				}
 			}
 
-			if asset.Protocol == "https" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("https://%s:%d", asset.Host, asset.Port)
-				}
-			} else {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("http://%s:%d", asset.Host, asset.Port)
-				}
+			// 使用 url.URL 结构体安全构建 URL
+			u := &url.URL{
+				Scheme: asset.Protocol,
 			}
+			if asset.Host != "" {
+				u.Host = fmt.Sprintf("%s:%d", asset.Host, asset.Port)
+			} else {
+				u.Host = fmt.Sprintf("%s:%d", asset.IP, asset.Port)
+			}
+			asset.URL = u.String()
 
 			asset.Extra = data
 			assets = append(assets, *asset)

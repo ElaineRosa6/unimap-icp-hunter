@@ -13,27 +13,27 @@ import (
 type Config struct {
 	Engines struct {
 		Quake struct {
-			Enabled bool   `yaml:"enabled"`
-			APIKey  string `yaml:"api_key"`
-			BaseURL string `yaml:"base_url"`
-			QPS     int    `yaml:"qps"`
-			Timeout int    `yaml:"timeout"`
+			Enabled bool     `yaml:"enabled"`
+			APIKey  string   `yaml:"api_key"`
+			BaseURL string   `yaml:"base_url"`
+			QPS     int      `yaml:"qps"`
+			Timeout int      `yaml:"timeout"`
 			Cookies []Cookie `yaml:"cookies"`
 		} `yaml:"quake"`
 		Zoomeye struct {
-			Enabled bool   `yaml:"enabled"`
-			APIKey  string `yaml:"api_key"`
-			BaseURL string `yaml:"base_url"`
-			QPS     int    `yaml:"qps"`
-			Timeout int    `yaml:"timeout"`
+			Enabled bool     `yaml:"enabled"`
+			APIKey  string   `yaml:"api_key"`
+			BaseURL string   `yaml:"base_url"`
+			QPS     int      `yaml:"qps"`
+			Timeout int      `yaml:"timeout"`
 			Cookies []Cookie `yaml:"cookies"`
 		} `yaml:"zoomeye"`
 		Hunter struct {
-			Enabled bool   `yaml:"enabled"`
-			APIKey  string `yaml:"api_key"`
-			BaseURL string `yaml:"base_url"`
-			QPS     int    `yaml:"qps"`
-			Timeout int    `yaml:"timeout"`
+			Enabled bool     `yaml:"enabled"`
+			APIKey  string   `yaml:"api_key"`
+			BaseURL string   `yaml:"base_url"`
+			QPS     int      `yaml:"qps"`
+			Timeout int      `yaml:"timeout"`
 			Cookies []Cookie `yaml:"cookies"`
 		} `yaml:"hunter"`
 		Fofa struct {
@@ -47,6 +47,13 @@ type Config struct {
 			UseWebAPI bool     `yaml:"use_web_api"`
 			Cookies   []Cookie `yaml:"cookies"`
 		} `yaml:"fofa"`
+		Shodan struct {
+			Enabled bool     `yaml:"enabled"`
+			APIKey  string   `yaml:"api_key"`
+			BaseURL string   `yaml:"base_url"`
+			QPS     int      `yaml:"qps"`
+			Timeout int      `yaml:"timeout"`
+		} `yaml:"shodan"`
 	} `yaml:"engines"`
 
 	// 系统配置
@@ -66,13 +73,17 @@ type Config struct {
 
 	// 截图配置
 	Screenshot struct {
-		Enabled      bool   `yaml:"enabled"`
-		BaseDir      string `yaml:"base_dir"`
-		ChromePath   string `yaml:"chrome_path"`
-		Timeout      int    `yaml:"timeout"`
-		WindowWidth  int    `yaml:"window_width"`
-		WindowHeight int    `yaml:"window_height"`
-		WaitTime     int    `yaml:"wait_time"`
+		Enabled              bool   `yaml:"enabled"`
+		BaseDir              string `yaml:"base_dir"`
+		ChromePath           string `yaml:"chrome_path"`
+		ChromeUserDataDir    string `yaml:"chrome_user_data_dir"`
+		ChromeProfileDir     string `yaml:"chrome_profile_dir"`
+		ChromeRemoteDebugURL string `yaml:"chrome_remote_debug_url"`
+		Headless             *bool  `yaml:"headless"`
+		Timeout              int    `yaml:"timeout"`
+		WindowWidth          int    `yaml:"window_width"`
+		WindowHeight         int    `yaml:"window_height"`
+		WaitTime             int    `yaml:"wait_time"`
 		// 自动截图配置
 		AutoCapture struct {
 			Enabled              bool `yaml:"enabled"`
@@ -171,6 +182,12 @@ func (m *Manager) resolveEnv(config *Config) {
 
 	// 解析系统配置
 	config.System.UserAgent = m.ResolveEnv(config.System.UserAgent)
+
+	// 解析截图配置
+	config.Screenshot.ChromePath = m.ResolveEnv(config.Screenshot.ChromePath)
+	config.Screenshot.ChromeUserDataDir = m.ResolveEnv(config.Screenshot.ChromeUserDataDir)
+	config.Screenshot.ChromeProfileDir = m.ResolveEnv(config.Screenshot.ChromeProfileDir)
+	config.Screenshot.ChromeRemoteDebugURL = m.ResolveEnv(config.Screenshot.ChromeRemoteDebugURL)
 }
 
 // ResolveEnv 解析环境变量
@@ -243,6 +260,16 @@ func (m *Manager) applyDefaults(config *Config) {
 		config.Engines.Fofa.Timeout = 30
 	}
 
+	if config.Engines.Shodan.BaseURL == "" {
+		config.Engines.Shodan.BaseURL = "https://api.shodan.io"
+	}
+	if config.Engines.Shodan.QPS == 0 {
+		config.Engines.Shodan.QPS = 1
+	}
+	if config.Engines.Shodan.Timeout == 0 {
+		config.Engines.Shodan.Timeout = 30
+	}
+
 	// 默认系统配置
 	if config.System.MaxConcurrent == 0 {
 		config.System.MaxConcurrent = 10
@@ -263,6 +290,12 @@ func (m *Manager) applyDefaults(config *Config) {
 	}
 	if config.Log.Encoding == "" {
 		config.Log.Encoding = "console"
+	}
+
+	// 默认截图配置
+	if config.Screenshot.Headless == nil {
+		defaultHeadless := true
+		config.Screenshot.Headless = &defaultHeadless
 	}
 	// Log.File 默认为空，表示只输出到标准输出
 

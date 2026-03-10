@@ -299,11 +299,11 @@ section h3 {
 }
 
 
-/* 按钮样式 */
+/* 按钮样式 - 统一风格 */
 .btn {
 	display: inline-block;
 	padding: 0.8rem 1.5rem;
-	border: none;
+	border: 1px solid #3498db;
 	border-radius: 4px;
 	font-size: 1rem;
 	font-weight: 500;
@@ -311,28 +311,20 @@ section h3 {
 	cursor: pointer;
 	transition: all 0.3s;
 	margin-right: 0.5rem;
+	background-color: #fff;
+	color: #3498db;
 }
 
-.btn-primary {
+.btn:hover {
 	background-color: #3498db;
 	color: #fff;
-}
-
-.btn-primary:hover {
-	background-color: #2980b9;
 	transform: translateY(-1px);
 	box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
-.btn-secondary {
-	background-color: #95a5a6;
-	color: #fff;
-}
-
-.btn-secondary:hover {
-	background-color: #7f8c8d;
-	transform: translateY(-1px);
-	box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+.btn:active {
+	transform: translateY(0);
+	box-shadow: none;
 }
 
 /* 示例样式 */
@@ -1131,4 +1123,30 @@ section h3 {
 .copy-btn:hover {
 	background-color: rgba(52, 152, 219, 0.1);
 	border-color: #3498db;
+}
+
+/* Cookie操作按钮组样式 */
+.cookie-actions {
+	display: flex;
+	gap: 0.5rem;
+	margin-top: 0.5rem;
+	padding-top: 0.5rem;
+	border-top: 1px dashed #ddd;
+}
+
+.cookie-actions .btn {
+	margin-right: 0;
+	margin-bottom: 0;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+	.cookie-actions {
+		flex-wrap: wrap;
+	}
+	
+	.cookie-actions .btn {
+		flex: 1;
+		min-width: 100px;
+	}
 }

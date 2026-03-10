@@ -10,8 +10,9 @@
 4. [执行查询](#执行查询)
 5. [查看结果](#查看结果)
 6. [导出数据](#导出数据)
-7. [常见问题](#常见问题)
-8. [查询示例](#查询示例)
+7. [Web 端与 CDP 连接](#web-端与-cdp-连接)
+8. [常见问题](#常见问题)
+9. [查询示例](#查询示例)
 
 ## 安装与启动
 
@@ -198,6 +199,51 @@ country="CN" && port="80"
 **JSON 格式特点:**
 - 包含所有字段的完整数据
 - 便于程序处理和二次分析
+
+## Web 端与 CDP 连接
+
+项目内置 Web 端（unimap-web），适合做多引擎查询、Cookie 填写、以及截图校验。
+
+### 启动 Web 端
+
+```bash
+go run ./cmd/unimap-web
+```
+
+默认端口为 **8448**，浏览器访问：
+
+```
+http://localhost:8448
+```
+
+### 优雅关闭
+
+Web 端支持优雅关闭，可通过以下方式触发：
+
+1. **发送终止信号**: 在终端按 `Ctrl+C` 发送 SIGINT 信号
+2. **超时控制**: 默认 30 秒超时，确保所有请求处理完成
+3. **资源清理**: 自动关闭 WebSocket 连接和 HTTP 服务器
+
+```bash
+# 启动 Web 端
+./unimap-web
+
+# 按 Ctrl+C 触发优雅关闭
+# 看到 "Application stopped gracefully" 表示关闭成功
+```
+
+### 连接 CDP（复用浏览器登录态）
+
+1. 在 Web 页面中点击 **"连接 CDP"** 按钮。
+2. 系统会自动检测 `127.0.0.1:9222`，若未在线会尝试启动 Chrome 并开启调试端口。
+3. 连接成功后，可复用浏览器登录态进行截图验证。
+
+可在 `configs/config.yaml` 中配置：
+
+- `screenshot.chrome_path`
+- `screenshot.chrome_user_data_dir`
+- `screenshot.chrome_profile_dir`
+- `screenshot.chrome_remote_debug_url`
 - 支持嵌套结构和自定义字段
 
 **示例 JSON 结构:**

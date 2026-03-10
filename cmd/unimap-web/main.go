@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"os"
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
 	"github.com/unimap-icp-hunter/project/internal/config"
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/service"
+	"github.com/unimap-icp-hunter/project/internal/utils"
 	"github.com/unimap-icp-hunter/project/web"
 )
 
@@ -17,7 +20,7 @@ func main() {
 	// 加载配置
 	cfgManager := config.NewManager(configPath)
 	if err := cfgManager.Load(); err != nil {
-		fmt.Println("Warning: Failed to load config from", configPath, ":", err)
+		logger.Warnf("Failed to load config from %s: %v", configPath, err)
 	}
 	cfg := cfgManager.GetConfig()
 
@@ -33,16 +36,41 @@ func main() {
 	orchestrator := svc.GetOrchestrator()
 
 	// 创建Web服务器
-	server, err := web.NewServer(8080, svc, orchestrator, cfg)
+	server, err := web.NewServer(8448, svc, orchestrator, cfg, cfgManager)
 	if err != nil {
-		log.Fatalf("Failed to initialize Web server: %v", err)
+		logger.Errorf("Failed to initialize Web server: %v", err)
+		os.Exit(1)
 	}
 
-	// 启动Web服务器
-	fmt.Println("Starting Web server on :8080...")
-	if err := server.Start(); err != nil {
-		log.Fatalf("Failed to start Web server: %v", err)
-	}
+	// 创建优雅关闭管理器
+	shutdownManager := utils.NewShutdownManager(30 * time.Second)
+
+	// 注册关闭处理函数
+	shutdownManager.RegisterHandler(func(ctx context.Context) error {
+		logger.Info("Shutting down Web server...")
+		return server.Shutdown(ctx)
+	})
+
+	shutdownManager.RegisterHandler(func(ctx context.Context) error {
+		logger.Info("Shutting down service...")
+		return svc.Shutdown()
+	})
+
+	// 启动优雅关闭监听
+	shutdownManager.Start()
+
+	// 启动Web服务器（在goroutine中运行，不阻塞）
+	go func() {
+		fmt.Println("Starting Web server on :8448...")
+		if err := server.Start(); err != nil {
+			logger.Errorf("Web server error: %v", err)
+			shutdownManager.Shutdown()
+		}
+	}()
+
+	// 等待关闭信号
+	shutdownManager.Wait()
+	logger.Info("Application stopped gracefully")
 }
 
 // registerEngines 注册引擎适配器
@@ -56,7 +84,7 @@ func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
 			cfg.Engines.Fofa.QPS,
 			time.Duration(cfg.Engines.Fofa.Timeout)*time.Second,
 		))
-		fmt.Println("FOFA engine registered")
+		logger.Info("FOFA engine registered")
 	}
 
 	// 注册Hunter
@@ -67,7 +95,7 @@ func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
 			cfg.Engines.Hunter.QPS,
 			time.Duration(cfg.Engines.Hunter.Timeout)*time.Second,
 		))
-		fmt.Println("Hunter engine registered")
+		logger.Info("Hunter engine registered")
 	}
 
 	// 注册ZoomEye
@@ -78,7 +106,7 @@ func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
 			cfg.Engines.Zoomeye.QPS,
 			time.Duration(cfg.Engines.Zoomeye.Timeout)*time.Second,
 		))
-		fmt.Println("ZoomEye engine registered")
+		logger.Info("ZoomEye engine registered")
 	}
 
 	// 注册Quake
@@ -89,6 +117,17 @@ func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
 			cfg.Engines.Quake.QPS,
 			time.Duration(cfg.Engines.Quake.Timeout)*time.Second,
 		))
-		fmt.Println("Quake engine registered")
+		logger.Info("Quake engine registered")
+	}
+
+	// 注册Shodan
+	if cfg.Engines.Shodan.Enabled && cfg.Engines.Shodan.APIKey != "" {
+		svc.RegisterAdapter(adapter.NewShodanAdapter(
+			cfg.Engines.Shodan.BaseURL,
+			cfg.Engines.Shodan.APIKey,
+			cfg.Engines.Shodan.QPS,
+			time.Duration(cfg.Engines.Shodan.Timeout)*time.Second,
+		))
+		logger.Info("Shodan engine registered")
 	}
 }

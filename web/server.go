@@ -2,12 +2,17 @@ package web
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +27,8 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/screenshot"
 	"github.com/unimap-icp-hunter/project/internal/service"
+	"github.com/unimap-icp-hunter/project/internal/tamper"
+	"github.com/xuri/excelize/v2"
 )
 
 // 查询状态
@@ -47,6 +54,7 @@ type ConnectionManager struct {
 // Server Web服务器
 type Server struct {
 	port          int
+	httpServer    *http.Server
 	templates     *template.Template
 	service       *service.UnifiedService
 	orchestrator  *adapter.EngineOrchestrator
@@ -54,17 +62,22 @@ type Server struct {
 	connManager   *ConnectionManager
 	queryStatus   map[string]*QueryStatus
 	queryMutex    sync.RWMutex
+	configMutex   sync.Mutex
 	webRoot       string
 	staticVersion string
 	screenshotMgr *screenshot.Manager
 	config        *config.Config
+	configManager *config.Manager
+	chromeCmd     *os.Process
+	chromeCmdMu   sync.Mutex
 }
 
 // NewServer 创建Web服务器
-func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.EngineOrchestrator, cfg *config.Config) (*Server, error) {
+func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.EngineOrchestrator, cfg *config.Config, cfgManager *config.Manager) (*Server, error) {
 	// 创建模板函数映射
 	funcMap := template.FuncMap{
 		"mul": func(a, b float64) float64 {
+
 			return a * b
 		},
 		"div": func(a, b float64) float64 {
@@ -95,20 +108,51 @@ func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.
 
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			return true // 允许所有来源的WebSocket连接
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			// 检查是否是本地请求或相同来源
+			u, err := url.Parse(origin)
+			if err != nil {
+				return false
+			}
+			// 允许本地开发环境
+			if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" {
+				return true
+			}
+			// 生产环境应该配置具体的允许来源
+			// 这里暂时返回false，实际使用时应根据需要配置
+			return false
 		},
 	}
 
 	// 初始化截图管理器
 	var screenshotMgr *screenshot.Manager
 	if cfg != nil && cfg.Screenshot.Enabled {
+		headless := true
+		if cfg.Screenshot.Headless != nil {
+			headless = *cfg.Screenshot.Headless
+		}
+
+		// 检查配置的远程调试URL是否可用，不可用则清空
+		remoteDebugURL := cfg.Screenshot.ChromeRemoteDebugURL
+		if remoteDebugURL != "" && !isRemoteDebuggerAvailable(remoteDebugURL) {
+			logger.Warnf("Configured remote debugger not available at %s, will use local Chrome", remoteDebugURL)
+			remoteDebugURL = ""
+		}
+
 		screenshotCfg := screenshot.Config{
-			BaseDir:      cfg.Screenshot.BaseDir,
-			ChromePath:   cfg.Screenshot.ChromePath,
-			Timeout:      time.Duration(cfg.Screenshot.Timeout) * time.Second,
-			WindowWidth:  cfg.Screenshot.WindowWidth,
-			WindowHeight: cfg.Screenshot.WindowHeight,
-			WaitTime:     time.Duration(cfg.Screenshot.WaitTime) * time.Millisecond,
+			BaseDir:        cfg.Screenshot.BaseDir,
+			ChromePath:     cfg.Screenshot.ChromePath,
+			UserDataDir:    cfg.Screenshot.ChromeUserDataDir,
+			ProfileDir:     cfg.Screenshot.ChromeProfileDir,
+			RemoteDebugURL: remoteDebugURL,
+			Headless:       headless,
+			Timeout:        time.Duration(cfg.Screenshot.Timeout) * time.Second,
+			WindowWidth:    cfg.Screenshot.WindowWidth,
+			WindowHeight:   cfg.Screenshot.WindowHeight,
+			WaitTime:       time.Duration(cfg.Screenshot.WaitTime) * time.Millisecond,
 		}
 		screenshotMgr = screenshot.NewManager(screenshotCfg)
 
@@ -145,6 +189,7 @@ func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.
 		staticVersion: strconv.FormatInt(time.Now().Unix(), 10),
 		screenshotMgr: screenshotMgr,
 		config:        cfg,
+		configManager: cfgManager,
 	}, nil
 }
 
@@ -209,25 +254,551 @@ func isWebRoot(dir string) bool {
 	return true
 }
 
+// securityMiddleware 添加安全响应头的中间件
+func securityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 防止点击劫持
+		w.Header().Set("X-Frame-Options", "DENY")
+		// 防止MIME类型嗅探
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// XSS保护
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		// 内容安全策略
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;")
+		// 引用策略
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// 权限策略
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Start 启动Web服务器
 func (s *Server) Start() error {
-	http.HandleFunc("/", s.handleIndex)
-	http.HandleFunc("/health", s.handleHealth)
-	http.HandleFunc("/query", s.handleQuery)
-	http.HandleFunc("/api/query", s.handleAPIQuery)
-	http.HandleFunc("/api/ws", s.handleWebSocket)
-	http.HandleFunc("/api/query/status", s.handleQueryStatus)
-	http.HandleFunc("/api/screenshot", s.handleScreenshot)
-	http.HandleFunc("/api/screenshot/search-engine", s.handleSearchEngineScreenshot)
-	http.HandleFunc("/api/screenshot/target", s.handleTargetScreenshot)
-	http.HandleFunc("/api/screenshot/batch", s.handleBatchScreenshot)
-	http.HandleFunc("/results", s.handleResults)
-	http.HandleFunc("/quota", s.handleQuota)
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.webRoot, "static")))))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/query", s.handleQuery)
+	mux.HandleFunc("/api/query", s.handleAPIQuery)
+	mux.HandleFunc("/api/cookies", s.handleSaveCookies)
+	mux.HandleFunc("/api/cookies/verify", s.handleVerifyCookies)
+	mux.HandleFunc("/api/cookies/import", s.handleImportCookieJSON)
+	mux.HandleFunc("/api/cdp/status", s.handleCDPStatus)
+	mux.HandleFunc("/api/cdp/connect", s.handleCDPConnect)
+	mux.HandleFunc("/api/ws", s.handleWebSocket)
+	mux.HandleFunc("/api/query/status", s.handleQueryStatus)
+	mux.HandleFunc("/api/screenshot", s.handleScreenshot)
+	mux.HandleFunc("/api/screenshot/search-engine", s.handleSearchEngineScreenshot)
+	mux.HandleFunc("/api/screenshot/target", s.handleTargetScreenshot)
+	mux.HandleFunc("/api/screenshot/batch", s.handleBatchScreenshot)
+	mux.HandleFunc("/api/screenshot/batch-urls", s.handleBatchURLsScreenshot)
+	mux.HandleFunc("/api/import/urls", s.handleImportURLs)
+	mux.HandleFunc("/api/tamper/check", s.handleTamperCheck)
+	mux.HandleFunc("/api/tamper/baseline", s.handleTamperBaseline)
+	mux.HandleFunc("/api/tamper/baseline/list", s.handleTamperBaselineList)
+	mux.HandleFunc("/api/tamper/baseline/delete", s.handleTamperBaselineDelete)
+	mux.HandleFunc("/results", s.handleResults)
+	mux.HandleFunc("/quota", s.handleQuota)
+	mux.HandleFunc("/batch-screenshot", s.handleBatchScreenshotPage)
+	mux.HandleFunc("/monitor", s.handleMonitorPage)
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.webRoot, "static")))))
 
 	addr := fmt.Sprintf(":%d", s.port)
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: securityMiddleware(mux),
+	}
+
 	logger.Infof("Web server started at http://localhost%s", addr)
-	return http.ListenAndServe(addr, nil)
+	return s.httpServer.ListenAndServe()
+}
+
+// Shutdown 优雅关闭Web服务器
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer == nil {
+		return nil
+	}
+
+	logger.Info("Shutting down web server...")
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		return fmt.Errorf("web server shutdown error: %w", err)
+	}
+
+	// 关闭Chrome进程
+	s.chromeCmdMu.Lock()
+	if s.chromeCmd != nil {
+		logger.Info("Shutting down Chrome process...")
+		if err := s.chromeCmd.Kill(); err != nil {
+			logger.Warnf("Failed to kill Chrome process: %v", err)
+		} else {
+			_, err := s.chromeCmd.Wait()
+			if err != nil {
+				logger.Warnf("Failed to wait for Chrome process: %v", err)
+			}
+		}
+		s.chromeCmd = nil
+	}
+	s.chromeCmdMu.Unlock()
+
+	// 关闭所有WebSocket连接
+	s.connManager.mutex.Lock()
+	for id, conn := range s.connManager.connections {
+		if err := conn.Close(); err != nil {
+			logger.Warnf("Failed to close WebSocket connection %s: %v", id, err)
+		}
+	}
+	s.connManager.connections = make(map[string]*websocket.Conn)
+	s.connManager.mutex.Unlock()
+
+	logger.Info("Web server shutdown completed")
+	return nil
+}
+
+// handleImportCookieJSON 导入浏览器导出的Cookie JSON
+func (s *Server) handleImportCookieJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.config == nil {
+		http.Error(w, "Config not loaded", http.StatusServiceUnavailable)
+		return
+	}
+
+	engine := strings.TrimSpace(r.FormValue("engine"))
+	jsonStr := r.FormValue("cookie_json")
+	if engine == "" || strings.TrimSpace(jsonStr) == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "engine and cookie_json are required",
+		})
+		return
+	}
+
+	cookies, err := config.ParseCookieJSON(jsonStr, config.DefaultCookieDomain(engine))
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "invalid cookie json",
+		})
+		return
+	}
+	if len(cookies) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "no cookies parsed",
+		})
+		return
+	}
+
+	s.configMutex.Lock()
+	switch strings.ToLower(engine) {
+	case "fofa":
+		s.config.Engines.Fofa.Cookies = cookies
+	case "hunter":
+		s.config.Engines.Hunter.Cookies = cookies
+	case "quake":
+		s.config.Engines.Quake.Cookies = cookies
+	case "zoomeye":
+		s.config.Engines.Zoomeye.Cookies = cookies
+	default:
+		s.configMutex.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "unsupported engine",
+		})
+		return
+	}
+	if s.screenshotMgr != nil {
+		s.screenshotMgr.SetCookies(engine, convertConfigCookies(cookies))
+	}
+	if s.configManager != nil {
+		if err := s.configManager.Save(); err != nil {
+			logger.Warnf("Failed to persist cookies: %v", err)
+		}
+	}
+	s.configMutex.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"cookieHeader": cookiesToHeader(cookies),
+	})
+}
+
+// handleVerifyCookies 验证Cookie是否可访问搜索结果页
+func (s *Server) handleVerifyCookies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.screenshotMgr == nil {
+		http.Error(w, "Screenshot manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	query := strings.TrimSpace(r.FormValue("query"))
+	if err := validateQueryInput(query); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	s.applyCookiesFromRequest(r)
+
+	engines := parseEnginesParam(r)
+	if len(engines) == 0 {
+		engines = s.orchestrator.ListAdapters()
+	}
+	if len(engines) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "no engines configured/registered; please set API keys in configs/config.yaml",
+		})
+		return
+	}
+
+	ctx := r.Context()
+	results := make(map[string]interface{})
+	for _, engine := range engines {
+		cookies := s.screenshotMgr.GetCookies(engine)
+		ok, title, hint, err := s.screenshotMgr.ValidateSearchEngineResult(ctx, engine, query, cookies)
+		payload := map[string]interface{}{
+			"ok":    ok,
+			"title": title,
+			"hint":  hint,
+		}
+		if err != nil {
+			payload["error"] = err.Error()
+		}
+		results[engine] = payload
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"query":   query,
+		"results": results,
+	})
+}
+
+// handleSaveCookies 处理保存Cookie请求
+func (s *Server) handleSaveCookies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.applyCookiesFromRequest(r)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// handleCDPStatus 检测CDP端口状态
+func (s *Server) handleCDPStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	baseURL := s.resolveCDPURL()
+	online, info, err := s.checkCDPStatus(r.Context(), baseURL)
+
+	resp := map[string]interface{}{
+		"online": online,
+		"url":    baseURL,
+	}
+	if info != nil {
+		resp["version"] = info
+	}
+	if err != nil && !online {
+		resp["error"] = err.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleCDPConnect 启动Chrome并连接CDP
+func (s *Server) handleCDPConnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	baseURL := s.resolveCDPURL()
+	ctx := r.Context()
+	if ok, info, _ := s.checkCDPStatus(ctx, baseURL); ok {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"online":  true,
+			"url":     baseURL,
+			"version": info,
+			"message": "CDP already online",
+		})
+		return
+	}
+
+	if err := s.startCDPChrome(baseURL); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	online, info, err := s.waitForCDP(ctx, baseURL, 5*time.Second)
+	if online {
+		s.updateCDPConfig(baseURL)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if online {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"online":  true,
+			"url":     baseURL,
+			"version": info,
+			"message": "CDP connected",
+		})
+		return
+	}
+
+	msg := "CDP not available"
+	if err != nil {
+		msg = err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": false,
+		"online":  false,
+		"url":     baseURL,
+		"error":   msg,
+	})
+}
+
+func (s *Server) resolveCDPURL() string {
+	if s.config != nil {
+		if raw := strings.TrimSpace(s.config.Screenshot.ChromeRemoteDebugURL); raw != "" {
+			if normalized := normalizeCDPBaseURL(raw); normalized != "" {
+				return normalized
+			}
+		}
+	}
+	if env := strings.TrimSpace(os.Getenv("UNIMAP_CHROME_REMOTE_DEBUG_URL")); env != "" {
+		if normalized := normalizeCDPBaseURL(env); normalized != "" {
+			return normalized
+		}
+	}
+	return "http://127.0.0.1:9222"
+}
+
+// isRemoteDebuggerAvailable 检查远程调试端口是否可用
+func isRemoteDebuggerAvailable(remoteURL string) bool {
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Get(remoteURL + "/json/version")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func normalizeCDPBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if isAllDigits(raw) {
+		return "http://127.0.0.1:" + raw
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(raw, "/")
+	}
+	if u.Scheme == "ws" {
+		u.Scheme = "http"
+	}
+	if u.Scheme == "wss" {
+		u.Scheme = "https"
+	}
+	if strings.Contains(u.Path, "/devtools/browser/") {
+		u.Path = ""
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/")
+}
+
+func isAllDigits(val string) bool {
+	for _, r := range val {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return val != ""
+}
+
+func (s *Server) checkCDPStatus(ctx context.Context, baseURL string) (bool, map[string]interface{}, error) {
+	baseURL = normalizeCDPBaseURL(baseURL)
+	if baseURL == "" {
+		return false, nil, fmt.Errorf("cdp url is empty")
+	}
+
+	statusURL := strings.TrimRight(baseURL, "/") + "/json/version"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+	if err != nil {
+		return false, nil, err
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, nil, fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+
+	var info map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return false, nil, err
+	}
+
+	return true, info, nil
+}
+
+func (s *Server) waitForCDP(ctx context.Context, baseURL string, timeout time.Duration) (bool, map[string]interface{}, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return false, nil, ctx.Err()
+		}
+		online, info, err := s.checkCDPStatus(ctx, baseURL)
+		if online {
+			return true, info, nil
+		}
+		lastErr = err
+		time.Sleep(300 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("cdp not available")
+	}
+	return false, nil, lastErr
+}
+
+func (s *Server) startCDPChrome(baseURL string) error {
+	s.chromeCmdMu.Lock()
+	defer s.chromeCmdMu.Unlock()
+
+	if s.chromeCmd != nil {
+		return nil
+	}
+
+	chromePath := s.resolveChromePath()
+	if chromePath == "" {
+		return fmt.Errorf("chrome path not configured; set screenshot.chrome_path or UNIMAP_CHROME_PATH")
+	}
+
+	port := resolveCDPPort(baseURL)
+	args := []string{
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		"--remote-debugging-address=127.0.0.1",
+		"--no-first-run",
+		"--no-default-browser-check",
+	}
+
+	if s.config != nil {
+		if dir := strings.TrimSpace(s.config.Screenshot.ChromeUserDataDir); dir != "" {
+			args = append(args, "--user-data-dir="+dir)
+		}
+		if profile := strings.TrimSpace(s.config.Screenshot.ChromeProfileDir); profile != "" {
+			args = append(args, "--profile-directory="+profile)
+		}
+		if s.config.Screenshot.Headless != nil && *s.config.Screenshot.Headless {
+			args = append(args, "--headless=new")
+		}
+	}
+
+	cmd := exec.Command(chromePath, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	s.chromeCmd = cmd.Process
+	return nil
+}
+
+func (s *Server) resolveChromePath() string {
+	if s.config != nil {
+		if raw := strings.TrimSpace(s.config.Screenshot.ChromePath); raw != "" {
+			return raw
+		}
+	}
+	if env := strings.TrimSpace(os.Getenv("UNIMAP_CHROME_PATH")); env != "" {
+		return env
+	}
+	for _, name := range []string{"chrome", "chrome.exe", "msedge", "msedge.exe", "chromium", "chromium.exe"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func resolveCDPPort(baseURL string) int {
+	baseURL = normalizeCDPBaseURL(baseURL)
+	if baseURL == "" {
+		return 9222
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return 9222
+	}
+	if strings.Contains(u.Host, ":") {
+		_, portStr, err := net.SplitHostPort(u.Host)
+		if err == nil {
+			if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
+				return port
+			}
+		}
+	}
+	return 9222
+}
+
+func (s *Server) updateCDPConfig(baseURL string) {
+	if s.config == nil {
+		return
+	}
+
+	if s.screenshotMgr != nil {
+		s.screenshotMgr.SetRemoteDebugURL(baseURL)
+	}
+
+	s.configMutex.Lock()
+	s.config.Screenshot.ChromeRemoteDebugURL = baseURL
+	s.configMutex.Unlock()
+
+	if s.configManager != nil {
+		if err := s.configManager.Save(); err != nil {
+			logger.Warnf("Failed to persist CDP URL: %v", err)
+		}
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +907,112 @@ func parseWSInt(val interface{}, defaultValue int) int {
 	}
 }
 
+func validateQueryInput(query string) error {
+	if strings.TrimSpace(query) == "" {
+		return fmt.Errorf("Query cannot be empty")
+	}
+	if len(query) > 1000 {
+		return fmt.Errorf("Query is too long (maximum 1000 characters)")
+	}
+	for _, r := range query {
+		if r < 32 && r != '\t' && r != '\n' && r != '\r' {
+			return fmt.Errorf("Query contains invalid characters")
+		}
+	}
+	return nil
+}
+
+func (s *Server) applyCookiesFromRequest(r *http.Request) {
+	if s.config == nil {
+		return
+	}
+
+	s.configMutex.Lock()
+	defer s.configMutex.Unlock()
+
+	changed := false
+	clear := strings.EqualFold(strings.TrimSpace(r.FormValue("clear_cookies")), "true")
+	if clear {
+		s.config.Engines.Fofa.Cookies = nil
+		s.config.Engines.Hunter.Cookies = nil
+		s.config.Engines.Quake.Cookies = nil
+		s.config.Engines.Zoomeye.Cookies = nil
+		changed = true
+		if s.screenshotMgr != nil {
+			s.screenshotMgr.SetCookies("fofa", nil)
+			s.screenshotMgr.SetCookies("hunter", nil)
+			s.screenshotMgr.SetCookies("quake", nil)
+			s.screenshotMgr.SetCookies("zoomeye", nil)
+		}
+	}
+
+	apply := func(engine, value string) {
+		if clear {
+			return
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		cookies := config.ParseCookieHeader(value, config.DefaultCookieDomain(engine))
+		if len(cookies) == 0 {
+			return
+		}
+
+		switch strings.ToLower(engine) {
+		case "fofa":
+			s.config.Engines.Fofa.Cookies = cookies
+		case "hunter":
+			s.config.Engines.Hunter.Cookies = cookies
+		case "quake":
+			s.config.Engines.Quake.Cookies = cookies
+		case "zoomeye":
+			s.config.Engines.Zoomeye.Cookies = cookies
+		default:
+			return
+		}
+		changed = true
+
+		if s.screenshotMgr != nil {
+			s.screenshotMgr.SetCookies(engine, convertConfigCookies(cookies))
+		}
+	}
+
+	apply("fofa", r.FormValue("cookie_fofa"))
+	apply("hunter", r.FormValue("cookie_hunter"))
+	apply("zoomeye", r.FormValue("cookie_zoomeye"))
+	apply("quake", r.FormValue("cookie_quake"))
+
+	if changed && s.configManager != nil {
+		if err := s.configManager.Save(); err != nil {
+			logger.Warnf("Failed to persist cookies: %v", err)
+		}
+	}
+}
+
+func cookiesToHeader(cookies []config.Cookie) string {
+	if len(cookies) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if strings.TrimSpace(c.Name) == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.Value))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func hasCookies(cookies []config.Cookie) bool {
+	for _, c := range cookies {
+		if strings.TrimSpace(c.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // handleAPIQuery 处理API查询请求（用于异步查询）
 func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -344,31 +1021,15 @@ func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := strings.TrimSpace(r.FormValue("query"))
-	if query == "" {
+	if err := validateQueryInput(query); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": "Query cannot be empty",
+			"error": err.Error(),
 		})
 		return
 	}
 
-	// 输入验证：检查查询长度和内容
-	if len(query) > 1000 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": "Query is too long (maximum 1000 characters)",
-		})
-		return
-	}
-
-	// 输入验证：检查是否包含恶意字符
-	if strings.Contains(query, "'") || strings.Contains(query, "\"") || strings.Contains(query, "\\") {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": "Query contains invalid characters",
-		})
-		return
-	}
+	s.applyCookiesFromRequest(r)
 
 	pageSizeStr := r.FormValue("page_size")
 
@@ -690,12 +1351,276 @@ func (s *Server) handleBatchScreenshot(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+// handleBatchURLsScreenshot 处理批量URL截图请求
+func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.screenshotMgr == nil {
+		http.Error(w, "Screenshot manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		URLs        []string `json:"urls"`
+		BatchID     string   `json:"batch_id"`
+		Concurrency int      `json:"concurrency"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.URLs) == 0 {
+		http.Error(w, "No URLs provided", http.StatusBadRequest)
+		return
+	}
+
+	// 限制最大URL数量
+	if len(req.URLs) > 100 {
+		http.Error(w, "Too many URLs (max 100)", http.StatusBadRequest)
+		return
+	}
+
+	// 如果没有提供batchID，生成一个
+	if req.BatchID == "" {
+		req.BatchID = fmt.Sprintf("batch_%d", time.Now().UnixNano())
+	}
+
+	// 默认并发数
+	if req.Concurrency <= 0 || req.Concurrency > 10 {
+		req.Concurrency = 5
+	}
+
+	ctx := r.Context()
+	results, err := s.screenshotMgr.CaptureBatchURLs(ctx, req.URLs, req.BatchID, req.Concurrency)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Batch screenshot failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 统计结果
+	successCount := 0
+	failCount := 0
+	for _, result := range results {
+		if result.Success {
+			successCount++
+		} else {
+			failCount++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"batch_id":       req.BatchID,
+		"total":          len(req.URLs),
+		"success":        successCount,
+		"failed":         failCount,
+		"results":        results,
+		"screenshot_dir": s.screenshotMgr.GetScreenshotDirectory(),
+	})
+}
+
+// handleBatchScreenshotPage 处理批量截图页面
+func (s *Server) handleBatchScreenshotPage(w http.ResponseWriter, r *http.Request) {
+	s.templates.ExecuteTemplate(w, "batch-screenshot.html", map[string]interface{}{
+		"staticVersion": s.staticVersion,
+	})
+}
+
+// handleMonitorPage 处理网页监控页面
+func (s *Server) handleMonitorPage(w http.ResponseWriter, r *http.Request) {
+	s.templates.ExecuteTemplate(w, "monitor.html", map[string]interface{}{
+		"staticVersion": s.staticVersion,
+	})
+}
+
+// handleImportURLs 处理URL文件导入
+func (s *Server) handleImportURLs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 解析multipart表单
+	err := r.ParseMultipartForm(10 << 20) // 10MB限制
+	if err != nil {
+		http.Error(w, "Failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Failed to get file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	fileName := strings.ToLower(header.Filename)
+	var urls []string
+
+	if strings.HasSuffix(fileName, ".xlsx") || strings.HasSuffix(fileName, ".xls") {
+		// 解析Excel文件
+		urls, err = parseExcelFile(file)
+	} else if strings.HasSuffix(fileName, ".csv") {
+		// 解析CSV文件
+		urls, err = parseCSVFile(file)
+	} else if strings.HasSuffix(fileName, ".txt") {
+		// 解析TXT文件
+		urls, err = parseTXTFile(file)
+	} else {
+		http.Error(w, "Unsupported file format", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, "Failed to parse file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 过滤有效URL
+	validUrls := filterValidURLs(urls)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total":    len(urls),
+		"valid":    len(validUrls),
+		"urls":     validUrls,
+		"filename": header.Filename,
+	})
+}
+
+// parseExcelFile 解析Excel文件
+func parseExcelFile(file io.Reader) ([]string, error) {
+	f, err := excelize.OpenReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// 获取第一个工作表
+	sheetName := f.GetSheetName(0)
+	if sheetName == "" {
+		return nil, fmt.Errorf("no sheet found")
+	}
+
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		return nil, err
+	}
+
+	var urls []string
+	for i, row := range rows {
+		if i == 0 {
+			// 跳过表头
+			continue
+		}
+		if len(row) > 0 && row[0] != "" {
+			urls = append(urls, strings.TrimSpace(row[0]))
+		}
+	}
+
+	return urls, nil
+}
+
+// parseCSVFile 解析CSV文件
+func parseCSVFile(file io.Reader) ([]string, error) {
+	reader := csv.NewReader(file)
+	var urls []string
+	isFirstRow := true
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if isFirstRow {
+			isFirstRow = false
+			// 检查是否是表头
+			if len(record) > 0 && (strings.ToLower(record[0]) == "url" ||
+				strings.ToLower(record[0]) == "address" ||
+				strings.ToLower(record[0]) == "网址") {
+				continue
+			}
+		}
+
+		if len(record) > 0 && record[0] != "" {
+			urls = append(urls, strings.TrimSpace(record[0]))
+		}
+	}
+
+	return urls, nil
+}
+
+// parseTXTFile 解析TXT文件
+func parseTXTFile(file io.Reader) ([]string, error) {
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var urls []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			urls = append(urls, line)
+		}
+	}
+
+	return urls, nil
+}
+
+// filterValidURLs 过滤有效URL
+func filterValidURLs(urls []string) []string {
+	var valid []string
+	seen := make(map[string]bool)
+
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" || seen[u] {
+			continue
+		}
+
+		// 简单URL验证
+		if matched, _ := regexp.MatchString(`^(https?://)?([\w.-]+)(:\d+)?(/.*)?$`, u); matched {
+			valid = append(valid, u)
+			seen[u] = true
+		}
+	}
+
+	return valid
+}
+
 // handleIndex 处理首页请求
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	engines := s.orchestrator.ListAdapters()
+	var fofaCookies, hunterCookies, quakeCookies, zoomeyeCookies []config.Cookie
+	if s.config != nil {
+		fofaCookies = s.config.Engines.Fofa.Cookies
+		hunterCookies = s.config.Engines.Hunter.Cookies
+		quakeCookies = s.config.Engines.Quake.Cookies
+		zoomeyeCookies = s.config.Engines.Zoomeye.Cookies
+	}
 	s.templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
-		"engines":       engines,
-		"staticVersion": s.staticVersion,
+		"engines":          engines,
+		"staticVersion":    s.staticVersion,
+		"cookieFofa":       cookiesToHeader(fofaCookies),
+		"cookieHunter":     cookiesToHeader(hunterCookies),
+		"cookieQuake":      cookiesToHeader(quakeCookies),
+		"cookieZoomeye":    cookiesToHeader(zoomeyeCookies),
+		"cookieHasFofa":    hasCookies(fofaCookies),
+		"cookieHasHunter":  hasCookies(hunterCookies),
+		"cookieHasQuake":   hasCookies(quakeCookies),
+		"cookieHasZoomeye": hasCookies(zoomeyeCookies),
 	})
 }
 
@@ -707,28 +1632,14 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := strings.TrimSpace(r.FormValue("query"))
-	if query == "" {
+	if err := validateQueryInput(query); err != nil {
 		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
-			"error": "Query cannot be empty",
+			"error": err.Error(),
 		})
 		return
 	}
 
-	// 输入验证：检查查询长度和内容
-	if len(query) > 1000 {
-		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
-			"error": "Query is too long (maximum 1000 characters)",
-		})
-		return
-	}
-
-	// 输入验证：检查是否包含恶意字符
-	if strings.Contains(query, "'") || strings.Contains(query, "\"") || strings.Contains(query, "\\") {
-		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
-			"error": "Query contains invalid characters",
-		})
-		return
-	}
+	s.applyCookiesFromRequest(r)
 
 	pageSize := 50
 
@@ -960,35 +1871,10 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 	query, _ := message["query"].(string)
 	query = strings.TrimSpace(query)
 
-	if query == "" {
-		// 发送查询错误消息
+	if err := validateQueryInput(query); err != nil {
 		if err := conn.WriteJSON(map[string]interface{}{
 			"type":  "query_error",
-			"error": "Query cannot be empty",
-		}); err != nil {
-			fmt.Printf("WebSocket write error: %v\n", err)
-		}
-		return
-	}
-
-	// 输入验证：检查查询长度和内容
-	if len(query) > 1000 {
-		// 发送查询错误消息
-		if err := conn.WriteJSON(map[string]interface{}{
-			"type":  "query_error",
-			"error": "Query is too long (maximum 1000 characters)",
-		}); err != nil {
-			logger.Errorf("WebSocket write error: %v", err)
-		}
-		return
-	}
-
-	// 输入验证：检查是否包含恶意字符
-	if strings.Contains(query, "'") || strings.Contains(query, "\"") || strings.Contains(query, "\\") {
-		// 发送查询错误消息
-		if err := conn.WriteJSON(map[string]interface{}{
-			"type":  "query_error",
-			"error": "Query contains invalid characters",
+			"error": err.Error(),
 		}); err != nil {
 			logger.Errorf("WebSocket write error: %v", err)
 		}
@@ -1183,4 +2069,160 @@ func (s *Server) updateQueryProgress(queryID string, progress float64) {
 			"progress": progress,
 		})
 	}
+}
+
+// handleTamperCheck 处理篡改检测请求
+func (s *Server) handleTamperCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URLs        []string `json:"urls"`
+		Concurrency int      `json:"concurrency"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.URLs) == 0 {
+		http.Error(w, "No URLs provided", http.StatusBadRequest)
+		return
+	}
+
+	if req.Concurrency <= 0 {
+		req.Concurrency = 5
+	}
+
+	// 创建篡改检测器
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir: "./hash_store",
+	})
+
+	// 执行篡改检测
+	results, err := detector.BatchCheckTampering(r.Context(), req.URLs, req.Concurrency)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Tamper check failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"results": results,
+	})
+}
+
+// handleTamperBaseline 处理基线设置请求
+func (s *Server) handleTamperBaseline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URLs        []string `json:"urls"`
+		Concurrency int      `json:"concurrency"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.URLs) == 0 {
+		http.Error(w, "No URLs provided", http.StatusBadRequest)
+		return
+	}
+
+	if req.Concurrency <= 0 {
+		req.Concurrency = 5
+	}
+
+	// 创建篡改检测器
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir: "./hash_store",
+	})
+
+	// 设置基线
+	results, err := detector.BatchSetBaseline(r.Context(), req.URLs, req.Concurrency)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Set baseline failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"results": results,
+	})
+}
+
+// handleTamperBaselineList 处理基线列表请求
+func (s *Server) handleTamperBaselineList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 创建篡改检测器
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir: "./hash_store",
+	})
+
+	// 获取基线列表
+	urls, err := detector.ListBaselines()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("List baselines failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"urls":    urls,
+		"count":   len(urls),
+	})
+}
+
+// handleTamperBaselineDelete 处理删除基线请求
+func (s *Server) handleTamperBaselineDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" {
+		http.Error(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// 创建篡改检测器
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir: "./hash_store",
+	})
+
+	// 删除基线
+	if err := detector.DeleteBaseline(req.URL); err != nil {
+		http.Error(w, fmt.Sprintf("Delete baseline failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Baseline for %s deleted", req.URL),
+	})
 }

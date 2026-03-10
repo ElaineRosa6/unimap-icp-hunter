@@ -150,6 +150,15 @@ docker exec -it unimap-api sh
 ./unimap-api list-engines
 ```
 
+### Web 端（可选）
+
+```bash
+# 启动 Web 端（默认 8448 端口）
+go run ./cmd/unimap-web
+```
+
+浏览器访问 `http://localhost:8448`，点击 **"连接 CDP"** 可自动检测并启动 Chrome 调试端口，复用浏览器登录态进行截图验证。
+
 ### ICP-Hunter CLI
 
 ```bash

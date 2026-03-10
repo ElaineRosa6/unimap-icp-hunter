@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -88,7 +90,11 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 	copy(sortedEngines, req.Engines)
 	sort.Strings(sortedEngines)
 
-	cacheKey := fmt.Sprintf("%s:%s:%d:%t", strings.Join(sortedEngines, ","), req.Query, req.PageSize, req.ProcessData)
+	// 使用SHA256生成缓存键，避免特殊字符导致的键冲突
+	keyData := fmt.Sprintf("%s|%s|%d|%t", strings.Join(sortedEngines, ","), req.Query, req.PageSize, req.ProcessData)
+	hash := sha256.Sum256([]byte(keyData))
+	cacheKey := hex.EncodeToString(hash[:])
+
 	if cachedAssets, found := s.cache.Get(cacheKey); found {
 		// 触发查询前钩子
 		if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{

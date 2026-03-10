@@ -17,6 +17,7 @@
 - 🤖 **自动化检测**: 每日自动扫描，检测未备案网站
 - 📊 **智能分析**: 基于正则表达式的 ICP 备案号识别
 - 📸 **截图存档**: 支持网站截图保存到 MinIO/S3
+- 🧩 **CDP 登录复用**: 支持连接 Chrome 调试端口，复用浏览器登录态
 - 📧 **通知系统**: 邮件、Webhook (钉钉/企业微信/飞书) 通知
 - 📈 **统计报表**: 每日统计、未备案列表、历史趋势
 - 🐳 **容器化部署**: Docker Compose 一键部署
@@ -25,14 +26,14 @@
 ## 技术栈
 
 - **语言**: Go 1.22+
-- **Web 框架**: Gin
-- **CLI 框架**: Cobra + Viper
-- **数据库**: MySQL 8.0 (GORM)
-- **缓存/队列**: Redis 7 (Stream)
-- **对象存储**: MinIO / S3
-- **日志**: Zap
-- **监控**: Prometheus + Grafana
+- **Web 框架**: 标准库 `net/http` (支持优雅关闭)
+- **CLI 框架**: 标准库 `flag`
+- **配置管理**: Viper + YAML
+- **缓存**: 内存缓存 + Redis (可选)
+- **日志**: 自定义 Logger (支持分级)
+- **截图**: chromedp (Chrome DevTools Protocol)
 - **容器化**: Docker + Docker Compose
+- **优雅关闭**: 自定义 ShutdownManager (信号监听、超时控制)
 
 ## 项目结构
 
@@ -198,6 +199,31 @@ docker exec -it icp-scheduler sh
 curl -X POST http://localhost:8080/api/v1/unimap/query \
   -H "Content-Type: application/json" \
   -d '{"query": "country=\"CN\" && port=\"80\"", "engines": ["fofa", "hunter"], "limit": 100}'
+
+### 6. Web 端与 CDP 连接（截图/登录态复用）
+
+Web 端默认监听 **8448** 端口：
+
+```bash
+# 启动 Web 端
+./unimap-web
+```
+
+打开浏览器访问 `http://localhost:8448`，在页面中点击 **"连接 CDP"**，系统会自动检测并启动 Chrome 调试端口，成功后即可复用浏览器登录态进行截图验证。
+
+配置项（见 configs/config.yaml）：
+
+- `screenshot.chrome_path`: Chrome 可执行文件路径（Windows 建议显式设置）
+- `screenshot.chrome_user_data_dir`: 复用已有浏览器用户目录
+- `screenshot.chrome_profile_dir`: 复用指定 Profile（默认 `Default`）
+- `screenshot.chrome_remote_debug_url`: CDP 地址（默认 `http://127.0.0.1:9222`）
+
+也支持环境变量：
+
+- `UNIMAP_CHROME_PATH`
+- `UNIMAP_CHROME_USER_DATA_DIR`
+- `UNIMAP_CHROME_PROFILE_DIR`
+- `UNIMAP_CHROME_REMOTE_DEBUG_URL`
 
 # 获取统计 (GET /api/v1/stats/daily)
 curl http://localhost:8080/api/v1/stats/daily?days=7
@@ -546,6 +572,15 @@ go test ./...
 - [性能优化指南](docs/性能优化指南.md) - 性能调优建议
 
 ## 更新日志
+
+### v2.0.1 (2026-03-09)
+- ✅ 修复 FOFA 错误处理逻辑，统一错误格式
+- ✅ 添加空指针检查，增强代码健壮性
+- ✅ 使用 `url.URL` 安全构建 URL，避免特殊字符问题
+- ✅ 统一日志记录，使用内部 logger 模块
+- ✅ 新增优雅关闭机制，支持信号监听和资源清理
+- ✅ Web 服务器支持优雅关闭 HTTP 和 WebSocket 连接
+- ✅ 所有代码通过 `go vet` 检查
 
 ### v1.0.1 (2026-02-01)
 - ✅ 修复编译错误和代码质量问题

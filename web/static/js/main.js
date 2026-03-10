@@ -44,6 +44,37 @@ function initQueryForm() {
 			saveQuery();
 		});
 	}
+
+	const saveCookiesBtn = document.getElementById('btn-save-cookies');
+	if (saveCookiesBtn) {
+		saveCookiesBtn.addEventListener('click', function() {
+			saveCookies(saveCookiesBtn);
+		});
+	}
+
+	const clearCookiesBtn = document.getElementById('btn-clear-cookies');
+	if (clearCookiesBtn) {
+		clearCookiesBtn.addEventListener('click', function() {
+			clearCookies(clearCookiesBtn);
+		});
+	}
+
+	const verifyCookiesBtn = document.getElementById('btn-verify-cookies');
+	if (verifyCookiesBtn) {
+		verifyCookiesBtn.addEventListener('click', function() {
+			verifyCookies(verifyCookiesBtn);
+		});
+	}
+
+	const importCookieBtn = document.getElementById('btn-import-cookie-json');
+	if (importCookieBtn) {
+		importCookieBtn.addEventListener('click', function() {
+			importCookieJSON(importCookieBtn);
+		});
+	}
+
+	initCookieStatus();
+	initCDPControls();
 	
 	// 表单提交事件
 	form.addEventListener('submit', function(e) {
@@ -86,6 +117,333 @@ function initQueryForm() {
 
 	// 初始化引擎状态
 	checkEngineStatus();
+}
+
+function initCDPControls() {
+	const statusBadge = document.getElementById('cdp-status');
+	const statusInfo = document.getElementById('cdp-status-info');
+	const connectBtn = document.getElementById('btn-connect-cdp');
+
+	if (!statusBadge && !statusInfo && !connectBtn) {
+		return;
+	}
+
+	const refresh = function() {
+		refreshCDPStatus(statusBadge, statusInfo);
+	};
+
+	refresh();
+	setInterval(refresh, 15000);
+
+	if (connectBtn) {
+		connectBtn.addEventListener('click', function() {
+			connectCDP(connectBtn, statusBadge, statusInfo);
+		});
+	}
+}
+
+function refreshCDPStatus(statusBadge, statusInfo) {
+	fetch('/api/cdp/status')
+		.then(resp => resp.json())
+		.then(data => {
+			const online = data && data.online;
+			const url = data && data.url ? data.url : '';
+			updateCDPBadge(statusBadge, online);
+			if (statusInfo) {
+				if (online) {
+					statusInfo.textContent = url ? `在线: ${url}` : '在线';
+				} else if (data && data.error) {
+					statusInfo.textContent = data.error;
+				} else {
+					statusInfo.textContent = '未连接';
+				}
+			}
+		})
+		.catch(err => {
+			console.error('CDP status error:', err);
+			updateCDPBadge(statusBadge, false);
+			if (statusInfo) {
+				statusInfo.textContent = '检测失败';
+			}
+		});
+}
+
+function connectCDP(button, statusBadge, statusInfo) {
+	const originalText = button.textContent;
+	button.textContent = '连接中...';
+	button.disabled = true;
+
+	fetch('/api/cdp/connect', {
+		method: 'POST'
+	})
+		.then(resp => resp.json())
+		.then(data => {
+			const online = data && data.online;
+			const url = data && data.url ? data.url : '';
+			updateCDPBadge(statusBadge, online);
+			if (statusInfo) {
+				if (online) {
+					statusInfo.textContent = url ? `在线: ${url}` : '在线';
+				} else if (data && data.error) {
+					statusInfo.textContent = data.error;
+				} else {
+					statusInfo.textContent = '连接失败';
+				}
+			}
+		})
+		.catch(err => {
+			console.error('CDP connect error:', err);
+			updateCDPBadge(statusBadge, false);
+			if (statusInfo) {
+				statusInfo.textContent = '连接失败';
+			}
+		})
+		.finally(() => {
+			button.textContent = originalText;
+			button.disabled = false;
+		});
+}
+
+function updateCDPBadge(badge, online) {
+	if (!badge) return;
+	badge.textContent = online ? '在线' : '未连接';
+	badge.classList.toggle('cookie-status--on', online);
+	badge.classList.toggle('cookie-status--off', !online);
+}
+
+function importCookieJSON(button) {
+	const engine = document.getElementById('cookie-json-engine').value;
+	const jsonText = document.getElementById('cookie-json').value;
+	if (!jsonText.trim()) {
+		alert('请粘贴 Cookie JSON');
+		return;
+	}
+
+	const formData = new FormData();
+	formData.append('engine', engine);
+	formData.append('cookie_json', jsonText);
+
+	const originalText = button.textContent;
+	button.textContent = '导入中...';
+	button.disabled = true;
+
+	fetch('/api/cookies/import', {
+		method: 'POST',
+		body: formData
+	})
+		.then(resp => resp.json())
+		.then(data => {
+			if (data && data.success) {
+				const inputId = `cookie-${engine}`;
+				const input = document.getElementById(inputId);
+				if (input && data.cookieHeader) {
+					input.value = data.cookieHeader;
+				}
+				initCookieStatus();
+				alert('Cookie JSON 导入成功');
+			} else {
+				alert(data && data.error ? data.error : '导入失败');
+			}
+		})
+		.catch(err => {
+			console.error('Import cookie json error:', err);
+			alert('导入失败');
+		})
+		.finally(() => {
+			button.textContent = originalText;
+			button.disabled = false;
+		});
+}
+
+function verifyCookies(button) {
+	const query = document.getElementById('query').value;
+	if (!query.trim()) {
+		alert('请先输入查询语句');
+		return;
+	}
+
+	const formData = new FormData();
+	formData.append('query', query);
+
+	const engineInputs = document.querySelectorAll('input[name="engines"]:checked');
+	engineInputs.forEach(input => {
+		formData.append('engines', input.value);
+	});
+
+	const fofa = document.getElementById('cookie-fofa');
+	const hunter = document.getElementById('cookie-hunter');
+	const zoomeye = document.getElementById('cookie-zoomeye');
+	const quake = document.getElementById('cookie-quake');
+	if (fofa && fofa.value) formData.append('cookie_fofa', fofa.value);
+	if (hunter && hunter.value) formData.append('cookie_hunter', hunter.value);
+	if (zoomeye && zoomeye.value) formData.append('cookie_zoomeye', zoomeye.value);
+	if (quake && quake.value) formData.append('cookie_quake', quake.value);
+
+	const resultBox = document.getElementById('cookie-verify-result');
+	if (resultBox) {
+		resultBox.textContent = '正在验证 Cookie，请稍候...';
+	}
+
+	const originalText = button.textContent;
+	button.textContent = '验证中...';
+	button.disabled = true;
+
+	fetch('/api/cookies/verify', {
+		method: 'POST',
+		body: formData
+	})
+		.then(resp => resp.json())
+		.then(data => {
+			if (!resultBox) return;
+			if (data && data.results) {
+				const items = [];
+				Object.keys(data.results).forEach(engine => {
+					const item = data.results[engine];
+					const ok = item && item.ok;
+					const hint = item && item.hint ? item.hint : '';
+					const title = item && item.title ? item.title : '';
+					const status = ok ? '<span class="ok">正常</span>' : '<span class="fail">异常</span>';
+					items.push(`<div>${engine}: ${status}${title ? ' - ' + title : ''}${hint ? ' (' + hint + ')' : ''}</div>`);
+				});
+				resultBox.innerHTML = items.join('');
+			} else if (data && data.error) {
+				resultBox.textContent = data.error;
+			} else {
+				resultBox.textContent = '验证失败，请稍后重试。';
+			}
+		})
+		.catch(err => {
+			console.error('Verify cookies error:', err);
+			if (resultBox) {
+				resultBox.textContent = '验证失败，请稍后重试。';
+			}
+		})
+		.finally(() => {
+			button.textContent = originalText;
+			button.disabled = false;
+		});
+}
+
+function initCookieStatus() {
+	const map = [
+		{ input: 'cookie-fofa', badge: 'cookie-status-fofa' },
+		{ input: 'cookie-hunter', badge: 'cookie-status-hunter' },
+		{ input: 'cookie-zoomeye', badge: 'cookie-status-zoomeye' },
+		{ input: 'cookie-quake', badge: 'cookie-status-quake' }
+	];
+
+	map.forEach(item => {
+		const input = document.getElementById(item.input);
+		const badge = document.getElementById(item.badge);
+		if (!input || !badge) return;
+		input.addEventListener('input', function() {
+			updateCookieBadge(badge, input.value);
+		});
+		updateCookieBadge(badge, input.value);
+	});
+}
+
+function updateCookieBadge(badge, value) {
+	const hasValue = value && value.trim().length > 0;
+	badge.textContent = hasValue ? '已配置' : '未配置';
+	badge.classList.toggle('cookie-status--on', hasValue);
+	badge.classList.toggle('cookie-status--off', !hasValue);
+}
+
+function clearCookies(button) {
+	if (!confirm('确定要清空所有引擎 Cookie 吗？')) {
+		return;
+	}
+
+	const fofa = document.getElementById('cookie-fofa');
+	const hunter = document.getElementById('cookie-hunter');
+	const zoomeye = document.getElementById('cookie-zoomeye');
+	const quake = document.getElementById('cookie-quake');
+	if (fofa) fofa.value = '';
+	if (hunter) hunter.value = '';
+	if (zoomeye) zoomeye.value = '';
+	if (quake) quake.value = '';
+
+	const formData = new FormData();
+	formData.append('clear_cookies', 'true');
+
+	const originalText = button.textContent;
+	button.textContent = '清空中...';
+	button.disabled = true;
+
+	fetch('/api/cookies', {
+		method: 'POST',
+		body: formData
+	})
+		.then(resp => resp.json())
+		.then(data => {
+			if (data && data.success) {
+				initCookieStatus();
+				alert('Cookie 已清空');
+			} else {
+				alert('Cookie 清空失败');
+			}
+		})
+		.catch(err => {
+			console.error('Clear cookies error:', err);
+			alert('Cookie 清空失败');
+		})
+		.finally(() => {
+			button.textContent = originalText;
+			button.disabled = false;
+		});
+}
+
+function saveCookies(button) {
+	const fofa = document.getElementById('cookie-fofa');
+	const hunter = document.getElementById('cookie-hunter');
+	const zoomeye = document.getElementById('cookie-zoomeye');
+	const quake = document.getElementById('cookie-quake');
+
+	const formData = new FormData();
+	if (fofa && fofa.value) {
+		formData.append('cookie_fofa', fofa.value);
+	}
+	if (hunter && hunter.value) {
+		formData.append('cookie_hunter', hunter.value);
+	}
+	if (zoomeye && zoomeye.value) {
+		formData.append('cookie_zoomeye', zoomeye.value);
+	}
+	if (quake && quake.value) {
+		formData.append('cookie_quake', quake.value);
+	}
+
+	if ([...formData.keys()].length === 0) {
+		alert('请先填写至少一个 Cookie');
+		return;
+	}
+
+	const originalText = button.textContent;
+	button.textContent = '保存中...';
+	button.disabled = true;
+
+	fetch('/api/cookies', {
+		method: 'POST',
+		body: formData
+	})
+		.then(resp => resp.json())
+		.then(data => {
+			if (data && data.success) {
+				initCookieStatus();
+				alert('Cookie 已保存到配置文件');
+			} else {
+				alert('Cookie 保存失败');
+			}
+		})
+		.catch(err => {
+			console.error('Save cookies error:', err);
+			alert('Cookie 保存失败');
+		})
+		.finally(() => {
+			button.textContent = originalText;
+			button.disabled = false;
+		});
 }
 
 // WebSocket连接管理

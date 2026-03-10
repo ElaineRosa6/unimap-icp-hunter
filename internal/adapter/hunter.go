@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -362,12 +363,16 @@ func (h *HunterAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset
 			if asset.Host != "" {
 				host = asset.Host
 			}
-			// Simple URL construction
+			// 使用 url.URL 结构体安全构建 URL
 			urlScheme := "http"
 			if strings.HasPrefix(proto, "https") || asset.Port == 443 {
 				urlScheme = "https"
 			}
-			asset.URL = fmt.Sprintf("%s://%s:%d", urlScheme, host, asset.Port)
+			u := &url.URL{
+				Scheme: urlScheme,
+				Host:   fmt.Sprintf("%s:%d", host, asset.Port),
+			}
+			asset.URL = u.String()
 		}
 
 		if asset.IP != "" {
@@ -427,7 +432,26 @@ func (h *HunterAdapter) GetQuota() (*model.QuotaInfo, error) {
 	// Hunter的响应中，RestFreePoint是剩余的免费点数，DayFreePoint是每日免费点数
 	total := result.Data.DayFreePoint
 	remain := result.Data.RestFreePoint
+
+	// 边界检查：确保数值合理
+	if remain < 0 {
+		remain = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+
+	// 计算已用配额，确保不会出现负数
 	used := total - remain
+	if used < 0 {
+		used = 0
+	}
+
+	// 如果剩余大于总数，调整总数
+	if remain > total {
+		total = remain
+		used = 0
+	}
 
 	// 打印解析后的配额信息
 	logger.Infof("Hunter quota: total=%d, used=%d, remain=%d", total, used, remain)
