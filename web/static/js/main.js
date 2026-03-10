@@ -733,8 +733,8 @@ function showResults(data) {
 					<input type="text" id="filter-port" placeholder="端口" class="form-control" style="width: 80px; padding: 5px;">
 					<input type="text" id="filter-protocol" placeholder="协议" class="form-control" style="width: 80px; padding: 5px;">
 					<input type="text" id="filter-source" placeholder="来源" class="form-control" style="width: 100px; padding: 5px;">
-					<button id="btn-apply-filter" class="btn btn-sm btn-primary">筛选</button>
-					<button id="btn-reset-filter" class="btn btn-sm btn-secondary">重置</button>
+					<button id="btn-apply-filter" class="btn">筛选</button>
+					<button id="btn-reset-filter" class="btn">重置</button>							
 					<span style="font-size: 0.9em; margin-left: auto;">
 						显示: <span id="displayed-count">${assets.length}</span> / <span id="total-count">${assets.length}</span>
 					</span>
