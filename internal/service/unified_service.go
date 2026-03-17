@@ -148,9 +148,11 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 	}
 
 	// 并行搜索
+	var errors []string
 	engineResults, err := s.orchestrator.SearchEngines(queries, req.PageSize)
 	if err != nil {
 		// 记录错误但继续处理
+		errors = append(errors, err.Error())
 		s.pluginManager.GetHooks().TriggerHook(plugin.HookQueryError, "query", map[string]interface{}{
 			"error": err.Error(),
 		})
@@ -159,7 +161,6 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 	// 规范化和合并结果
 	var allAssets []model.UnifiedAsset
 	engineStats := make(map[string]int)
-	var errors []string
 
 	for _, result := range engineResults {
 		if result == nil {
@@ -429,4 +430,15 @@ func (a *enginePluginAdapter) GetQuota() (*model.QuotaInfo, error) {
 		Unit:      "queries",
 		Expiry:    "",
 	}, nil
+}
+
+func (a *enginePluginAdapter) IsWebOnly() bool {
+	// 检查引擎插件是否实现了IsWebOnly方法
+	if webOnlyPlugin, ok := a.engine.(interface {
+		IsWebOnly() bool
+	}); ok {
+		return webOnlyPlugin.IsWebOnly()
+	}
+	// 如果引擎插件没有实现IsWebOnly方法，返回默认值
+	return false
 }

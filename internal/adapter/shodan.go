@@ -410,3 +410,21 @@ func (s *ShodanAdapter) GetQuota() (*model.QuotaInfo, error) {
 		Expiry:    "", // Shodan API doesn't return expiry info
 	}, nil
 }
+
+// IsWebOnly 检查是否为 Web-only 模式
+func (s *ShodanAdapter) IsWebOnly() bool {
+	return false
+}
+
+// ShodanAdapterWebOnly Shodan Web-only模式适配器
+type ShodanAdapterWebOnly struct {
+	*WebOnlyAdapterBase
+}
+
+// NewShodanAdapterWebOnly 创建Shodan Web-only适配器
+func NewShodanAdapterWebOnly() *ShodanAdapterWebOnly {
+	baseAdapter := NewShodanAdapter("", "", 3, 30*time.Second)
+	return &ShodanAdapterWebOnly{
+		WebOnlyAdapterBase: NewWebOnlyAdapterBase(baseAdapter, "shodan"),
+	}
+}

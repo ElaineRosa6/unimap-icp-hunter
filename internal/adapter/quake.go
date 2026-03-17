@@ -435,3 +435,21 @@ func (q *QuakeAdapter) GetQuota() (*model.QuotaInfo, error) {
 		Expiry:    "", // Quake API doesn't return expiry info
 	}, nil
 }
+
+// IsWebOnly 检查是否为 Web-only 模式
+func (q *QuakeAdapter) IsWebOnly() bool {
+	return false
+}
+
+// QuakeAdapterWebOnly Quake Web-only模式适配器
+type QuakeAdapterWebOnly struct {
+	*WebOnlyAdapterBase
+}
+
+// NewQuakeAdapterWebOnly 创建Quake Web-only适配器
+func NewQuakeAdapterWebOnly() *QuakeAdapterWebOnly {
+	baseAdapter := NewQuakeAdapter("", "", 3, 30*time.Second)
+	return &QuakeAdapterWebOnly{
+		WebOnlyAdapterBase: NewWebOnlyAdapterBase(baseAdapter, "quake"),
+	}
+}

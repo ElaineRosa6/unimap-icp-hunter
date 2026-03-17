@@ -76,58 +76,84 @@ func main() {
 // registerEngines 注册引擎适配器
 func registerEngines(svc *service.UnifiedService, cfg *config.Config) {
 	// 注册FOFA
-	if cfg.Engines.Fofa.Enabled && cfg.Engines.Fofa.APIKey != "" {
-		svc.RegisterAdapter(adapter.NewFofaAdapter(
-			cfg.Engines.Fofa.BaseURL,
-			cfg.Engines.Fofa.APIKey,
-			cfg.Engines.Fofa.Email,
-			cfg.Engines.Fofa.QPS,
-			time.Duration(cfg.Engines.Fofa.Timeout)*time.Second,
-		))
-		logger.Info("FOFA engine registered")
+	if cfg.Engines.Fofa.Enabled {
+		if cfg.Engines.Fofa.APIKey != "" {
+			svc.RegisterAdapter(adapter.NewFofaAdapter(
+				cfg.Engines.Fofa.BaseURL,
+				cfg.Engines.Fofa.APIKey,
+				cfg.Engines.Fofa.Email,
+				cfg.Engines.Fofa.QPS,
+				time.Duration(cfg.Engines.Fofa.Timeout)*time.Second,
+			))
+			logger.Info("FOFA engine registered (API mode)")
+		} else {
+			// Web-only模式：注册适配器但不支持API查询
+			svc.RegisterAdapter(adapter.NewFofaAdapterWebOnly())
+			logger.Info("FOFA engine registered (Web-only mode)")
+		}
 	}
 
 	// 注册Hunter
-	if cfg.Engines.Hunter.Enabled && cfg.Engines.Hunter.APIKey != "" {
-		svc.RegisterAdapter(adapter.NewHunterAdapter(
-			cfg.Engines.Hunter.BaseURL,
-			cfg.Engines.Hunter.APIKey,
-			cfg.Engines.Hunter.QPS,
-			time.Duration(cfg.Engines.Hunter.Timeout)*time.Second,
-		))
-		logger.Info("Hunter engine registered")
+	if cfg.Engines.Hunter.Enabled {
+		if cfg.Engines.Hunter.APIKey != "" {
+			svc.RegisterAdapter(adapter.NewHunterAdapter(
+				cfg.Engines.Hunter.BaseURL,
+				cfg.Engines.Hunter.APIKey,
+				cfg.Engines.Hunter.QPS,
+				time.Duration(cfg.Engines.Hunter.Timeout)*time.Second,
+			))
+			logger.Info("Hunter engine registered (API mode)")
+		} else {
+			svc.RegisterAdapter(adapter.NewHunterAdapterWebOnly())
+			logger.Info("Hunter engine registered (Web-only mode)")
+		}
 	}
 
 	// 注册ZoomEye
-	if cfg.Engines.Zoomeye.Enabled && cfg.Engines.Zoomeye.APIKey != "" {
-		svc.RegisterAdapter(adapter.NewZoomEyeAdapter(
-			cfg.Engines.Zoomeye.BaseURL,
-			cfg.Engines.Zoomeye.APIKey,
-			cfg.Engines.Zoomeye.QPS,
-			time.Duration(cfg.Engines.Zoomeye.Timeout)*time.Second,
-		))
-		logger.Info("ZoomEye engine registered")
+	if cfg.Engines.Zoomeye.Enabled {
+		if cfg.Engines.Zoomeye.APIKey != "" {
+			svc.RegisterAdapter(adapter.NewZoomEyeAdapter(
+				cfg.Engines.Zoomeye.BaseURL,
+				cfg.Engines.Zoomeye.APIKey,
+				cfg.Engines.Zoomeye.QPS,
+				time.Duration(cfg.Engines.Zoomeye.Timeout)*time.Second,
+			))
+			logger.Info("ZoomEye engine registered (API mode)")
+		} else {
+			svc.RegisterAdapter(adapter.NewZoomEyeAdapterWebOnly())
+			logger.Info("ZoomEye engine registered (Web-only mode)")
+		}
 	}
 
 	// 注册Quake
-	if cfg.Engines.Quake.Enabled && cfg.Engines.Quake.APIKey != "" {
-		svc.RegisterAdapter(adapter.NewQuakeAdapter(
-			cfg.Engines.Quake.BaseURL,
-			cfg.Engines.Quake.APIKey,
-			cfg.Engines.Quake.QPS,
-			time.Duration(cfg.Engines.Quake.Timeout)*time.Second,
-		))
-		logger.Info("Quake engine registered")
+	if cfg.Engines.Quake.Enabled {
+		if cfg.Engines.Quake.APIKey != "" {
+			svc.RegisterAdapter(adapter.NewQuakeAdapter(
+				cfg.Engines.Quake.BaseURL,
+				cfg.Engines.Quake.APIKey,
+				cfg.Engines.Quake.QPS,
+				time.Duration(cfg.Engines.Quake.Timeout)*time.Second,
+			))
+			logger.Info("Quake engine registered (API mode)")
+		} else {
+			svc.RegisterAdapter(adapter.NewQuakeAdapterWebOnly())
+			logger.Info("Quake engine registered (Web-only mode)")
+		}
 	}
 
 	// 注册Shodan
-	if cfg.Engines.Shodan.Enabled && cfg.Engines.Shodan.APIKey != "" {
-		svc.RegisterAdapter(adapter.NewShodanAdapter(
-			cfg.Engines.Shodan.BaseURL,
-			cfg.Engines.Shodan.APIKey,
-			cfg.Engines.Shodan.QPS,
-			time.Duration(cfg.Engines.Shodan.Timeout)*time.Second,
-		))
-		logger.Info("Shodan engine registered")
+	if cfg.Engines.Shodan.Enabled {
+		if cfg.Engines.Shodan.APIKey != "" {
+			svc.RegisterAdapter(adapter.NewShodanAdapter(
+				cfg.Engines.Shodan.BaseURL,
+				cfg.Engines.Shodan.APIKey,
+				cfg.Engines.Shodan.QPS,
+				time.Duration(cfg.Engines.Shodan.Timeout)*time.Second,
+			))
+			logger.Info("Shodan engine registered (API mode)")
+		} else {
+			svc.RegisterAdapter(adapter.NewShodanAdapterWebOnly())
+			logger.Info("Shodan engine registered (Web-only mode)")
+		}
 	}
 }

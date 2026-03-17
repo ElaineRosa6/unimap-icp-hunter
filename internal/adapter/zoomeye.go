@@ -510,3 +510,21 @@ func (z *ZoomEyeAdapter) GetQuota() (*model.QuotaInfo, error) {
 		Expiry:    result.UserInfo.ExpiredAt,
 	}, nil
 }
+
+// IsWebOnly 检查是否为 Web-only 模式
+func (z *ZoomEyeAdapter) IsWebOnly() bool {
+	return false
+}
+
+// ZoomEyeAdapterWebOnly ZoomEye Web-only模式适配器
+type ZoomEyeAdapterWebOnly struct {
+	*WebOnlyAdapterBase
+}
+
+// NewZoomEyeAdapterWebOnly 创建ZoomEye Web-only适配器
+func NewZoomEyeAdapterWebOnly() *ZoomEyeAdapterWebOnly {
+	baseAdapter := NewZoomEyeAdapter("", "", 3, 30*time.Second)
+	return &ZoomEyeAdapterWebOnly{
+		WebOnlyAdapterBase: NewWebOnlyAdapterBase(baseAdapter, "zoomeye"),
+	}
+}

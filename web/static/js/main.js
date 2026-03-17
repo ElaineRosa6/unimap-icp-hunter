@@ -110,9 +110,18 @@ function initQueryForm() {
 			submitBtn.classList.remove('loading');
 			return;
 		}
+
+		const browserQuery = isBrowserQueryModeEnabled();
+		if (browserQuery && !cdpOnline) {
+			alert('浏览器查询模式需要先连接 CDP 浏览器');
+			submitBtn.textContent = originalText;
+			submitBtn.disabled = false;
+			submitBtn.classList.remove('loading');
+			return;
+		}
 		
 		// 执行异步查询
-	executeAsyncQuery(query, engines, submitBtn, originalText);
+		executeAsyncQuery(query, engines, submitBtn, originalText, browserQuery);
 	});
 
 	// 初始化引擎状态
@@ -205,10 +214,16 @@ function connectCDP(button, statusBadge, statusInfo) {
 }
 
 function updateCDPBadge(badge, online) {
+	cdpOnline = !!online;
 	if (!badge) return;
 	badge.textContent = online ? '在线' : '未连接';
 	badge.classList.toggle('cookie-status--on', online);
 	badge.classList.toggle('cookie-status--off', !online);
+}
+
+function isBrowserQueryModeEnabled() {
+	const checkbox = document.getElementById('browser-query-mode');
+	return !!(checkbox && checkbox.checked);
 }
 
 function importCookieJSON(button) {
@@ -296,16 +311,29 @@ function verifyCookies(button) {
 		.then(data => {
 			if (!resultBox) return;
 			if (data && data.results) {
-				const items = [];
+				resultBox.innerHTML = '';
 				Object.keys(data.results).forEach(engine => {
 					const item = data.results[engine];
 					const ok = item && item.ok;
-					const hint = item && item.hint ? item.hint : '';
-					const title = item && item.title ? item.title : '';
-					const status = ok ? '<span class="ok">正常</span>' : '<span class="fail">异常</span>';
-					items.push(`<div>${engine}: ${status}${title ? ' - ' + title : ''}${hint ? ' (' + hint + ')' : ''}</div>`);
+					const hint = item && item.hint ? String(item.hint) : '';
+					const title = item && item.title ? String(item.title) : '';
+
+					const row = document.createElement('div');
+					const status = document.createElement('span');
+					status.className = ok ? 'ok' : 'fail';
+					status.textContent = ok ? '正常' : '异常';
+
+					row.appendChild(document.createTextNode(`${String(engine)}: `));
+					row.appendChild(status);
+					if (title) {
+						row.appendChild(document.createTextNode(` - ${title}`));
+					}
+					if (hint) {
+						row.appendChild(document.createTextNode(` (${hint})`));
+					}
+
+					resultBox.appendChild(row);
 				});
-				resultBox.innerHTML = items.join('');
 			} else if (data && data.error) {
 				resultBox.textContent = data.error;
 			} else {
@@ -450,6 +478,7 @@ function saveCookies(button) {
 let wsConnection = null;
 let wsConnected = false;
 let currentQueryID = null;
+let cdpOnline = false;
 
 // 初始化WebSocket连接
 function initWebSocket() {
@@ -514,10 +543,35 @@ function handleWebSocketMessage(message) {
 	}
 }
 
+function escapeHtml(value) {
+	const str = value === null || value === undefined ? '' : String(value);
+	return str
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+function escapeAttr(value) {
+	return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function sanitizePreviewPath(path) {
+	if (!path) return '';
+	const str = String(path).trim();
+	if (!str.startsWith('/screenshots/')) return '';
+	if (str.includes('..')) return '';
+	return str;
+}
+
 // 处理查询开始
 function handleQueryStart(message) {
 	currentQueryID = message.query_id;
 	const status = message.status;
+	const queryID = escapeHtml(status && status.ID ? status.ID : '');
+	const queryStatus = escapeHtml(status && status.Status ? status.Status : '');
+	const startTime = status && status.StartTime ? new Date(status.StartTime).toLocaleString() : '';
 
 	// 更新结果页面
 	const resultsContent = document.getElementById('results-content');
@@ -525,13 +579,13 @@ function handleQueryStart(message) {
 		resultsContent.innerHTML = `
 			<div class="query-status">
 				<h3>查询状态</h3>
-				<p>查询ID: ${status.ID}</p>
-				<p>状态: ${status.Status}</p>
+				<p>查询ID: ${queryID}</p>
+				<p>状态: ${queryStatus}</p>
 				<p>进度: <span id="progress-bar">0%</span></p>
 				<div class="progress-container">
 					<div id="progress-fill" class="progress-fill" style="width: 0%"></div>
 				</div>
-				<p>开始时间: ${new Date(status.StartTime).toLocaleString()}</p>
+				<p>开始时间: ${escapeHtml(startTime)}</p>
 			</div>
 		`;
 	}
@@ -573,15 +627,19 @@ function handleQueryComplete(message) {
 }
 
 // 执行异步查询（WebSocket版本）
-function executeAsyncQuery(query, engines, submitBtn, originalText) {
+function executeAsyncQuery(query, engines, submitBtn, originalText, browserQuery) {
+	const safeQuery = escapeHtml(query);
+	const safeEnginesText = engines.map(engine => escapeHtml(engine)).join(', ');
+
 	// 创建结果页面
 	const resultsPage = document.createElement('div');
 	resultsPage.className = 'results-page';
 	resultsPage.innerHTML = `
 		<div class="results-header">
 			<h2>查询结果</h2>
-			<p>查询语句: <code>${query}</code></p>
-			<p>使用引擎: ${engines.join(', ')}</p>
+			<p>查询语句: <code>${safeQuery}</code></p>
+			<p>使用引擎: ${safeEnginesText}</p>
+			<p>浏览器查询: ${browserQuery ? '已开启' : '未开启'}</p>
 			<div class="loading-indicator">
 				<div class="spinner"></div>
 				<p>正在查询...请稍候</p>
@@ -600,7 +658,7 @@ function executeAsyncQuery(query, engines, submitBtn, originalText) {
 	// 检查WebSocket连接
 	if (!wsConnected || wsConnection.readyState !== WebSocket.OPEN) {
 		// WebSocket未连接，使用传统API
-		useFallbackAPI(query, engines, submitBtn, originalText);
+		useFallbackAPI(query, engines, submitBtn, originalText, browserQuery);
 		return;
 	}
 
@@ -609,12 +667,13 @@ function executeAsyncQuery(query, engines, submitBtn, originalText) {
 		type: 'query',
 		query: query,
 		engines: engines,
-		page_size: 50
+		page_size: 50,
+		browser_query: !!browserQuery
 	}));
 }
 
 // 传统API回退方案
-function useFallbackAPI(query, engines, submitBtn, originalText) {
+function useFallbackAPI(query, engines, submitBtn, originalText, browserQuery) {
 	// 发送API请求
 	fetch('/api/query', {
 		method: 'POST',
@@ -625,6 +684,7 @@ function useFallbackAPI(query, engines, submitBtn, originalText) {
 			'query': query,
 			'engines': engines.join(','),
 			'page_size': '50',
+			'browser_query': browserQuery ? 'true' : 'false',
 		}),
 	})
 	.then(response => response.json())
@@ -660,10 +720,11 @@ function useFallbackAPI(query, engines, submitBtn, originalText) {
 function showResultsError(error) {
 	const resultsContent = document.getElementById('results-content');
 	if (resultsContent) {
+		const safeError = escapeHtml(error);
 		resultsContent.innerHTML = `
 			<div class="error-message">
 				<h3>查询错误</h3>
-				<p>${error}</p>
+				<p>${safeError}</p>
 				<button type="button" class="btn btn-primary" onclick="window.location.href='/'">返回首页</button>
 			</div>
 		`;
@@ -679,6 +740,13 @@ function showResults(data) {
 		const totalCount = (data && (data.totalCount ?? data.TotalCount)) ?? (Array.isArray(assets) ? assets.length : 0);
 		const engineStats = data && (data.engineStats || data.EngineStats);
 		const errors = (data && (data.errors || data.Errors)) || [];
+		const browserQuery = !!(data && (data.browserQuery ?? data.browser_query));
+		const browserOpenedEngines = (data && (data.browserOpenedEngines || data.browser_opened_engines)) || [];
+		const browserQueryErrors = (data && (data.browserQueryErrors || data.browser_query_errors)) || [];
+		const autoCapture = !!(data && (data.autoCapture ?? data.auto_capture));
+		const autoCaptureQueryID = (data && (data.autoCaptureQueryID || data.auto_capture_query_id)) || '';
+		const autoCapturedPaths = (data && (data.autoCapturedPaths || data.auto_captured_paths)) || {};
+		const autoCaptureErrors = (data && (data.autoCaptureErrors || data.auto_capture_errors)) || [];
 
 		function pick(obj, ...keys) {
 			if (!obj) return '';
@@ -694,14 +762,57 @@ function showResults(data) {
 				<p>总结果数: ${totalCount}</p>
 			</div>
 		`;
+
+		if (browserQuery) {
+			const openedText = browserOpenedEngines.length > 0 ? browserOpenedEngines.map(engine => escapeHtml(engine)).join(', ') : '无';
+			html += `
+				<div class="results-info">
+					<p>浏览器查询模式: 已开启</p>
+					<p>已打开引擎: ${openedText}</p>
+				</div>
+			`;
+		}
+
+		if (autoCapture) {
+			const capturedEntries = Object.entries(autoCapturedPaths);
+			const capturedEngineText = capturedEntries.length > 0 ? capturedEntries.map(([engine]) => escapeHtml(engine)).join(', ') : '无';
+			html += `
+				<div class="results-info">
+					<p>自动截图: 已开启</p>
+					<p>截图批次ID: ${escapeHtml(autoCaptureQueryID || '未生成')}</p>
+					<p>已截图引擎: ${capturedEngineText}</p>
+				</div>
+			`;
+
+			if (capturedEntries.length > 0) {
+				html += `
+					<div class="results-info">
+						<h3>自动截图路径</h3>
+						<ul>
+							${capturedEntries.map(([engine, path]) => {
+								const safeEngine = escapeHtml(engine);
+								const previewPath = sanitizePreviewPath(path);
+								if (!previewPath) {
+									return `<li>${safeEngine}: ${escapeHtml('不可预览（路径无效）')}</li>`;
+								}
+								const safeHref = escapeAttr(previewPath);
+								const safeText = escapeHtml(previewPath);
+								return `<li>${safeEngine}: <a href="${safeHref}" target="_blank" rel="noopener noreferrer">${safeText}</a></li>`;
+							}).join('')}
+						</ul>
+					</div>
+				`;
+			}
+		}
 		
 		// 显示错误信息
-		if (errors && errors.length > 0) {
+		const combinedErrors = Array.from(new Set(errors.concat(browserQueryErrors).concat(autoCaptureErrors)));
+		if (combinedErrors && combinedErrors.length > 0) {
 			html += `
 				<div class="errors">
 					<h3>错误信息</h3>
 					<ul>
-						${errors.map(err => `<li>${err}</li>`).join('')}
+						${combinedErrors.map(err => `<li>${escapeHtml(err)}</li>`).join('')}
 					</ul>
 				</div>
 			`;
@@ -715,8 +826,8 @@ function showResults(data) {
 					<div class="stats-grid">
 						${Object.entries(engineStats).map(([engine, count]) => `
 							<div class="stat-item">
-								<span class="engine-name">${engine}</span>
-								<span class="count">${count}</span>
+								<span class="engine-name">${escapeHtml(engine)}</span>
+								<span class="count">${escapeHtml(count)}</span>
 							</div>
 						`).join('')}
 					</div>
@@ -756,28 +867,40 @@ function showResults(data) {
 							</tr>
 						</thead>
 						<tbody id="results-body">
-							${assets.map(asset => `
-								<tr>
-									<td>${pick(asset, 'ip', 'IP')}</td>
-									<td>${pick(asset, 'port', 'Port')}</td>
-									<td>${pick(asset, 'protocol', 'Protocol')}</td>
-									<td>${pick(asset, 'host', 'Host')}</td>
-									<td>${pick(asset, 'title', 'Title')}</td>
-									<td>${pick(asset, 'server', 'Server')}</td>
-									<td>${pick(asset, 'status_code', 'statusCode', 'StatusCode')}</td>
-									<td>${pick(asset, 'source', 'Source')}</td>
-									<td>
-										<button type="button" class="btn btn-sm btn-info btn-detail" data-ip="${pick(asset, 'ip', 'IP')}" data-port="${pick(asset, 'port', 'Port')}">详情</button>
-										<button type="button" class="btn btn-sm btn-success btn-copy" data-ip="${pick(asset, 'ip', 'IP')}">复制IP</button>
-										<a href="${getEngineLink(pick(asset, 'source', 'Source'), pick(asset, 'ip', 'IP'))}" target="_blank" class="btn btn-sm btn-primary" style="text-decoration:none; color:white;">
-											跳转
-										</a>
-										<button type="button" class="btn btn-sm btn-warning btn-screenshot" data-url="${pick(asset, 'url', 'URL')}" data-ip="${pick(asset, 'ip', 'IP')}" data-port="${pick(asset, 'port', 'Port')}" data-protocol="${pick(asset, 'protocol', 'Protocol')}">
-											截图
-										</button>
-									</td>
-								</tr>
-							`).join('')}
+							${assets.map(asset => {
+								const ip = pick(asset, 'ip', 'IP');
+								const port = pick(asset, 'port', 'Port');
+								const protocol = pick(asset, 'protocol', 'Protocol');
+								const host = pick(asset, 'host', 'Host');
+								const title = pick(asset, 'title', 'Title');
+								const server = pick(asset, 'server', 'Server');
+								const statusCode = pick(asset, 'status_code', 'statusCode', 'StatusCode');
+								const source = pick(asset, 'source', 'Source');
+								const targetURL = pick(asset, 'url', 'URL');
+								const engineHref = escapeAttr(getEngineLink(source, ip));
+								return `
+									<tr>
+										<td>${escapeHtml(ip)}</td>
+										<td>${escapeHtml(port)}</td>
+										<td>${escapeHtml(protocol)}</td>
+										<td>${escapeHtml(host)}</td>
+										<td>${escapeHtml(title)}</td>
+										<td>${escapeHtml(server)}</td>
+										<td>${escapeHtml(statusCode)}</td>
+										<td>${escapeHtml(source)}</td>
+										<td>
+											<button type="button" class="btn btn-sm btn-info btn-detail" data-ip="${escapeAttr(ip)}" data-port="${escapeAttr(port)}">详情</button>
+											<button type="button" class="btn btn-sm btn-success btn-copy" data-ip="${escapeAttr(ip)}">复制IP</button>
+											<a href="${engineHref}" target="_blank" class="btn btn-sm btn-primary" style="text-decoration:none; color:white;">
+												跳转
+											</a>
+											<button type="button" class="btn btn-sm btn-warning btn-screenshot" data-url="${escapeAttr(targetURL)}" data-ip="${escapeAttr(ip)}" data-port="${escapeAttr(port)}" data-protocol="${escapeAttr(protocol)}">
+												截图
+											</button>
+										</td>
+									</tr>
+								`;
+							}).join('')}
 						</tbody>
 					</table>
 				</div>
@@ -828,7 +951,8 @@ function showResults(data) {
 			query: data.query || '',
 			engines: data.engines || [],
 			assets: assets,
-			queryID: 'query_' + Date.now()
+			queryID: 'query_' + Date.now(),
+			browserQuery: browserQuery
 		};
 		
 		// 初始化结果表格功能
@@ -889,10 +1013,12 @@ function openQueryHistory() {
 	} else {
 		history.forEach(item => {
 			const li = document.createElement('li');
-			li.innerHTML = `
-				<code>${item.query}</code>
-				<small>${new Date(item.timestamp).toLocaleString()}</small>
-			`;
+			const codeEl = document.createElement('code');
+			codeEl.textContent = String(item.query || '');
+			const timeEl = document.createElement('small');
+			timeEl.textContent = new Date(item.timestamp).toLocaleString();
+			li.appendChild(codeEl);
+			li.appendChild(timeEl);
 			li.addEventListener('click', function() {
 				const queryInput = document.getElementById('query');
 				queryInput.value = item.query;

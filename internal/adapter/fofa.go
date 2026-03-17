@@ -492,3 +492,21 @@ func (f *FofaAdapter) GetQuota() (*model.QuotaInfo, error) {
 		Expiry:    "", // FOFA API doesn't return expiry info
 	}, nil
 }
+
+// IsWebOnly 检查是否为 Web-only 模式
+func (f *FofaAdapter) IsWebOnly() bool {
+	return false
+}
+
+// FofaAdapterWebOnly FOFA Web-only模式适配器
+type FofaAdapterWebOnly struct {
+	*WebOnlyAdapterBase
+}
+
+// NewFofaAdapterWebOnly 创建FOFA Web-only适配器
+func NewFofaAdapterWebOnly() *FofaAdapterWebOnly {
+	baseAdapter := NewFofaAdapter("", "", "", FofaDefaultQPS, FofaDefaultTimeout)
+	return &FofaAdapterWebOnly{
+		WebOnlyAdapterBase: NewWebOnlyAdapterBase(baseAdapter, "fofa"),
+	}
+}

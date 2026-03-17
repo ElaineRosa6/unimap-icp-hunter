@@ -221,6 +221,66 @@ func (m *Manager) CaptureScreenshot(ctx context.Context, targetURL string, cooki
 	return buf, nil
 }
 
+// OpenSearchEngineResult 在浏览器中打开搜索引擎结果页但不执行截图。
+func (m *Manager) OpenSearchEngineResult(ctx context.Context, engine, query string) (string, error) {
+	searchURL := m.BuildSearchEngineURL(engine, query)
+	if searchURL == "" {
+		return "", fmt.Errorf("unsupported engine: %s", engine)
+	}
+
+	openTimeout := m.timeout
+	if openTimeout <= 0 || openTimeout > 10*time.Second {
+		openTimeout = 10 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, openTimeout)
+	defer cancel()
+
+	allocCtx, allocCancel, err := m.newAllocator(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer allocCancel()
+
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	defer browserCancel()
+
+	cookies := m.GetCookies(engine)
+	actions := []chromedp.Action{}
+	if len(cookies) > 0 && !m.isCDPMode() {
+		actions = append(actions,
+			chromedp.Navigate(searchURL),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				for _, cookie := range cookies {
+					err := network.SetCookie(cookie.Name, cookie.Value).
+						WithDomain(cookie.Domain).
+						WithPath(cookie.Path).
+						WithHTTPOnly(cookie.HTTPOnly).
+						WithSecure(cookie.Secure).
+						Do(ctx)
+					if err != nil {
+						logger.Warnf("Failed to set cookie %s: %v", cookie.Name, err)
+					}
+				}
+				return nil
+			}),
+			chromedp.Navigate(searchURL),
+		)
+	} else {
+		if m.isCDPMode() && len(cookies) > 0 {
+			logger.Infof("Using CDP mode, skipping cookie setup (browser already logged in)")
+		}
+		actions = append(actions, chromedp.Navigate(searchURL))
+	}
+
+	actions = append(actions, chromedp.Sleep(m.waitTime))
+	if err := chromedp.Run(browserCtx, actions...); err != nil {
+		return "", fmt.Errorf("open search engine result failed: %w", err)
+	}
+
+	return searchURL, nil
+}
+
 // ValidateSearchEngineResult 验证Cookie是否能访问搜索结果页
 func (m *Manager) ValidateSearchEngineResult(ctx context.Context, engine, query string, cookies []Cookie) (bool, string, string, error) {
 	if strings.TrimSpace(query) == "" {

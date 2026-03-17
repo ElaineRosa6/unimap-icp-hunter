@@ -48,11 +48,11 @@ type Config struct {
 			Cookies   []Cookie `yaml:"cookies"`
 		} `yaml:"fofa"`
 		Shodan struct {
-			Enabled bool     `yaml:"enabled"`
-			APIKey  string   `yaml:"api_key"`
-			BaseURL string   `yaml:"base_url"`
-			QPS     int      `yaml:"qps"`
-			Timeout int      `yaml:"timeout"`
+			Enabled bool   `yaml:"enabled"`
+			APIKey  string `yaml:"api_key"`
+			BaseURL string `yaml:"base_url"`
+			QPS     int    `yaml:"qps"`
+			Timeout int    `yaml:"timeout"`
 		} `yaml:"shodan"`
 	} `yaml:"engines"`
 
@@ -321,9 +321,6 @@ func (m *Manager) applyDefaults(config *Config) {
 func (m *Manager) validate(config *Config) error {
 	// 验证引擎配置
 	if config.Engines.Quake.Enabled {
-		if config.Engines.Quake.APIKey == "" {
-			return fmt.Errorf("quake engine enabled but api_key not set")
-		}
 		if config.Engines.Quake.BaseURL == "" {
 			return fmt.Errorf("quake engine enabled but base_url not set")
 		}
@@ -336,9 +333,6 @@ func (m *Manager) validate(config *Config) error {
 	}
 
 	if config.Engines.Zoomeye.Enabled {
-		if config.Engines.Zoomeye.APIKey == "" {
-			return fmt.Errorf("zoomeye engine enabled but api_key not set")
-		}
 		if config.Engines.Zoomeye.BaseURL == "" {
 			return fmt.Errorf("zoomeye engine enabled but base_url not set")
 		}
@@ -351,9 +345,6 @@ func (m *Manager) validate(config *Config) error {
 	}
 
 	if config.Engines.Hunter.Enabled {
-		if config.Engines.Hunter.APIKey == "" {
-			return fmt.Errorf("hunter engine enabled but api_key not set")
-		}
 		if config.Engines.Hunter.BaseURL == "" {
 			return fmt.Errorf("hunter engine enabled but base_url not set")
 		}

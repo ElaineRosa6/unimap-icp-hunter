@@ -103,22 +103,36 @@ func (o *EngineOrchestrator) TranslateQuery(ast *model.UQLAST, engineNames []str
 	}
 
 	queries := []model.EngineQuery{}
+	translateErrs := []string{}
 
 	for _, name := range engineNames {
 		adapter, exists := o.GetAdapter(name)
 		if !exists {
+			translateErrs = append(translateErrs, fmt.Sprintf("adapter %s not found", name))
 			continue
 		}
 
 		query, err := adapter.Translate(ast)
 		if err != nil {
-			return nil, fmt.Errorf("failed to translate for %s: %v", name, err)
+			translateErrs = append(translateErrs, fmt.Sprintf("failed to translate for %s: %v", name, err))
+			continue
 		}
 
 		queries = append(queries, model.EngineQuery{
 			EngineName: name,
 			Query:      query,
 		})
+	}
+
+	if len(translateErrs) > 0 {
+		logger.Warnf("query translation had partial failures: %s", strings.Join(translateErrs, "; "))
+	}
+
+	if len(queries) == 0 {
+		if len(translateErrs) > 0 {
+			return nil, fmt.Errorf("no translatable engines: %s", strings.Join(translateErrs, "; "))
+		}
+		return nil, fmt.Errorf("no translatable engines available")
 	}
 
 	return queries, nil

@@ -464,3 +464,21 @@ func (h *HunterAdapter) GetQuota() (*model.QuotaInfo, error) {
 		Expiry:    "", // Hunter API doesn't return expiry info
 	}, nil
 }
+
+// IsWebOnly 检查是否为 Web-only 模式
+func (h *HunterAdapter) IsWebOnly() bool {
+	return false
+}
+
+// HunterAdapterWebOnly Hunter Web-only模式适配器
+type HunterAdapterWebOnly struct {
+	*WebOnlyAdapterBase
+}
+
+// NewHunterAdapterWebOnly 创建Hunter Web-only适配器
+func NewHunterAdapterWebOnly() *HunterAdapterWebOnly {
+	baseAdapter := NewHunterAdapter("", "", 3, 30*time.Second)
+	return &HunterAdapterWebOnly{
+		WebOnlyAdapterBase: NewWebOnlyAdapterBase(baseAdapter, "hunter"),
+	}
+}
