@@ -140,5 +140,14 @@
 - GUI 入口与标题样式：[cmd/unimap-gui/main.go](cmd/unimap-gui/main.go#L75)
 - 构建文档补充：[GUI_BUILD.md](GUI_BUILD.md#L58)
 
-### 后续阶段
-1. P2-功能对齐（阶段 B）：GUI 内原生实现 URL 监控、基线管理、篡改检测、批量截图、历史记录。
+### 已完成（P2 第二批 / 阶段 B）
+1. GUI 已新增原生“URL监控”页，支持批量 URL 输入、探活、错误分类与所选目标重试探活。
+2. GUI 已新增原生基线管理能力，支持查看基线列表、导入到监控输入、删除基线。
+3. GUI 已新增原生篡改检测流程，支持展示 `no_baseline`、`normal`、`tampered`、`unreachable` 对应状态与变更详情。
+4. GUI 已新增原生批量截图能力，并提供独立“截图管理”页浏览批次目录与截图文件。
+5. GUI 已新增原生“历史记录”页，可查看 URL 维度检测统计、单次检测记录与删除历史。
+
+对应变更位置：
+- GUI Tab 结构与状态初始化：[cmd/unimap-gui/main.go](cmd/unimap-gui/main.go#L30)
+- 原生 URL 监控 / 基线 / 篡改 / 截图 / 历史页实现：[cmd/unimap-gui/monitor_native.go](cmd/unimap-gui/monitor_native.go#L1)
+- GUI 构建与功能说明补充：[GUI_BUILD.md](GUI_BUILD.md#L11)

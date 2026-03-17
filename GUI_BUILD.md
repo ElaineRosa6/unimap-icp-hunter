@@ -7,6 +7,13 @@
 
 ## 快速开始
 
+GUI 当前包含以下原生页面：
+
+- `资产查询`：原有 UQL 资产检索与导出。
+- `URL监控`：批量 URL 探活、基线设置、篡改检测、批量截图。
+- `历史记录`：查看 URL 维度的检测统计与单次检测详情。
+- `截图管理`：浏览截图批次目录并直接打开批次或单个截图文件。
+
 ### 1) 仅验证/构建（不含 GUI）
 
 ```bash
@@ -127,4 +134,5 @@ export UNIMAP_GUI_FONT="$HOME/Library/Fonts/YourCJKFont.ttf"
 ## 常见问题
 
 - 默认 `go test ./...` 不会构建 GUI：GUI 入口使用 build tag 隔离，避免在缺少 OpenGL/cgo 环境的机器上导致测试失败。
+- 如需验证原生监控页是否可编译，请使用：`go test -tags gui ./cmd/unimap-gui`
 - 如果 `-tags gui` 构建失败且日志里出现 cgo/gcc 相关错误：优先检查是否安装了 gcc/clang 工具链，以及 `PATH` 是否指向正确的 MinGW/编译器。

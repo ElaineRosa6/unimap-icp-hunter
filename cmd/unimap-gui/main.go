@@ -23,7 +23,9 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/exporter"
 	"github.com/unimap-icp-hunter/project/internal/model"
+	"github.com/unimap-icp-hunter/project/internal/screenshot"
 	"github.com/unimap-icp-hunter/project/internal/service"
+	"github.com/unimap-icp-hunter/project/internal/tamper"
 )
 
 const configPath = "configs/config.yaml"
@@ -34,6 +36,9 @@ type AppState struct {
 	Config        *config.Config
 	QueryResults  []model.UnifiedAsset
 	Service       *service.UnifiedService
+	Detector      *tamper.Detector
+	TamperStorage *tamper.HashStorage
+	ScreenshotMgr *screenshot.Manager
 }
 
 func main() {
@@ -63,6 +68,9 @@ func main() {
 		Config:        cfg,
 		QueryResults:  []model.UnifiedAsset{},
 		Service:       svc,
+		Detector:      tamper.NewDetector(tamper.DetectorConfig{BaseDir: "./hash_store"}),
+		TamperStorage: tamper.NewHashStorage("./hash_store"),
+		ScreenshotMgr: buildScreenshotManager(cfg),
 	}
 
 	// 创建UI组件
@@ -72,6 +80,17 @@ func main() {
 }
 
 func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
+	tabs := container.NewAppTabs(
+		container.NewTabItem("资产查询", createQueryTab(window, state)),
+		container.NewTabItem("URL监控", createMonitorTab(window, state)),
+		container.NewTabItem("历史记录", createHistoryTab(window, state)),
+		container.NewTabItem("截图管理", createScreenshotTab(window, state)),
+	)
+	tabs.SetTabLocation(container.TabLocationTop)
+	return tabs
+}
+
+func createQueryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 	// --- 1. 顶部：标题与配置 ---
 	configBtn := widget.NewButtonWithIcon("配置", theme.SettingsIcon(), func() {
 		showEngineConfigDialog(window, state)
@@ -86,22 +105,6 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 		layout.NewSpacer(),
 		helpBtn,
 		configBtn,
-	)
-
-	monitorBtn := widget.NewButton("网页监控", func() {
-		openWebPage(window, "/monitor")
-	})
-	quotaBtn := widget.NewButton("配额", func() {
-		openWebPage(window, "/quota")
-	})
-	screenshotBtn := widget.NewButton("截图管理", func() {
-		openWebPage(window, "/batch-screenshot")
-	})
-	quickLinks := container.NewHBox(
-		widget.NewLabel("Web 功能入口:"),
-		monitorBtn,
-		quotaBtn,
-		screenshotBtn,
 	)
 
 	// --- 2. 查询输入区 ---
@@ -404,7 +407,6 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 	// 顶部面板总成
 	topPanel := container.NewVBox(
 		container.NewPadded(topHeader),
-		container.NewPadded(quickLinks),
 		widget.NewSeparator(),
 		container.NewPadded(container.NewVBox(
 			widget.NewLabelWithStyle("查询语句 (UQL):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -431,6 +433,60 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 		nil, nil,
 		resultTable, // Table 放在 Center 可自适应并支持内置滚动
 	)
+}
+
+func buildScreenshotManager(cfg *config.Config) *screenshot.Manager {
+	if cfg == nil || !cfg.Screenshot.Enabled {
+		return nil
+	}
+
+	headless := true
+	if cfg.Screenshot.Headless != nil {
+		headless = *cfg.Screenshot.Headless
+	}
+
+	mgr := screenshot.NewManager(screenshot.Config{
+		BaseDir:        cfg.Screenshot.BaseDir,
+		ChromePath:     cfg.Screenshot.ChromePath,
+		UserDataDir:    cfg.Screenshot.ChromeUserDataDir,
+		ProfileDir:     cfg.Screenshot.ChromeProfileDir,
+		RemoteDebugURL: strings.TrimSpace(cfg.Screenshot.ChromeRemoteDebugURL),
+		Headless:       headless,
+		Timeout:        time.Duration(cfg.Screenshot.Timeout) * time.Second,
+		WindowWidth:    cfg.Screenshot.WindowWidth,
+		WindowHeight:   cfg.Screenshot.WindowHeight,
+		WaitTime:       time.Duration(cfg.Screenshot.WaitTime) * time.Millisecond,
+	})
+
+	if cfg.Engines.Fofa.Enabled && len(cfg.Engines.Fofa.Cookies) > 0 {
+		mgr.SetCookies("fofa", convertConfigCookies(cfg.Engines.Fofa.Cookies))
+	}
+	if cfg.Engines.Hunter.Enabled && len(cfg.Engines.Hunter.Cookies) > 0 {
+		mgr.SetCookies("hunter", convertConfigCookies(cfg.Engines.Hunter.Cookies))
+	}
+	if cfg.Engines.Quake.Enabled && len(cfg.Engines.Quake.Cookies) > 0 {
+		mgr.SetCookies("quake", convertConfigCookies(cfg.Engines.Quake.Cookies))
+	}
+	if cfg.Engines.Zoomeye.Enabled && len(cfg.Engines.Zoomeye.Cookies) > 0 {
+		mgr.SetCookies("zoomeye", convertConfigCookies(cfg.Engines.Zoomeye.Cookies))
+	}
+
+	return mgr
+}
+
+func convertConfigCookies(cfgCookies []config.Cookie) []screenshot.Cookie {
+	cookies := make([]screenshot.Cookie, len(cfgCookies))
+	for i, c := range cfgCookies {
+		cookies[i] = screenshot.Cookie{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			HTTPOnly: c.HTTPOnly,
+			Secure:   c.Secure,
+		}
+	}
+	return cookies
 }
 
 func openWebPage(window fyne.Window, route string) {
