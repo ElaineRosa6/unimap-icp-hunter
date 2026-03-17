@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -81,10 +82,26 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 
 	topHeader := container.NewHBox(
 		widget.NewIcon(theme.SearchIcon()),
-		widget.NewLabelWithStyle("UniMap 资产查询", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true}),
+		widget.NewLabelWithStyle("UniMap 资产查询", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		layout.NewSpacer(),
 		helpBtn,
 		configBtn,
+	)
+
+	monitorBtn := widget.NewButton("网页监控", func() {
+		openWebPage(window, "/monitor")
+	})
+	quotaBtn := widget.NewButton("配额", func() {
+		openWebPage(window, "/quota")
+	})
+	screenshotBtn := widget.NewButton("截图管理", func() {
+		openWebPage(window, "/batch-screenshot")
+	})
+	quickLinks := container.NewHBox(
+		widget.NewLabel("Web 功能入口:"),
+		monitorBtn,
+		quotaBtn,
+		screenshotBtn,
 	)
 
 	// --- 2. 查询输入区 ---
@@ -387,6 +404,7 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 	// 顶部面板总成
 	topPanel := container.NewVBox(
 		container.NewPadded(topHeader),
+		container.NewPadded(quickLinks),
 		widget.NewSeparator(),
 		container.NewPadded(container.NewVBox(
 			widget.NewLabelWithStyle("查询语句 (UQL):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -413,6 +431,19 @@ func createMainUI(window fyne.Window, state *AppState) fyne.CanvasObject {
 		nil, nil,
 		resultTable, // Table 放在 Center 可自适应并支持内置滚动
 	)
+}
+
+func openWebPage(window fyne.Window, route string) {
+	baseURL := "http://127.0.0.1:8448"
+	target, err := url.Parse(baseURL + route)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("无效的Web地址: %v", err), window)
+		return
+	}
+
+	if err := fyne.CurrentApp().OpenURL(target); err != nil {
+		dialog.ShowError(fmt.Errorf("打开失败，请先运行 Web 服务 (go run ./cmd/unimap-web): %v", err), window)
+	}
 }
 
 func showEngineConfigDialog(window fyne.Window, state *AppState) {

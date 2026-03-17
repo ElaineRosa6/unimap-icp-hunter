@@ -57,11 +57,23 @@ go build -tags gui ./cmd/unimap-gui
 
 字体（中文显示）：
 - 默认会尝试加载系统字体（如 `simhei.ttf` / `Deng.ttf`）。
+- GUI 主题已对普通文本与 Monospace 文本统一启用 CJK 回退，避免标题/表格在部分机器上出现乱码。
 - 也可以手动指定字体文件：
 
 ```powershell
 $env:UNIMAP_GUI_FONT = "C:\Windows\Fonts\simhei.ttf"
 ```
+
+字体排查建议：
+1) 先确认文件存在：`Test-Path "C:\Windows\Fonts\simhei.ttf"`
+2) 再设置环境变量并启动：
+
+```powershell
+$env:UNIMAP_GUI_FONT = "C:\Windows\Fonts\simhei.ttf"
+go run -tags gui ./cmd/unimap-gui
+```
+
+3) 若仍乱码，改用 `Deng.ttf` 或 `Dengl.ttf` 重试。
 
 ### Linux
 

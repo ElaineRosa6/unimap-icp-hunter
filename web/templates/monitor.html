@@ -186,6 +186,49 @@
 			border: 1px solid #bee5eb;
 			color: #0c5460;
 		}
+		.status-blocks {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+			gap: 10px;
+			margin-bottom: 12px;
+		}
+		.status-block {
+			padding: 10px 12px;
+			border-radius: 6px;
+			border: 1px solid #dfe4ea;
+			background: #f8f9fa;
+		}
+		.status-block .label {
+			font-size: 12px;
+			color: #6c757d;
+		}
+		.status-block .value {
+			font-size: 14px;
+			font-weight: 700;
+			margin-top: 3px;
+		}
+		.status-block.success { border-color: #b7e4c7; background: #f1fff6; }
+		.status-block.warning { border-color: #ffe08a; background: #fff9e6; }
+		.status-block.danger { border-color: #f5c2c7; background: #fff5f6; }
+		.status-block.info { border-color: #b6effb; background: #effcff; }
+		.result-actions {
+			margin-top: 12px;
+			display: flex;
+			gap: 8px;
+		}
+		.btn-retry-probe {
+			padding: 6px 10px;
+			font-size: 12px;
+			border: 1px solid #007bff;
+			background: #fff;
+			color: #007bff;
+			border-radius: 4px;
+			cursor: pointer;
+		}
+		.btn-retry-probe:hover {
+			background: #007bff;
+			color: #fff;
+		}
 		.changes-list {
 			margin-top: 10px;
 		}
@@ -261,6 +304,7 @@
 		.summary-card.danger .value { color: #dc3545; }
 		.summary-card.success .value { color: #28a745; }
 		.summary-card.warning .value { color: #ffc107; }
+		.summary-card.info .value { color: #17a2b8; }
 		
 		.history-controls {
 			display: flex;
@@ -338,12 +382,20 @@
 						<span class="stat-value" id="total-urls">0</span>
 					</div>
 					<div class="stat-item">
-						<span>有效URL:</span>
+						<span>格式合法URL:</span>
 						<span class="stat-value" id="valid-urls">0</span>
 					</div>
 					<div class="stat-item">
-						<span>无效URL:</span>
+						<span>格式非法URL:</span>
 						<span class="stat-value" id="invalid-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>可达URL:</span>
+						<span class="stat-value" id="reachable-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>不可达URL:</span>
+						<span class="stat-value" id="unreachable-urls">0</span>
 					</div>
 				</div>
 			</div>
@@ -401,7 +453,11 @@
 						</div>
 						<div class="summary-card warning">
 							<div class="value" id="tamper-first">0</div>
-							<div class="label">首次检测</div>
+							<div class="label">无基线</div>
+						</div>
+						<div class="summary-card info">
+							<div class="value" id="tamper-unreachable">0</div>
+							<div class="label">不可达/异常</div>
 						</div>
 					</div>
 					<div id="tamper-results"></div>
@@ -456,6 +512,8 @@
 			const totalUrlsEl = document.getElementById('total-urls');
 			const validUrlsEl = document.getElementById('valid-urls');
 			const invalidUrlsEl = document.getElementById('invalid-urls');
+			const reachableUrlsEl = document.getElementById('reachable-urls');
+			const unreachableUrlsEl = document.getElementById('unreachable-urls');
 			const concurrencyInput = document.getElementById('concurrency');
 			const batchIdInput = document.getElementById('batch-id');
 			const progressContainer = document.getElementById('progress-container');
@@ -486,6 +544,18 @@
 				totalUrlsEl.textContent = total;
 				validUrlsEl.textContent = valid;
 				invalidUrlsEl.textContent = invalid;
+				reachableUrlsEl.textContent = '0';
+				unreachableUrlsEl.textContent = '0';
+			}
+
+			function escapeHtml(value) {
+				const str = value === null || value === undefined ? '' : String(value);
+				return str
+					.replace(/&/g, '&amp;')
+					.replace(/</g, '&lt;')
+					.replace(/>/g, '&gt;')
+					.replace(/"/g, '&quot;')
+					.replace(/'/g, '&#39;');
 			}
 
 			// 验证URL
@@ -522,10 +592,10 @@
 			}
 
 			// 获取有效的URL列表
-			function getValidURLs() {
+			function getInputURLs() {
 				return urlList.value.split('\n')
 					.map(u => u.trim())
-					.filter(u => u !== '' && isValidURL(u));
+					.filter(u => u !== '');
 			}
 
 			// 标准化URL
@@ -535,6 +605,88 @@
 					url = 'https://' + url;
 				}
 				return url;
+			}
+
+			function canonicalizeURL(url) {
+				return String(url || '').trim().replace(/\/+$/g, '').toLowerCase();
+			}
+
+			function reasonTypeLabel(reasonType) {
+				switch (reasonType) {
+					case 'dns':
+						return 'DNS 解析失败';
+					case 'timeout':
+						return '连接超时';
+					case 'tls':
+						return 'TLS/证书异常';
+					case 'connection_refused':
+						return '连接被拒绝';
+					case 'http_status':
+						return 'HTTP 响应';
+					case 'invalid_format':
+						return 'URL 格式非法';
+					case 'network':
+						return '网络异常';
+					default:
+						return '未知原因';
+				}
+			}
+
+			async function runReachabilityCheck(rawURLs, actionName, options = {}) {
+				const notifyFiltered = options.notifyFiltered !== false;
+				const normalizedInputs = rawURLs.map(normalizeURL);
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+
+				updateProgress(15, `正在探测URL可达性（${actionName}）...`);
+				const response = await fetch('/api/url/reachability', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						urls: normalizedInputs,
+						concurrency: concurrency
+					})
+				});
+
+				if (!response.ok) {
+					throw new Error('URL 可达性检测失败');
+				}
+
+				const data = await response.json();
+				const summary = data.summary || {};
+				const results = data.results || [];
+
+				totalUrlsEl.textContent = summary.total ?? normalizedInputs.length;
+				validUrlsEl.textContent = summary.formatValid ?? 0;
+				invalidUrlsEl.textContent = summary.invalidFormat ?? 0;
+				reachableUrlsEl.textContent = summary.reachable ?? 0;
+				unreachableUrlsEl.textContent = summary.unreachable ?? 0;
+
+				const reachableURLs = results
+					.filter(item => item && item.status === 'reachable' && item.url)
+					.map(item => item.url);
+
+				const invalidCount = summary.invalidFormat || 0;
+				const unreachableCount = summary.unreachable || 0;
+				if (notifyFiltered && (invalidCount > 0 || unreachableCount > 0)) {
+					alert(`已过滤 ${invalidCount} 个格式非法URL，${unreachableCount} 个不可达URL，本次将仅处理 ${reachableURLs.length} 个可达URL。`);
+				}
+
+				return {
+					reachableURLs,
+					results,
+					summary
+				};
+			}
+
+			async function ensureBaselinesExist(urls) {
+				const response = await fetch('/api/tamper/baseline/list');
+				if (!response.ok) {
+					throw new Error('无法检查基线状态');
+				}
+				const data = await response.json();
+				const baselineURLs = Array.isArray(data.urls) ? data.urls : [];
+				const baselineSet = new Set(baselineURLs.map(canonicalizeURL));
+				return urls.some(url => baselineSet.has(canonicalizeURL(url)));
 			}
 
 			// 截断hash显示
@@ -604,11 +756,40 @@
 				e.target.value = '';
 			});
 
+			tamperResults.addEventListener('click', async function(event) {
+				const retryBtn = event.target.closest('.btn-retry-probe');
+				if (!retryBtn) {
+					return;
+				}
+
+				const retryURL = decodeURIComponent(retryBtn.dataset.url || '');
+				if (!retryURL) {
+					return;
+				}
+
+				showProgress(`正在重试探活: ${retryURL}`);
+				try {
+					const probe = await runReachabilityCheck([retryURL], '重试探活', { notifyFiltered: false });
+					const item = (probe.results || [])[0] || {};
+					if (item.status === 'reachable') {
+						updateProgress(100, '探活成功');
+						alert(`探活成功: ${item.url || retryURL} (${item.reason || 'HTTP 可达'})`);
+					} else {
+						showErrorProgress('探活失败');
+						alert(`探活失败: ${reasonTypeLabel(item.reason_type)} - ${item.reason || '未知错误'}`);
+					}
+				} catch (error) {
+					showErrorProgress('重试探活失败');
+					alert(`重试探活失败: ${error.message}`);
+				}
+				setTimeout(hideProgress, 800);
+			});
+
 			// 篡改检测
 			document.getElementById('btn-tamper-check').addEventListener('click', async function() {
-				const urls = getValidURLs();
+				const urls = getInputURLs();
 				if (urls.length === 0) {
-					alert('请输入至少一个有效的URL');
+					alert('请输入至少一个URL');
 					return;
 				}
 
@@ -620,13 +801,25 @@
 				document.querySelector('.tab[data-tab="tamper"]').click();
 
 				try {
-					updateProgress(30, '正在计算网页hash...');
+					const reachability = await runReachabilityCheck(urls, '篡改检测');
+					if ((reachability.reachableURLs || []).length === 0) {
+						renderTamperResults([], { precheckResults: reachability.results || [] });
+						showErrorProgress('没有可达URL，请先修正目标或网络环境');
+						return;
+					}
+
+					const hasBaseline = await ensureBaselinesExist(reachability.reachableURLs);
+					if (!hasBaseline) {
+						throw new Error('没有可比对的基线，请先执行“设置基线”');
+					}
+
+					updateProgress(45, '正在计算网页hash...');
 					
 					const response = await fetch('/api/tamper/check', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							urls: urls.map(normalizeURL),
+							urls: reachability.reachableURLs,
 							concurrency: concurrency
 						})
 					});
@@ -636,7 +829,7 @@
 					const data = await response.json();
 					updateProgress(100, '检测完成');
 					
-					renderTamperResults(data.results);
+					renderTamperResults(data.results || [], { precheckResults: reachability.results || [] });
 
 					setTimeout(hideProgress, 1000);
 				} catch (error) {
@@ -646,9 +839,9 @@
 
 			// 设置基线
 			document.getElementById('btn-set-baseline').addEventListener('click', async function() {
-				const urls = getValidURLs();
+				const urls = getInputURLs();
 				if (urls.length === 0) {
-					alert('请输入至少一个有效的URL');
+					alert('请输入至少一个URL');
 					return;
 				}
 
@@ -656,13 +849,18 @@
 				showProgress('正在设置基线...');
 
 				try {
-					updateProgress(30, '正在计算并保存基线...');
+					const reachability = await runReachabilityCheck(urls, '设置基线');
+					if ((reachability.reachableURLs || []).length === 0) {
+						showErrorProgress('没有可达URL，无法设置基线');
+						return;
+					}
+					updateProgress(45, '正在计算并保存基线...');
 					
 					const response = await fetch('/api/tamper/baseline', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							urls: urls.map(normalizeURL),
+							urls: reachability.reachableURLs,
 							concurrency: concurrency
 						})
 					});
@@ -671,8 +869,15 @@
 
 					const data = await response.json();
 					updateProgress(100, '基线设置完成');
-					
-					alert(`成功设置 ${data.results.filter(r => r.status === 'success').length} 个URL的基线`);
+					const summary = data.summary || {};
+					const saved = summary.saved || 0;
+					const unreachable = summary.unreachable || 0;
+					const failed = summary.failed || 0;
+					if (saved === 0) {
+						alert(`未能设置任何基线。不可达: ${unreachable}，失败: ${failed}。请先修复可达性后重试。`);
+					} else {
+						alert(`基线设置完成：成功 ${saved}，不可达 ${unreachable}，失败 ${failed}`);
+					}
 					
 					setTimeout(hideProgress, 1000);
 				} catch (error) {
@@ -682,9 +887,9 @@
 
 			// 批量截图
 			document.getElementById('btn-batch-screenshot').addEventListener('click', async function() {
-				const urls = getValidURLs();
+				const urls = getInputURLs();
 				if (urls.length === 0) {
-					alert('请输入至少一个有效的URL');
+					alert('请输入至少一个URL');
 					return;
 				}
 
@@ -697,13 +902,18 @@
 				document.querySelector('.tab[data-tab="screenshot"]').click();
 
 				try {
-					updateProgress(30, '正在截图...');
+					const reachability = await runReachabilityCheck(urls, '批量截图');
+					if ((reachability.reachableURLs || []).length === 0) {
+						showErrorProgress('没有可达URL，无法截图');
+						return;
+					}
+					updateProgress(45, '正在截图...');
 					
 					const response = await fetch('/api/screenshot/batch-urls', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							urls: urls.map(normalizeURL),
+							urls: reachability.reachableURLs,
 							batch_id: batchId,
 							concurrency: concurrency
 						})
@@ -723,33 +933,96 @@
 			});
 
 			// 渲染篡改检测结果
-			function renderTamperResults(results) {
+			function renderTamperResults(results, options = {}) {
 				tamperResults.innerHTML = '';
+				const precheckResults = Array.isArray(options.precheckResults) ? options.precheckResults : [];
+				const precheckMap = new Map();
+				precheckResults.forEach(item => {
+					const key = canonicalizeURL(item.url || item.input || '');
+					if (key) {
+						precheckMap.set(key, item);
+					}
+				});
+
+				const merged = Array.isArray(results) ? [...results] : [];
+				precheckResults
+					.filter(item => item && item.status !== 'reachable')
+					.forEach(item => {
+						merged.push({
+							url: item.url || item.input,
+							status: item.status === 'invalid_format' ? 'invalid_format' : 'unreachable',
+							probe_status: item.status,
+							probe_reason_type: item.reason_type,
+							probe_reason: item.reason,
+							tampered: false
+						});
+					});
+
+				if (merged.length === 0) {
+					tamperResults.innerHTML = '<div class="tamper-alert info"><strong>暂无结果</strong><br>请先输入 URL 并执行检测。</div>';
+					document.getElementById('tamper-summary').style.display = 'grid';
+					document.getElementById('tamper-total').textContent = '0';
+					document.getElementById('tamper-count').textContent = '0';
+					document.getElementById('tamper-safe').textContent = '0';
+					document.getElementById('tamper-first').textContent = '0';
+					document.getElementById('tamper-unreachable').textContent = '0';
+					return;
+				}
 				
 				let tamperCount = 0;
 				let safeCount = 0;
 				let firstCount = 0;
+				let unreachableCount = 0;
 
-				results.forEach(result => {
+				merged.forEach(result => {
 					const card = document.createElement('div');
 					card.className = 'result-card';
+					const precheck = precheckMap.get(canonicalizeURL(result.url || '')) || null;
 
 					let statusBadge = '';
 					let alertHtml = '';
 					let hashItemsHtml = '';
+					let normalizedStatus = result.status;
+					if (!normalizedStatus) {
+						if (!result.current_hash || String(result.current_hash.status || '').toLowerCase().includes('error')) {
+							normalizedStatus = 'unreachable';
+						} else if (!result.baseline_hash) {
+							normalizedStatus = 'no_baseline';
+						} else if (result.tampered) {
+							normalizedStatus = 'tampered';
+						} else {
+							normalizedStatus = 'normal';
+						}
+					}
 
-					if (!result.current_hash || result.current_hash.status?.includes('error')) {
-						statusBadge = '<span class="status-badge danger">检测失败</span>';
-						alertHtml = `<div class="tamper-alert danger">
-							<strong>检测失败</strong><br>
-							${result.current_hash?.status || '未知错误'}
-						</div>`;
-					} else if (!result.baseline_hash) {
+					const probeStatus = result.probe_status || precheck?.status || (normalizedStatus === 'unreachable' ? 'unreachable' : 'reachable');
+					const probeReasonType = result.probe_reason_type || precheck?.reason_type || result.error_type || '';
+					const probeReason = result.probe_reason || precheck?.reason || result.error_message || result.current_hash?.status || '';
+
+					const probeBlock = `<div class="status-block ${probeStatus === 'reachable' ? 'success' : 'danger'}"><div class="label">探活状态</div><div class="value">${probeStatus === 'reachable' ? '可达' : '不可达'}</div>${probeStatus === 'reachable' ? '' : `<div>${escapeHtml(reasonTypeLabel(probeReasonType))}</div><div>${escapeHtml(probeReason || '未知错误')}</div>`}</div>`;
+					let baselineBlock = '<div class="status-block info"><div class="label">基线状态</div><div class="value">未知</div></div>';
+					let tamperBlock = '<div class="status-block info"><div class="label">篡改状态</div><div class="value">未检测</div></div>';
+
+					if (normalizedStatus === 'invalid_format') {
+						unreachableCount++;
+						statusBadge = '<span class="status-badge warning">格式非法</span>';
+						baselineBlock = '<div class="status-block warning"><div class="label">基线状态</div><div class="value">已跳过</div></div>';
+						tamperBlock = '<div class="status-block warning"><div class="label">篡改状态</div><div class="value">已跳过</div></div>';
+						alertHtml = `<div class="tamper-alert danger"><strong>URL 格式非法</strong><br>${escapeHtml(probeReason || '请修正 URL 格式')}</div>`;
+					} else if (normalizedStatus === 'unreachable') {
+						unreachableCount++;
+						statusBadge = '<span class="status-badge warning">目标不可达</span>';
+						baselineBlock = '<div class="status-block warning"><div class="label">基线状态</div><div class="value">无法建立</div></div>';
+						tamperBlock = '<div class="status-block warning"><div class="label">篡改状态</div><div class="value">未执行</div></div>';
+						alertHtml = `<div class="tamper-alert danger"><strong>目标不可达</strong><br>${escapeHtml(reasonTypeLabel(probeReasonType))}: ${escapeHtml(probeReason || '未知错误')}</div>`;
+					} else if (normalizedStatus === 'no_baseline' || !result.baseline_hash) {
 						firstCount++;
-						statusBadge = '<span class="status-badge info">首次检测</span>';
+						statusBadge = '<span class="status-badge info">无基线</span>';
+						baselineBlock = '<div class="status-block info"><div class="label">基线状态</div><div class="value">无可比对基线</div></div>';
+						tamperBlock = '<div class="status-block warning"><div class="label">篡改状态</div><div class="value">未判定</div></div>';
 						alertHtml = `<div class="tamper-alert info">
-							<strong>首次检测</strong><br>
-							这是第一次检测该URL，已记录当前hash作为参考。建议点击"设置基线"按钮保存基线以便后续对比。
+							<strong>无可比对基线</strong><br>
+							请先执行“设置基线”，再进行篡改检测。
 						</div>`;
 						
 						// 显示所有分段hash
@@ -761,9 +1034,11 @@
 								</div>`;
 							});
 						}
-					} else if (result.tampered) {
+					} else if (normalizedStatus === 'tampered' || result.tampered) {
 						tamperCount++;
 						statusBadge = '<span class="status-badge danger">已篡改</span>';
+						baselineBlock = '<div class="status-block success"><div class="label">基线状态</div><div class="value">可比对</div></div>';
+						tamperBlock = '<div class="status-block danger"><div class="label">篡改状态</div><div class="value">检测到变更</div></div>';
 						alertHtml = `<div class="tamper-alert danger">
 							<strong>⚠️ 检测到篡改!</strong><br>
 							发现 ${result.tampered_segments?.length || 0} 个分段被修改
@@ -796,6 +1071,8 @@
 					} else {
 						safeCount++;
 						statusBadge = '<span class="status-badge success">安全</span>';
+						baselineBlock = '<div class="status-block success"><div class="label">基线状态</div><div class="value">可比对</div></div>';
+						tamperBlock = '<div class="status-block success"><div class="label">篡改状态</div><div class="value">未发现篡改</div></div>';
 						alertHtml = `<div class="tamper-alert success">
 							<strong>✓ 未检测到篡改</strong><br>
 							网页内容与基线一致
@@ -814,14 +1091,20 @@
 
 					card.innerHTML = `
 						<div class="result-card-header">
-							<span class="url">${result.url}</span>
+							<span class="url">${escapeHtml(result.url)}</span>
 							${statusBadge}
 						</div>
 						<div class="result-card-body">
+							<div class="status-blocks">
+								${probeBlock}
+								${baselineBlock}
+								${tamperBlock}
+							</div>
 							${alertHtml}
 							<div class="hash-info">
 								${hashItemsHtml}
 							</div>
+							${probeStatus === 'reachable' ? '' : `<div class="result-actions"><button type="button" class="btn-retry-probe" data-url="${encodeURIComponent(result.url || '')}">重试探活</button></div>`}
 						</div>
 					`;
 
@@ -830,10 +1113,11 @@
 
 				// 更新统计
 				document.getElementById('tamper-summary').style.display = 'grid';
-				document.getElementById('tamper-total').textContent = results.length;
+				document.getElementById('tamper-total').textContent = merged.length;
 				document.getElementById('tamper-count').textContent = tamperCount;
 				document.getElementById('tamper-safe').textContent = safeCount;
 				document.getElementById('tamper-first').textContent = firstCount;
+				document.getElementById('tamper-unreachable').textContent = unreachableCount;
 			}
 
 			// 渲染截图结果

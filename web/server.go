@@ -2,8 +2,10 @@ package web
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -45,9 +47,24 @@ type QueryStatus struct {
 	EndTime    time.Time
 }
 
+type browserQueryOutcome struct {
+	Enabled            bool
+	OpenedEngines      []string
+	Errors             []string
+	AutoCaptureEnabled bool
+	AutoCaptureQueryID string
+	AutoCapturedPaths  map[string]string
+	AutoCaptureErrors  []string
+}
+
+type managedConn struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
 // WebSocket连接管理器
 type ConnectionManager struct {
-	connections map[string]*websocket.Conn
+	connections map[string]*managedConn
 	mutex       sync.RWMutex
 }
 
@@ -183,7 +200,7 @@ func NewServer(port int, service *service.UnifiedService, orchestrator *adapter.
 		service:       service,
 		orchestrator:  orchestrator,
 		upgrader:      upgrader,
-		connManager:   &ConnectionManager{connections: make(map[string]*websocket.Conn)},
+		connManager:   &ConnectionManager{connections: make(map[string]*managedConn)},
 		queryStatus:   make(map[string]*QueryStatus),
 		webRoot:       webRoot,
 		staticVersion: strconv.FormatInt(time.Now().Unix(), 10),
@@ -294,6 +311,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/screenshot/batch", s.handleBatchScreenshot)
 	mux.HandleFunc("/api/screenshot/batch-urls", s.handleBatchURLsScreenshot)
 	mux.HandleFunc("/api/import/urls", s.handleImportURLs)
+	mux.HandleFunc("/api/url/reachability", s.handleURLReachability)
 	mux.HandleFunc("/api/tamper/check", s.handleTamperCheck)
 	mux.HandleFunc("/api/tamper/baseline", s.handleTamperBaseline)
 	mux.HandleFunc("/api/tamper/baseline/list", s.handleTamperBaselineList)
@@ -303,6 +321,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/batch-screenshot", s.handleBatchScreenshotPage)
 	mux.HandleFunc("/monitor", s.handleMonitorPage)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.webRoot, "static")))))
+	mux.HandleFunc("/screenshots/", s.handleScreenshotFile)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	s.httpServer = &http.Server{
@@ -343,12 +362,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	// 关闭所有WebSocket连接
 	s.connManager.mutex.Lock()
-	for id, conn := range s.connManager.connections {
-		if err := conn.Close(); err != nil {
+	for id, managed := range s.connManager.connections {
+		if err := managed.conn.Close(); err != nil {
 			logger.Warnf("Failed to close WebSocket connection %s: %v", id, err)
 		}
 	}
-	s.connManager.connections = make(map[string]*websocket.Conn)
+	s.connManager.connections = make(map[string]*managedConn)
 	s.connManager.mutex.Unlock()
 
 	logger.Info("Web server shutdown completed")
@@ -359,6 +378,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) handleImportCookieJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isTrustedSameOriginRequest(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 	if s.config == nil {
@@ -491,6 +514,10 @@ func (s *Server) handleSaveCookies(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !isTrustedSameOriginRequest(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 
 	s.applyCookiesFromRequest(r)
 
@@ -529,6 +556,10 @@ func (s *Server) handleCDPStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCDPConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isTrustedSameOriginRequest(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -1013,6 +1044,251 @@ func hasCookies(cookies []config.Cookie) bool {
 	return false
 }
 
+func parseBoolValue(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseWSBool(raw interface{}) bool {
+	switch value := raw.(type) {
+	case bool:
+		return value
+	case string:
+		return parseBoolValue(value)
+	case float64:
+		return value != 0
+	case int:
+		return value != 0
+	default:
+		return false
+	}
+}
+
+func appendUniqueStrings(base []string, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	merged := make([]string, 0, len(base)+len(extra))
+	for _, item := range base {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		merged = append(merged, item)
+	}
+	for _, item := range extra {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func (s *Server) resolveScreenshotBaseDir() string {
+	baseDir := "./screenshots"
+	if s.config != nil && strings.TrimSpace(s.config.Screenshot.BaseDir) != "" {
+		baseDir = s.config.Screenshot.BaseDir
+	}
+	if filepath.IsAbs(baseDir) {
+		return filepath.Clean(baseDir)
+	}
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return filepath.Clean(baseDir)
+	}
+	return absBaseDir
+}
+
+func (s *Server) screenshotPathToPreviewURL(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+
+	absPath := filepath.Clean(path)
+	if !filepath.IsAbs(absPath) {
+		var err error
+		absPath, err = filepath.Abs(absPath)
+		if err != nil {
+			return ""
+		}
+	}
+
+	baseDir := s.resolveScreenshotBaseDir()
+	relPath, err := filepath.Rel(baseDir, absPath)
+	if err != nil {
+		return ""
+	}
+	if relPath == "." || strings.HasPrefix(relPath, "..") {
+		return ""
+	}
+
+	segments := strings.Split(filepath.ToSlash(relPath), "/")
+	for idx, segment := range segments {
+		segments[idx] = url.PathEscape(segment)
+	}
+
+	return "/screenshots/" + strings.Join(segments, "/")
+}
+
+func isSameHostURL(rawURL string, host string) bool {
+	if strings.TrimSpace(rawURL) == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
+}
+
+func isTrustedSameOriginRequest(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	referer := r.Header.Get("Referer")
+
+	if strings.TrimSpace(origin) == "" && strings.TrimSpace(referer) == "" {
+		// Keep compatibility for non-browser clients.
+		return true
+	}
+
+	return isSameHostURL(origin, r.Host) || isSameHostURL(referer, r.Host)
+}
+
+func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	origin := r.Header.Get("Origin")
+	referer := r.Header.Get("Referer")
+	if !isSameHostURL(origin, r.Host) && !isSameHostURL(referer, r.Host) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	relPath := strings.TrimPrefix(r.URL.Path, "/screenshots/")
+	relPath = strings.TrimSpace(relPath)
+	if relPath == "" || strings.HasSuffix(r.URL.Path, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	cleanRelPath := filepath.Clean(filepath.FromSlash(relPath))
+	if cleanRelPath == "." || strings.HasPrefix(cleanRelPath, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(cleanRelPath))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp":
+	default:
+		http.Error(w, "Unsupported file type", http.StatusForbidden)
+		return
+	}
+
+	baseDir := s.resolveScreenshotBaseDir()
+	fullPath := filepath.Join(baseDir, cleanRelPath)
+	absFullPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	relToBase, err := filepath.Rel(baseDir, absFullPath)
+	if err != nil || relToBase == "." || strings.HasPrefix(relToBase, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := os.Stat(absFullPath); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeFile(w, r, absFullPath)
+}
+
+func (s *Server) runBrowserQueryAsync(ctx context.Context, query string, engines []string, enabled bool, queryID string) <-chan browserQueryOutcome {
+	if !enabled {
+		return nil
+	}
+
+	resultCh := make(chan browserQueryOutcome, 1)
+	go func() {
+		defer close(resultCh)
+		outcome := browserQueryOutcome{Enabled: true}
+
+		autoCaptureEnabled := false
+		if s.config != nil {
+			autoCaptureEnabled = s.config.Screenshot.AutoCapture.Enabled && s.config.Screenshot.AutoCapture.CaptureSearchResults
+		}
+		if autoCaptureEnabled {
+			if strings.TrimSpace(queryID) == "" {
+				queryID = fmt.Sprintf("query_%d", time.Now().UnixNano())
+			}
+			outcome.AutoCaptureEnabled = true
+			outcome.AutoCaptureQueryID = queryID
+			outcome.AutoCapturedPaths = make(map[string]string)
+		}
+
+		if s.screenshotMgr == nil {
+			outcome.Errors = []string{"browser query mode unavailable: screenshot manager not initialized"}
+			resultCh <- outcome
+			return
+		}
+
+		baseURL := s.resolveCDPURL()
+		online, _, err := s.checkCDPStatus(ctx, baseURL)
+		if !online {
+			if err == nil {
+				err = fmt.Errorf("cdp not connected")
+			}
+			outcome.Errors = []string{fmt.Sprintf("browser query mode requires a live CDP browser: %v", err)}
+			resultCh <- outcome
+			return
+		}
+
+		for _, engine := range engines {
+			if _, err := s.screenshotMgr.OpenSearchEngineResult(ctx, engine, query); err != nil {
+				outcome.Errors = append(outcome.Errors, fmt.Sprintf("browser query open failed for %s: %v", engine, err))
+				continue
+			}
+			outcome.OpenedEngines = append(outcome.OpenedEngines, engine)
+
+			if outcome.AutoCaptureEnabled {
+				path, err := s.screenshotMgr.CaptureSearchEngineResult(ctx, engine, query, outcome.AutoCaptureQueryID)
+				if err != nil {
+					outcome.AutoCaptureErrors = append(outcome.AutoCaptureErrors, fmt.Sprintf("auto capture failed for %s: %v", engine, err))
+					continue
+				}
+				previewURL := s.screenshotPathToPreviewURL(path)
+				if previewURL == "" {
+					outcome.AutoCaptureErrors = append(outcome.AutoCaptureErrors, fmt.Sprintf("auto capture preview unavailable for %s", engine))
+					continue
+				}
+				outcome.AutoCapturedPaths[engine] = previewURL
+			}
+		}
+
+		resultCh <- outcome
+	}()
+
+	return resultCh
+}
+
 // handleAPIQuery 处理API查询请求（用于异步查询）
 func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1058,6 +1334,9 @@ func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	browserQueryID := fmt.Sprintf("query_%d", time.Now().UnixNano())
+	browserQueryCh := s.runBrowserQueryAsync(r.Context(), query, engines, parseBoolValue(r.FormValue("browser_query")), browserQueryID)
+
 	// 执行查询
 	req := service.QueryRequest{
 		Query:       query,
@@ -1067,25 +1346,50 @@ func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := s.service.Query(r.Context(), req)
+	var browserOutcome browserQueryOutcome
+	if browserQueryCh != nil {
+		browserOutcome = <-browserQueryCh
+	}
 	if err != nil {
+		combinedErrors := []string{fmt.Sprintf("Query failed: %v", err)}
+		combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.Errors)
+		combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.AutoCaptureErrors)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   fmt.Sprintf("Query failed: %v", err),
-			"query":   query,
-			"engines": engines,
+			"error":                fmt.Sprintf("Query failed: %v", err),
+			"query":                query,
+			"engines":              engines,
+			"errors":               combinedErrors,
+			"browserQuery":         browserOutcome.Enabled,
+			"browserOpenedEngines": browserOutcome.OpenedEngines,
+			"browserQueryErrors":   browserOutcome.Errors,
+			"autoCapture":          browserOutcome.AutoCaptureEnabled,
+			"autoCaptureQueryID":   browserOutcome.AutoCaptureQueryID,
+			"autoCapturedPaths":    browserOutcome.AutoCapturedPaths,
+			"autoCaptureErrors":    browserOutcome.AutoCaptureErrors,
 		})
 		return
 	}
 
+	combinedErrors := appendUniqueStrings(resp.Errors, browserOutcome.Errors)
+	combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.AutoCaptureErrors)
+
 	// 返回JSON结果
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"query":       query,
-		"engines":     engines,
-		"assets":      resp.Assets,
-		"totalCount":  resp.TotalCount,
-		"engineStats": resp.EngineStats,
-		"errors":      resp.Errors,
+		"query":                query,
+		"engines":              engines,
+		"assets":               resp.Assets,
+		"totalCount":           resp.TotalCount,
+		"engineStats":          resp.EngineStats,
+		"errors":               combinedErrors,
+		"browserQuery":         browserOutcome.Enabled,
+		"browserOpenedEngines": browserOutcome.OpenedEngines,
+		"browserQueryErrors":   browserOutcome.Errors,
+		"autoCapture":          browserOutcome.AutoCaptureEnabled,
+		"autoCaptureQueryID":   browserOutcome.AutoCaptureQueryID,
+		"autoCapturedPaths":    browserOutcome.AutoCapturedPaths,
+		"autoCaptureErrors":    browserOutcome.AutoCaptureErrors,
 	})
 }
 
@@ -1493,6 +1797,222 @@ func (s *Server) handleImportURLs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func normalizeMonitorURL(rawURL string) (string, error) {
+	urlText := strings.TrimSpace(rawURL)
+	if urlText == "" {
+		return "", fmt.Errorf("empty URL")
+	}
+
+	if !strings.HasPrefix(urlText, "http://") && !strings.HasPrefix(urlText, "https://") {
+		urlText = "https://" + urlText
+	}
+
+	parsed, err := url.ParseRequestURI(urlText)
+	if err != nil {
+		return "", err
+	}
+
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("unsupported scheme: %s", parsed.Scheme)
+	}
+
+	if strings.TrimSpace(parsed.Host) == "" {
+		return "", fmt.Errorf("missing host")
+	}
+
+	return parsed.String(), nil
+}
+
+func classifyReachabilityError(err error) (string, string) {
+	if err == nil {
+		return "unknown", "unknown error"
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns", dnsErr.Error()
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout", netErr.Error()
+	}
+
+	var certErr x509.UnknownAuthorityError
+	if errors.As(err, &certErr) {
+		return "tls", err.Error()
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(msg, "tls") || strings.Contains(msg, "certificate") || strings.Contains(msg, "ssl"):
+		return "tls", err.Error()
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "connrefused"):
+		return "connection_refused", err.Error()
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out"):
+		return "timeout", err.Error()
+	case strings.Contains(msg, "name not resolved") || strings.Contains(msg, "no such host") || strings.Contains(msg, "dns"):
+		return "dns", err.Error()
+	default:
+		return "network", err.Error()
+	}
+}
+
+func probeURLReachability(ctx context.Context, targetURL string) (bool, int, string, string) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	var headErr error
+
+	headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, targetURL, nil)
+	if err != nil {
+		errType, reason := classifyReachabilityError(err)
+		return false, 0, errType, reason
+	}
+
+	headResp, err := client.Do(headReq)
+	if err == nil {
+		defer headResp.Body.Close()
+		if headResp.StatusCode != http.StatusMethodNotAllowed {
+			return true, headResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", headResp.StatusCode)
+		}
+	} else {
+		headErr = err
+	}
+
+	getReq, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if reqErr != nil {
+		if headErr != nil {
+			errType, reason := classifyReachabilityError(headErr)
+			return false, 0, errType, reason
+		}
+		errType, reason := classifyReachabilityError(reqErr)
+		return false, 0, errType, reason
+	}
+
+	getResp, getErr := client.Do(getReq)
+	if getErr != nil {
+		if headErr != nil {
+			errType, reason := classifyReachabilityError(headErr)
+			return false, 0, errType, reason
+		}
+		errType, reason := classifyReachabilityError(getErr)
+		return false, 0, errType, reason
+	}
+	defer getResp.Body.Close()
+
+	return true, getResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", getResp.StatusCode)
+}
+
+func (s *Server) handleURLReachability(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URLs        []string `json:"urls"`
+		Concurrency int      `json:"concurrency"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.URLs) == 0 {
+		http.Error(w, "No URLs provided", http.StatusBadRequest)
+		return
+	}
+
+	if req.Concurrency <= 0 || req.Concurrency > 10 {
+		req.Concurrency = 5
+	}
+
+	type reachabilityResult struct {
+		Input      string `json:"input"`
+		URL        string `json:"url,omitempty"`
+		Status     string `json:"status"`
+		ReasonType string `json:"reason_type,omitempty"`
+		Reachable  bool   `json:"reachable"`
+		HTTPStatus int    `json:"http_status,omitempty"`
+		Reason     string `json:"reason,omitempty"`
+	}
+
+	results := make([]reachabilityResult, len(req.URLs))
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, req.Concurrency)
+
+	for i, rawURL := range req.URLs {
+		wg.Add(1)
+		go func(index int, input string) {
+			defer wg.Done()
+
+			normalizedURL, normalizeErr := normalizeMonitorURL(input)
+			if normalizeErr != nil {
+				results[index] = reachabilityResult{
+					Input:      input,
+					Status:     "invalid_format",
+					ReasonType: "invalid_format",
+					Reachable:  false,
+					Reason:     normalizeErr.Error(),
+				}
+				return
+			}
+
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			probeCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+
+			reachable, statusCode, reasonType, reason := probeURLReachability(probeCtx, normalizedURL)
+			status := "reachable"
+			if !reachable {
+				status = "unreachable"
+			}
+
+			results[index] = reachabilityResult{
+				Input:      input,
+				URL:        normalizedURL,
+				Status:     status,
+				ReasonType: reasonType,
+				Reachable:  reachable,
+				HTTPStatus: statusCode,
+				Reason:     reason,
+			}
+		}(i, rawURL)
+	}
+
+	wg.Wait()
+
+	summary := map[string]int{
+		"total":         len(results),
+		"formatValid":   0,
+		"invalidFormat": 0,
+		"reachable":     0,
+		"unreachable":   0,
+	}
+
+	for _, result := range results {
+		switch result.Status {
+		case "invalid_format":
+			summary["invalidFormat"]++
+		case "reachable":
+			summary["formatValid"]++
+			summary["reachable"]++
+		case "unreachable":
+			summary["formatValid"]++
+			summary["unreachable"]++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"summary": summary,
+		"results": results,
+	})
+}
+
 // parseExcelFile 解析Excel文件
 func parseExcelFile(file io.Reader) ([]string, error) {
 	f, err := excelize.OpenReader(file)
@@ -1757,14 +2277,26 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// 为连接生成唯一ID
 	connID := fmt.Sprintf("%d", time.Now().UnixNano())
+	managed := &managedConn{conn: conn}
+	connCtx, cancelConn := context.WithCancel(r.Context())
+
+	writeJSON := func(v interface{}) error {
+		managed.writeMu.Lock()
+		defer managed.writeMu.Unlock()
+		return conn.WriteJSON(v)
+	}
+
+	done := make(chan struct{})
 
 	// 添加到连接管理器
 	s.connManager.mutex.Lock()
-	s.connManager.connections[connID] = conn
+	s.connManager.connections[connID] = managed
 	s.connManager.mutex.Unlock()
 
 	// 连接关闭时从管理器中移除
 	defer func() {
+		cancelConn()
+		close(done)
 		s.connManager.mutex.Lock()
 		delete(s.connManager.connections, connID)
 		s.connManager.mutex.Unlock()
@@ -1785,8 +2317,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		for {
 			select {
+			case <-done:
+				return
 			case <-ticker.C:
-				if err := conn.WriteJSON(map[string]interface{}{"type": "ping"}); err != nil {
+				if err := writeJSON(map[string]interface{}{"type": "ping"}); err != nil {
 					logger.Errorf("WebSocket ping error: %v", err)
 					return
 				}
@@ -1810,7 +2344,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			switch messageType {
 			case "ping":
 				// 回复ping消息
-				if err := conn.WriteJSON(map[string]interface{}{"type": "pong"}); err != nil {
+				if err := writeJSON(map[string]interface{}{"type": "pong"}); err != nil {
 					logger.Errorf("WebSocket write error: %v", err)
 					break
 				}
@@ -1819,7 +2353,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			case "query":
 				// 处理查询请求
-				s.handleWebSocketQuery(conn, message)
+				s.handleWebSocketQuery(connCtx, message, writeJSON)
 			}
 		}
 	}
@@ -1866,13 +2400,13 @@ func maskAPIKey(apiKey string) string {
 }
 
 // handleWebSocketQuery 处理WebSocket查询请求
-func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]interface{}) {
+func (s *Server) handleWebSocketQuery(ctx context.Context, message map[string]interface{}, writeJSON func(interface{}) error) {
 	// 解析查询参数
 	query, _ := message["query"].(string)
 	query = strings.TrimSpace(query)
 
 	if err := validateQueryInput(query); err != nil {
-		if err := conn.WriteJSON(map[string]interface{}{
+		if err := writeJSON(map[string]interface{}{
 			"type":  "query_error",
 			"error": err.Error(),
 		}); err != nil {
@@ -1882,6 +2416,7 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 	}
 
 	pageSize := parseWSInt(message["page_size"], 50)
+	browserQuery := parseWSBool(message["browser_query"])
 
 	engines := parseWSStringList(message["engines"])
 	if len(engines) == 0 {
@@ -1894,7 +2429,7 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 
 	if len(engines) == 0 {
 		// 发送查询错误消息
-		if err := conn.WriteJSON(map[string]interface{}{
+		if err := writeJSON(map[string]interface{}{
 			"type":  "query_error",
 			"error": "No engines configured/registered. Please set API keys in configs/config.yaml and enable at least one engine.",
 		}); err != nil {
@@ -1925,7 +2460,7 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 	s.queryMutex.Unlock()
 
 	// 发送查询开始消息
-	if err := conn.WriteJSON(map[string]interface{}{
+	if err := writeJSON(map[string]interface{}{
 		"type":     "query_start",
 		"query_id": queryID,
 		"status":   status,
@@ -1935,6 +2470,8 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 
 	// 异步执行查询
 	go func() {
+		browserQueryCh := s.runBrowserQueryAsync(ctx, query, engines, browserQuery, queryID)
+
 		// 执行查询
 		req := service.QueryRequest{
 			Query:       query,
@@ -1943,7 +2480,11 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 			ProcessData: true,
 		}
 
-		resp, queryErr := s.service.Query(context.Background(), req)
+		resp, queryErr := s.service.Query(ctx, req)
+		var browserOutcome browserQueryOutcome
+		if browserQueryCh != nil {
+			browserOutcome = <-browserQueryCh
+		}
 		endTime := time.Now()
 
 		// 更新查询状态（在锁内修改，避免并发读写竞态）
@@ -1983,27 +2524,45 @@ func (s *Server) handleWebSocketQuery(conn *websocket.Conn, message map[string]i
 			if queryErr != nil {
 				errMsg = fmt.Sprintf("Query failed: %v", queryErr)
 			}
+			combinedErrors := appendUniqueStrings([]string{errMsg}, browserOutcome.Errors)
+			combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.AutoCaptureErrors)
 			resultsPayload = map[string]interface{}{
-				"query":       query,
-				"engines":     engines,
-				"assets":      []model.UnifiedAsset{},
-				"totalCount":  0,
-				"engineStats": map[string]int{},
-				"errors":      []string{errMsg},
-				"error":       errMsg,
+				"query":                query,
+				"engines":              engines,
+				"assets":               []model.UnifiedAsset{},
+				"totalCount":           0,
+				"engineStats":          map[string]int{},
+				"errors":               combinedErrors,
+				"error":                errMsg,
+				"browserQuery":         browserOutcome.Enabled,
+				"browserOpenedEngines": browserOutcome.OpenedEngines,
+				"browserQueryErrors":   browserOutcome.Errors,
+				"autoCapture":          browserOutcome.AutoCaptureEnabled,
+				"autoCaptureQueryID":   browserOutcome.AutoCaptureQueryID,
+				"autoCapturedPaths":    browserOutcome.AutoCapturedPaths,
+				"autoCaptureErrors":    browserOutcome.AutoCaptureErrors,
 			}
 		} else {
+			combinedErrors := appendUniqueStrings(resp.Errors, browserOutcome.Errors)
+			combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.AutoCaptureErrors)
 			resultsPayload = map[string]interface{}{
-				"query":       query,
-				"engines":     engines,
-				"assets":      resp.Assets,
-				"totalCount":  resp.TotalCount,
-				"engineStats": resp.EngineStats,
-				"errors":      resp.Errors,
+				"query":                query,
+				"engines":              engines,
+				"assets":               resp.Assets,
+				"totalCount":           resp.TotalCount,
+				"engineStats":          resp.EngineStats,
+				"errors":               combinedErrors,
+				"browserQuery":         browserOutcome.Enabled,
+				"browserOpenedEngines": browserOutcome.OpenedEngines,
+				"browserQueryErrors":   browserOutcome.Errors,
+				"autoCapture":          browserOutcome.AutoCaptureEnabled,
+				"autoCaptureQueryID":   browserOutcome.AutoCaptureQueryID,
+				"autoCapturedPaths":    browserOutcome.AutoCapturedPaths,
+				"autoCaptureErrors":    browserOutcome.AutoCaptureErrors,
 			}
 		}
 
-		if err := conn.WriteJSON(map[string]interface{}{
+		if err := writeJSON(map[string]interface{}{
 			"type":     "query_complete",
 			"query_id": queryID,
 			"status":   statusCopy,
@@ -2046,8 +2605,11 @@ func (s *Server) broadcastMessage(message interface{}) {
 	s.connManager.mutex.RLock()
 	defer s.connManager.mutex.RUnlock()
 
-	for _, conn := range s.connManager.connections {
-		if err := conn.WriteJSON(message); err != nil {
+	for _, managed := range s.connManager.connections {
+		managed.writeMu.Lock()
+		err := managed.conn.WriteJSON(message)
+		managed.writeMu.Unlock()
+		if err != nil {
 			logger.Errorf("WebSocket broadcast error: %v", err)
 		}
 	}
@@ -2055,13 +2617,17 @@ func (s *Server) broadcastMessage(message interface{}) {
 
 // 更新查询进度并广播
 func (s *Server) updateQueryProgress(queryID string, progress float64) {
-	s.queryMutex.Lock()
-	defer s.queryMutex.Unlock()
+	shouldBroadcast := false
 
+	s.queryMutex.Lock()
 	if status, exists := s.queryStatus[queryID]; exists {
 		status.Progress = progress
 		s.queryStatus[queryID] = status
+		shouldBroadcast = true
+	}
+	s.queryMutex.Unlock()
 
+	if shouldBroadcast {
 		// 广播进度更新
 		s.broadcastMessage(map[string]interface{}{
 			"type":     "progress_update",
@@ -2109,9 +2675,53 @@ func (s *Server) handleTamperCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	summary := map[string]int{
+		"total":       len(results),
+		"tampered":    0,
+		"safe":        0,
+		"noBaseline":  0,
+		"unreachable": 0,
+		"failed":      0,
+	}
+
+	for i := range results {
+		result := &results[i]
+		status := strings.ToLower(strings.TrimSpace(result.Status))
+		if status == "" {
+			if result.CurrentHash == nil {
+				status = "failed"
+			} else if strings.HasPrefix(strings.ToLower(strings.TrimSpace(result.CurrentHash.Status)), "error") {
+				status = "unreachable"
+			} else if result.BaselineHash == nil {
+				status = "no_baseline"
+			} else if result.Tampered {
+				status = "tampered"
+			} else {
+				status = "normal"
+			}
+			result.Status = status
+		}
+
+		switch status {
+		case "failed":
+			summary["failed"]++
+		case "unreachable":
+			summary["unreachable"]++
+		case "no_baseline":
+			summary["noBaseline"]++
+		case "tampered":
+			summary["tampered"]++
+		case "normal":
+			summary["safe"]++
+		default:
+			summary["failed"]++
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+		"summary": summary,
 		"results": results,
 	})
 }
@@ -2154,9 +2764,32 @@ func (s *Server) handleTamperBaseline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	summary := map[string]int{
+		"total":       len(results),
+		"saved":       0,
+		"unreachable": 0,
+		"failed":      0,
+	}
+
+	for _, result := range results {
+		status := strings.ToLower(strings.TrimSpace(result.Status))
+		if status == "" || status == "success" {
+			summary["saved"]++
+			continue
+		}
+
+		if strings.Contains(status, "failed to load page") {
+			summary["unreachable"]++
+			continue
+		}
+
+		summary["failed"]++
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+		"summary": summary,
 		"results": results,
 	})
 }

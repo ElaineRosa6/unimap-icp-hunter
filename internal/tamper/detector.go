@@ -61,6 +61,9 @@ type TamperCheckResult struct {
 	CurrentHash      *PageHashResult `json:"current_hash"`
 	BaselineHash     *PageHashResult `json:"baseline_hash,omitempty"`
 	Tampered         bool            `json:"tampered"`
+	Status           string          `json:"status"` // no_baseline | unreachable | tampered | normal
+	ErrorType        string          `json:"error_type,omitempty"`
+	ErrorMessage     string          `json:"error_message,omitempty"`
 	TamperedSegments []string        `json:"tampered_segments,omitempty"`
 	Changes          []SegmentChange `json:"changes,omitempty"`
 	Timestamp        int64           `json:"timestamp"`
@@ -164,9 +167,23 @@ func (s *HashStorage) ListBaselines() ([]string, error) {
 	var urls []string
 	for _, file := range files {
 		if strings.HasSuffix(file.Name(), ".json") {
-			urls = append(urls, strings.TrimSuffix(file.Name(), ".json"))
+			filePath := filepath.Join(s.baseDir, file.Name())
+			data, readErr := os.ReadFile(filePath)
+			if readErr != nil {
+				continue
+			}
+
+			var result PageHashResult
+			if unmarshalErr := json.Unmarshal(data, &result); unmarshalErr != nil {
+				continue
+			}
+
+			if strings.TrimSpace(result.URL) != "" {
+				urls = append(urls, result.URL)
+			}
 		}
 	}
+	sort.Strings(urls)
 	return urls, nil
 }
 
@@ -454,6 +471,7 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 			URL:         url,
 			CurrentHash: currentHash,
 			Tampered:    false,
+			Status:      "no_baseline",
 			Timestamp:   time.Now().Unix(),
 		}
 
@@ -478,6 +496,7 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 		CurrentHash:  currentHash,
 		BaselineHash: baseline,
 		Tampered:     false,
+		Status:       "normal",
 		Timestamp:    time.Now().Unix(),
 	}
 
@@ -485,6 +504,7 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 	checkType := "normal"
 	if currentHash.FullHash != baseline.FullHash {
 		result.Tampered = true
+		result.Status = "tampered"
 		result.TamperedSegments, result.Changes = d.findChangedSegments(currentHash, baseline)
 		checkType = "tampered"
 	}
@@ -590,9 +610,12 @@ func (d *Detector) BatchCheckTampering(ctx context.Context, urls []string, concu
 			result, err := d.CheckTampering(ctx, targetURL)
 			if err != nil {
 				results[index] = TamperCheckResult{
-					URL:       targetURL,
-					Tampered:  false,
-					Timestamp: time.Now().Unix(),
+					URL:          targetURL,
+					Tampered:     false,
+					Status:       "unreachable",
+					ErrorType:    classifyTamperError(err.Error()),
+					ErrorMessage: err.Error(),
+					Timestamp:    time.Now().Unix(),
 				}
 				results[index].CurrentHash = &PageHashResult{
 					URL:    targetURL,
@@ -686,6 +709,28 @@ func sanitizeFilenameForStorage(url string) string {
 		".", "_",
 	)
 	return replacer.Replace(url)
+}
+
+func classifyTamperError(message string) string {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	if msg == "" {
+		return "unknown"
+	}
+
+	switch {
+	case strings.Contains(msg, "name_not_resolved") || strings.Contains(msg, "dns"):
+		return "dns"
+	case strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout"):
+		return "timeout"
+	case strings.Contains(msg, "ssl") || strings.Contains(msg, "tls") || strings.Contains(msg, "certificate"):
+		return "tls"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "connrefused"):
+		return "connection_refused"
+	case strings.Contains(msg, "connection reset"):
+		return "connection_reset"
+	default:
+		return "network"
+	}
 }
 
 // CheckRecord 检测记录

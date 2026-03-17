@@ -1,5 +1,5 @@
-//go:build gui && !windows
-// +build gui,!windows
+//go:build gui && !windows && !linux && !darwin
+// +build gui,!windows,!linux,!darwin
 
 package main
 

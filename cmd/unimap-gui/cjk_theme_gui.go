@@ -27,9 +27,6 @@ func (t *cjkTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 }
 
 func (t *cjkTheme) Font(style fyne.TextStyle) fyne.Resource {
-	if style.Monospace {
-		return t.base.Font(style)
-	}
 	if t.regular != nil {
 		return t.regular
 	}
