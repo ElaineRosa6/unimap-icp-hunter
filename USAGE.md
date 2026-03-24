@@ -241,10 +241,18 @@ Web 端支持优雅关闭，可通过以下方式触发：
 可在 `configs/config.yaml` 中配置：
 
 - `screenshot.chrome_path`
+- `screenshot.proxy_server`
 - `screenshot.chrome_user_data_dir`
 - `screenshot.chrome_profile_dir`
 - `screenshot.chrome_remote_debug_url`
 - 支持嵌套结构和自定义字段
+
+服务性能相关配置（`system`）：
+
+- `system.max_concurrent`：引擎编排并发数
+- `system.cache_ttl`：查询缓存过期时间（秒）
+- `system.cache_max_size`：内存缓存最大条目数
+- `system.cache_cleanup_interval`：缓存清理周期（秒）
 
 **示例 JSON 结构:**
 ```json

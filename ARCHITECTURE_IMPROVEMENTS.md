@@ -1,6 +1,17 @@
 # 架构改进说明
 
-## 🎯 最新版本特性 (v2.0)
+> 文档状态：历史架构说明 + 当前实现注记（更新于 2026-03-23）。
+> 说明：本文保留了 v2.0 时期的架构设计背景，具体实现状态请以 WORK_LOG.md 和 PROJECT_SUMMARY.md 为准。
+
+## 当前实现注记（2026-03-23）
+
+- Web 层已完成多轮 handler 拆分，`web/server.go` 主要负责初始化与装配。
+- 路由已统一由 `web/router.go` 注册，限流已由 `web/middleware_ratelimit.go` 按配置启停。
+- 统一错误结构、CORS、请求体限制、Prometheus 基础指标已接入。
+- monitor URL 可达性检查已下沉到 application service（`internal/service/monitor_app_service.go`）。
+- tamper 批处理并发已统一到 `internal/util/workerpool`。
+
+## 🎯 架构背景（v2.0 时期）
 
 ### 基于同类项目分析的优化
 
@@ -97,9 +108,9 @@ app := fyne.NewApp()
 // 使用统一服务
 ```
 
-### Web API 接口
+### Web API 接口（历史示例）
 ```bash
-POST /api/v1/query
+POST /api/query
 {
   "query": "country=\"CN\"",
   "engines": ["fofa", "hunter"],
@@ -229,6 +240,6 @@ func main() {
 
 ---
 
-**版本**: v2.0.0  
-**更新日期**: 2026-02-04  
+**版本口径**: 历史架构说明（v2.0）  
+**文档更新日期**: 2026-03-23  
 **维护者**: UniMap Team

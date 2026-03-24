@@ -1,9 +1,11 @@
 package logger
 
 import (
+	"context"
 	"os"
 	"strings"
 
+	"github.com/unimap-icp-hunter/project/internal/requestid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -212,4 +214,28 @@ func WithSugar(args ...interface{}) *zap.SugaredLogger {
 		return Sugar.With(args...)
 	}
 	return nil
+}
+
+func withRIDPrefix(ctx context.Context, template string) string {
+	rid := requestid.FromContext(ctx)
+	if rid == "" {
+		return template
+	}
+	return "[rid=" + rid + "] " + template
+}
+
+func CtxDebugf(ctx context.Context, template string, args ...interface{}) {
+	Debugf(withRIDPrefix(ctx, template), args...)
+}
+
+func CtxInfof(ctx context.Context, template string, args ...interface{}) {
+	Infof(withRIDPrefix(ctx, template), args...)
+}
+
+func CtxWarnf(ctx context.Context, template string, args ...interface{}) {
+	Warnf(withRIDPrefix(ctx, template), args...)
+}
+
+func CtxErrorf(ctx context.Context, template string, args ...interface{}) {
+	Errorf(withRIDPrefix(ctx, template), args...)
 }

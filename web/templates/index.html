@@ -79,6 +79,9 @@
 				<div class="form-group">
 					<label>CDP 连接（复用浏览器登录态）</label>
 					<div class="query-options">
+						<label class="option-label" for="proxy-server">浏览器代理</label>
+						<input type="text" id="proxy-server" name="proxy_server" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7891" value="{{.proxyServer}}">
+						<button type="button" class="btn btn-secondary" id="btn-save-proxy">保存代理</button>
 						<span class="cookie-status cookie-status--off" id="cdp-status">检测中</span>
 						<button type="button" class="btn btn-secondary" id="btn-connect-cdp">连接 CDP</button>
 						<label class="option-label">

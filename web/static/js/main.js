@@ -132,6 +132,7 @@ function initCDPControls() {
 	const statusBadge = document.getElementById('cdp-status');
 	const statusInfo = document.getElementById('cdp-status-info');
 	const connectBtn = document.getElementById('btn-connect-cdp');
+	const saveProxyBtn = document.getElementById('btn-save-proxy');
 
 	if (!statusBadge && !statusInfo && !connectBtn) {
 		return;
@@ -149,6 +150,52 @@ function initCDPControls() {
 			connectCDP(connectBtn, statusBadge, statusInfo);
 		});
 	}
+
+	if (saveProxyBtn) {
+		saveProxyBtn.addEventListener('click', function() {
+			saveProxy(saveProxyBtn, statusInfo);
+		});
+	}
+}
+
+function saveProxy(button, statusInfo) {
+	const proxyServer = document.getElementById('proxy-server');
+	if (!proxyServer) {
+		alert('未找到代理输入框');
+		return;
+	}
+
+	const formData = new FormData();
+	formData.append('proxy_server', proxyServer.value || '');
+
+	const originalText = button.textContent;
+	button.textContent = '保存中...';
+	button.disabled = true;
+
+	fetch('/api/cookies', {
+		method: 'POST',
+		body: formData
+	})
+		.then(resp => resp.json())
+		.then(data => {
+			if (data && data.success) {
+				const proxyValue = (proxyServer.value || '').trim();
+				if (statusInfo) {
+					statusInfo.textContent = proxyValue ? `代理已保存: ${proxyValue}` : '代理已清空并保存';
+				}
+				alert('代理设置已保存到配置文件');
+			} else {
+				alert('代理设置保存失败');
+			}
+		})
+		.catch(err => {
+			console.error('Save proxy error:', err);
+			alert('代理设置保存失败');
+		})
+		.finally(() => {
+			button.textContent = originalText;
+			button.disabled = false;
+		});
 }
 
 function refreshCDPStatus(statusBadge, statusInfo) {
@@ -178,12 +225,19 @@ function refreshCDPStatus(statusBadge, statusInfo) {
 }
 
 function connectCDP(button, statusBadge, statusInfo) {
+	const proxyServer = document.getElementById('proxy-server');
 	const originalText = button.textContent;
 	button.textContent = '连接中...';
 	button.disabled = true;
 
+	const formData = new FormData();
+	if (proxyServer) {
+		formData.append('proxy_server', proxyServer.value || '');
+	}
+
 	fetch('/api/cdp/connect', {
-		method: 'POST'
+		method: 'POST',
+		body: formData
 	})
 		.then(resp => resp.json())
 		.then(data => {
@@ -427,6 +481,7 @@ function saveCookies(button) {
 	const hunter = document.getElementById('cookie-hunter');
 	const zoomeye = document.getElementById('cookie-zoomeye');
 	const quake = document.getElementById('cookie-quake');
+	const proxyServer = document.getElementById('proxy-server');
 
 	const formData = new FormData();
 	if (fofa && fofa.value) {
@@ -441,9 +496,14 @@ function saveCookies(button) {
 	if (quake && quake.value) {
 		formData.append('cookie_quake', quake.value);
 	}
+	if (proxyServer) {
+		formData.append('proxy_server', proxyServer.value || '');
+	}
 
-	if ([...formData.keys()].length === 0) {
-		alert('请先填写至少一个 Cookie');
+	const hasCookies = !!((fofa && fofa.value) || (hunter && hunter.value) || (zoomeye && zoomeye.value) || (quake && quake.value));
+	const hasProxy = !!(proxyServer && proxyServer.value && proxyServer.value.trim());
+	if (!hasCookies && !hasProxy) {
+		alert('请先填写至少一个 Cookie 或代理地址');
 		return;
 	}
 
@@ -459,14 +519,14 @@ function saveCookies(button) {
 		.then(data => {
 			if (data && data.success) {
 				initCookieStatus();
-				alert('Cookie 已保存到配置文件');
+				alert('Cookie/代理设置已保存到配置文件');
 			} else {
-				alert('Cookie 保存失败');
+				alert('Cookie/代理设置保存失败');
 			}
 		})
 		.catch(err => {
 			console.error('Save cookies error:', err);
-			alert('Cookie 保存失败');
+			alert('Cookie/代理设置保存失败');
 		})
 		.finally(() => {
 			button.textContent = originalText;

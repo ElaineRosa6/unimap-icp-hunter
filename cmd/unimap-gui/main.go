@@ -20,6 +20,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/appversion"
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/exporter"
 	"github.com/unimap-icp-hunter/project/internal/model"
@@ -46,7 +47,7 @@ func main() {
 	if t := newCJKTheme(); t != nil {
 		myApp.Settings().SetTheme(t)
 	}
-	myWindow := myApp.NewWindow("UniMap - 网络空间资产查询工具")
+	myWindow := myApp.NewWindow(fmt.Sprintf("UniMap %s - 网络空间资产查询工具", appversion.Short()))
 	myWindow.Resize(fyne.NewSize(1200, 800))
 
 	// 初始化配置
@@ -60,7 +61,7 @@ func main() {
 		dialog.ShowError(fmt.Errorf("无法加载配置"), myWindow)
 	}
 
-	svc := service.NewUnifiedService()
+	svc := service.NewUnifiedServiceWithConfig(cfg)
 
 	// 初始化应用状态
 	state := &AppState{
@@ -318,7 +319,7 @@ func createQueryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 
 		go func() {
 			defer setBusy(false)
-			querySvc := service.NewUnifiedService()
+			querySvc := service.NewUnifiedServiceWithConfig(state.Config)
 			registerEngines(querySvc, state.Config)
 
 			req := service.QueryRequest{
@@ -448,6 +449,7 @@ func buildScreenshotManager(cfg *config.Config) *screenshot.Manager {
 	mgr := screenshot.NewManager(screenshot.Config{
 		BaseDir:        cfg.Screenshot.BaseDir,
 		ChromePath:     cfg.Screenshot.ChromePath,
+		ProxyServer:    cfg.Screenshot.ProxyServer,
 		UserDataDir:    cfg.Screenshot.ChromeUserDataDir,
 		ProfileDir:     cfg.Screenshot.ChromeProfileDir,
 		RemoteDebugURL: strings.TrimSpace(cfg.Screenshot.ChromeRemoteDebugURL),

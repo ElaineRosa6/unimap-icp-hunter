@@ -39,6 +39,7 @@ type EngineWebURL struct {
 type Manager struct {
 	baseDir        string
 	chromePath     string
+	proxyServer    string
 	userDataDir    string
 	profileDir     string
 	remoteDebugURL string
@@ -65,6 +66,7 @@ type Cookie struct {
 type Config struct {
 	BaseDir        string
 	ChromePath     string
+	ProxyServer    string
 	UserDataDir    string
 	ProfileDir     string
 	RemoteDebugURL string
@@ -93,6 +95,7 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{
 		baseDir:        cfg.BaseDir,
 		chromePath:     cfg.ChromePath,
+		proxyServer:    cfg.ProxyServer,
 		userDataDir:    cfg.UserDataDir,
 		profileDir:     cfg.ProfileDir,
 		remoteDebugURL: cfg.RemoteDebugURL,
@@ -389,6 +392,15 @@ func (m *Manager) buildExecAllocatorOptions() []chromedp.ExecAllocatorOption {
 		opts = append(opts, chromedp.Flag("profile-directory", m.profileDir))
 	}
 
+	proxyServer := strings.TrimSpace(m.proxyServer)
+	if proxyServer == "" {
+		proxyServer = strings.TrimSpace(os.Getenv("UNIMAP_CHROME_PROXY_SERVER"))
+	}
+	if proxyServer != "" {
+		opts = append(opts, chromedp.Flag("proxy-server", proxyServer))
+		logger.Infof("Chrome proxy enabled: %s", proxyServer)
+	}
+
 	// 确定Chrome路径
 	chromePath := m.chromePath
 	if chromePath == "" {
@@ -488,6 +500,12 @@ func (m *Manager) newAllocator(ctx context.Context) (context.Context, context.Ca
 	logger.Infof("Starting Chrome with options, chrome path: %s", chromePath)
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	return allocCtx, cancel, nil
+}
+
+// NewAllocator exposes the browser allocator so other browser-driven features
+// can share the same Chrome/CDP bootstrap strategy as screenshots.
+func (m *Manager) NewAllocator(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	return m.newAllocator(ctx)
 }
 
 // isRemoteDebuggerAvailable 检查远程调试端口是否可用
@@ -798,6 +816,11 @@ func (m *Manager) SetChromePath(path string) {
 // SetRemoteDebugURL 设置远程调试地址
 func (m *Manager) SetRemoteDebugURL(remoteURL string) {
 	m.remoteDebugURL = strings.TrimSpace(remoteURL)
+}
+
+// SetProxyServer 设置浏览器代理地址
+func (m *Manager) SetProxyServer(proxy string) {
+	m.proxyServer = strings.TrimSpace(proxy)
 }
 
 // sanitizeFilename 清理文件名中的危险字符

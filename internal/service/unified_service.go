@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/core/unimap"
+	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/plugin"
 	"github.com/unimap-icp-hunter/project/internal/utils"
@@ -24,25 +27,83 @@ type UnifiedService struct {
 	parser        *unimap.UQLParser
 	merger        *unimap.ResultMerger
 	cache         utils.QueryCache
+	cacheTTL      time.Duration
+	cacheMaxSize  int
+	cacheCleanup  time.Duration
+	cacheBackend  string
 	mu            sync.RWMutex
 }
 
 // NewUnifiedService 创建统一服务
 func NewUnifiedService() *UnifiedService {
+	return NewUnifiedServiceWithConfig(nil)
+}
+
+// NewUnifiedServiceWithConfig 使用配置创建统一服务。
+func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
+	cacheTTL := 30 * time.Minute
+	cacheCleanupInterval := 5 * time.Minute
+	memoryMaxSize := 1000
+	cacheBackend := "memory"
+	useRedis := false
+	redisAddr := ""
+	redisPassword := ""
+	redisDB := 0
+	redisPrefix := "unimap:"
+
+	if cfg != nil {
+		if cfg.System.CacheTTL > 0 {
+			cacheTTL = time.Duration(cfg.System.CacheTTL) * time.Second
+		}
+		if cfg.System.CacheCleanupInterval > 0 {
+			cacheCleanupInterval = time.Duration(cfg.System.CacheCleanupInterval) * time.Second
+		}
+		if cfg.System.CacheMaxSize > 0 {
+			memoryMaxSize = cfg.System.CacheMaxSize
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.Cache.Backend), "redis") {
+			useRedis = true
+			cacheBackend = "redis"
+			redisAddr = strings.TrimSpace(cfg.Cache.Redis.Addr)
+			redisPassword = cfg.Cache.Redis.Password
+			redisDB = cfg.Cache.Redis.DB
+			if prefix := strings.TrimSpace(cfg.Cache.Redis.Prefix); prefix != "" {
+				redisPrefix = prefix
+			}
+		}
+	}
+
 	// 初始化缓存
 	cache := utils.NewCache(
-		false,         // 暂时不使用Redis
-		"", "", 0, "", // Redis配置
-		1000,          // 内存缓存最大大小
-		5*time.Minute, // 清理间隔
+		useRedis,
+		redisAddr,
+		redisPassword,
+		redisDB,
+		redisPrefix,
+		memoryMaxSize,        // 内存缓存最大大小
+		cacheCleanupInterval, // 清理间隔
 	)
+
+	orchestrator := adapter.NewEngineOrchestratorWithConfig(useRedis, redisAddr, redisPassword, redisDB)
+	if cfg != nil {
+		orchestrator.SetConcurrency(cfg.System.MaxConcurrent)
+	}
+
+	// Redis连接失败时，缓存工厂会回退到内存缓存。
+	if _, ok := cache.(*utils.RedisCache); !ok {
+		cacheBackend = "memory"
+	}
 
 	return &UnifiedService{
 		pluginManager: plugin.NewPluginManager(),
-		orchestrator:  adapter.NewEngineOrchestrator(),
+		orchestrator:  orchestrator,
 		parser:        unimap.NewUQLParser(),
 		merger:        unimap.NewResultMerger(),
 		cache:         cache,
+		cacheTTL:      cacheTTL,
+		cacheMaxSize:  memoryMaxSize,
+		cacheCleanup:  cacheCleanupInterval,
+		cacheBackend:  cacheBackend,
 	}
 }
 
@@ -74,11 +135,22 @@ type QueryResponse struct {
 
 // Query 执行查询
 func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryResponse, error) {
+	queryStart := time.Now()
+	queryStatus := "success"
+	logger.CtxInfof(ctx, "query start: engines=%v page_size=%d", req.Engines, req.PageSize)
+	defer func() {
+		metrics.IncQueryRequest(queryStatus)
+		metrics.ObserveQueryDuration(queryStatus, time.Since(queryStart))
+		logger.CtxInfof(ctx, "query finish: status=%s duration=%s", queryStatus, time.Since(queryStart))
+	}()
+
 	// 验证请求
 	if req.Query == "" {
+		queryStatus = "error"
 		return nil, fmt.Errorf("query cannot be empty")
 	}
 	if len(req.Engines) == 0 {
+		queryStatus = "error"
 		return nil, fmt.Errorf("at least one engine must be specified")
 	}
 	if req.PageSize <= 0 {
@@ -96,12 +168,15 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 	cacheKey := hex.EncodeToString(hash[:])
 
 	if cachedAssets, found := s.cache.Get(cacheKey); found {
+		metrics.ObserveCacheLookup(s.cacheBackend, "hit")
+		logger.CtxDebugf(ctx, "query cache hit: backend=%s", s.cacheBackend)
 		// 触发查询前钩子
 		if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{
 			"query":   req.Query,
 			"engines": req.Engines,
 			"cached":  true,
 		}); err != nil {
+			queryStatus = "error"
 			return nil, fmt.Errorf("pre-query hook failed: %w", err)
 		}
 
@@ -125,6 +200,8 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 			Errors:      []string{},
 		}, nil
 	}
+	metrics.ObserveCacheLookup(s.cacheBackend, "miss")
+	logger.CtxDebugf(ctx, "query cache miss: backend=%s", s.cacheBackend)
 
 	// 触发查询前钩子
 	if err := s.pluginManager.GetHooks().TriggerHook(plugin.HookBeforeQuery, "query", map[string]interface{}{
@@ -132,24 +209,27 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		"engines": req.Engines,
 		"cached":  false,
 	}); err != nil {
+		queryStatus = "error"
 		return nil, fmt.Errorf("pre-query hook failed: %w", err)
 	}
 
 	// 解析 UQL
 	ast, err := s.parser.Parse(req.Query)
 	if err != nil {
+		queryStatus = "error"
 		return nil, fmt.Errorf("failed to parse query: %w", err)
 	}
 
 	// 转换为各引擎查询
 	queries, err := s.orchestrator.TranslateQuery(ast, req.Engines)
 	if err != nil {
+		queryStatus = "error"
 		return nil, fmt.Errorf("failed to translate query: %w", err)
 	}
 
 	// 并行搜索
 	var errors []string
-	engineResults, err := s.orchestrator.SearchEngines(queries, req.PageSize)
+	engineResults, err := s.orchestrator.SearchEnginesWithContext(ctx, queries, req.PageSize)
 	if err != nil {
 		// 记录错误但继续处理
 		errors = append(errors, err.Error())
@@ -170,6 +250,7 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		// 处理引擎返回的错误
 		if result.Error != "" {
 			errors = append(errors, fmt.Sprintf("engine %s error: %s", result.EngineName, result.Error))
+			metrics.IncEngineError()
 			continue
 		}
 
@@ -184,6 +265,7 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		adapterInstance, exists := s.orchestrator.GetAdapter(result.EngineName)
 		if !exists {
 			errors = append(errors, fmt.Sprintf("adapter for engine %s not found", result.EngineName))
+			metrics.IncEngineError()
 			continue
 		}
 
@@ -191,6 +273,7 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		assets, err := adapterInstance.Normalize(result)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("failed to normalize results from %s: %v", result.EngineName, err))
+			metrics.IncEngineError()
 			continue
 		}
 
@@ -203,12 +286,13 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		allAssets, err = s.processAssets(ctx, allAssets)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("data processing failed: %v", err))
+			metrics.IncEngineError()
 		}
 	}
 
 	// 将结果存入缓存
 	if len(allAssets) > 0 {
-		s.cache.Set(cacheKey, allAssets, 30*time.Minute)
+		s.cache.Set(cacheKey, allAssets, s.cacheTTL)
 	}
 
 	// 触发查询后钩子

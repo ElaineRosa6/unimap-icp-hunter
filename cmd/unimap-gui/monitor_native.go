@@ -4,10 +4,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -66,10 +69,11 @@ type screenshotBatchItem struct {
 }
 
 type screenshotFileItem struct {
-	Name      string
-	Path      string
-	Size      int64
-	UpdatedAt time.Time
+	Name       string
+	Path       string
+	PreviewURL string
+	Size       int64
+	UpdatedAt  time.Time
 }
 
 func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
@@ -155,7 +159,7 @@ func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 	}
 
 	refreshBaselines := func() {
-		list, err := state.Detector.ListBaselines()
+		list, source, err := listBaselinesPreferAPI(context.Background(), state)
 		if err != nil {
 			statusLabel.SetText("读取基线失败: " + err.Error())
 			return
@@ -168,6 +172,7 @@ func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 		baselineList.Refresh()
 		targetList.Refresh()
 		refreshDetails()
+		statusLabel.SetText(fmt.Sprintf("已加载 %d 条基线（来源: %s）", len(baselines), source))
 	}
 
 	updateSummary := func() {
@@ -268,12 +273,12 @@ func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 				annotateUnreachableBaseline(probed)
 				return probed, "无可达 URL 可设置基线", nil
 			}
-			results, err := state.Detector.BatchSetBaseline(ctx, reachable, concurrency)
+			results, source, err := runSetBaselinePreferAPI(ctx, state, reachable, concurrency)
 			if err != nil {
 				return probed, "基线设置失败", err
 			}
 			applyBaselineResults(probed, results)
-			return probed, summarizeBaselineStatus(probed), nil
+			return probed, fmt.Sprintf("%s（来源: %s）", summarizeBaselineStatus(probed), source), nil
 		})
 	})
 
@@ -284,12 +289,12 @@ func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 				annotateUnreachableTamper(probed)
 				return probed, "无可达 URL 可检测", nil
 			}
-			results, err := state.Detector.BatchCheckTampering(ctx, reachable, concurrency)
+			results, source, err := runTamperCheckPreferAPI(ctx, state, reachable, concurrency)
 			if err != nil {
 				return probed, "篡改检测失败", err
 			}
 			applyTamperResults(probed, results)
-			return probed, summarizeTamperStatus(probed), nil
+			return probed, fmt.Sprintf("%s（来源: %s）", summarizeTamperStatus(probed), source), nil
 		})
 	})
 
@@ -305,12 +310,12 @@ func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 				return probed, "无可达 URL 可截图", nil
 			}
 			batchID := time.Now().Format("20060102-150405")
-			results, err := state.ScreenshotMgr.CaptureBatchURLs(ctx, reachable, batchID, concurrency)
+			results, source, err := runBatchScreenshotPreferAPI(ctx, state, reachable, batchID, concurrency)
 			if err != nil {
 				return probed, "批量截图失败", err
 			}
 			applyScreenshotResults(probed, results)
-			return probed, summarizeScreenshotStatus(probed), nil
+			return probed, fmt.Sprintf("%s（来源: %s）", summarizeScreenshotStatus(probed), source), nil
 		})
 	})
 
@@ -387,12 +392,13 @@ func createMonitorTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 			if !confirm {
 				return
 			}
-			if err := state.Detector.DeleteBaseline(baselineURL); err != nil {
+			source, err := runDeleteBaselinePreferAPI(context.Background(), state, baselineURL)
+			if err != nil {
 				dialog.ShowError(err, window)
 				return
 			}
 			refreshBaselines()
-			statusLabel.SetText("基线已删除")
+			statusLabel.SetText("基线已删除（来源: " + source + "）")
 		}, window)
 	})
 
@@ -466,9 +472,11 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 	var (
 		urlItems       []historyURLItem
 		records        []*tamper.CheckRecord
+		recordsByURL   map[string][]*tamper.CheckRecord
 		selectedURL    = -1
 		selectedRecord = -1
 	)
+	recordsByURL = make(map[string][]*tamper.CheckRecord)
 
 	statsLabel := widget.NewLabel("就绪")
 	urlDetail := widget.NewMultiLineEntry()
@@ -533,12 +541,7 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 			refreshDetail()
 			return
 		}
-		loaded, err := state.TamperStorage.LoadCheckRecords(urlItems[selectedURL].URL, 100)
-		if err != nil {
-			statsLabel.SetText("读取检测记录失败: " + err.Error())
-			return
-		}
-		records = loaded
+		records = recordsByURL[urlItems[selectedURL].URL]
 		if selectedRecord >= len(records) {
 			selectedRecord = -1
 		}
@@ -547,28 +550,32 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 	}
 
 	refreshURLs := func() {
-		allRecords, err := state.TamperStorage.ListAllCheckRecords()
-		if err != nil {
-			statsLabel.SetText("读取历史索引失败: " + err.Error())
+		recordsByURL = make(map[string][]*tamper.CheckRecord)
+		baselineURLs, baselineSource, baselineErr := listBaselinesPreferAPI(context.Background(), state)
+		if baselineErr != nil {
+			statsLabel.SetText("读取基线失败: " + baselineErr.Error())
 			return
 		}
-		baselineURLs, _ := state.Detector.ListBaselines()
 		baselineSet := make(map[string]bool, len(baselineURLs))
 		for _, item := range baselineURLs {
 			baselineSet[item] = true
 		}
 
 		byURL := make(map[string]*historyURLItem)
-		for _, item := range baselineURLs {
-			if _, ok := byURL[item]; !ok {
-				byURL[item] = &historyURLItem{URL: item, HasBaseline: true}
+		source := "API"
+		apiRecords, apiErr := listTamperHistoryViaAPI(context.Background(), 1000)
+		if apiErr == nil {
+			for _, item := range baselineURLs {
+				if _, ok := byURL[item]; !ok {
+					byURL[item] = &historyURLItem{URL: item, HasBaseline: true}
+				}
 			}
-		}
-		for _, list := range allRecords {
-			for _, record := range list {
-				if strings.TrimSpace(record.URL) == "" {
+			for _, rec := range apiRecords {
+				record := rec.toCheckRecord()
+				if record == nil || strings.TrimSpace(record.URL) == "" {
 					continue
 				}
+				recordsByURL[record.URL] = append(recordsByURL[record.URL], record)
 				info, ok := byURL[record.URL]
 				if !ok {
 					info = &historyURLItem{URL: record.URL}
@@ -580,6 +587,43 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 				}
 				if baselineSet[record.URL] {
 					info.HasBaseline = true
+				}
+			}
+			for urlText := range recordsByURL {
+				sort.Slice(recordsByURL[urlText], func(i, j int) bool {
+					return recordsByURL[urlText][i].Timestamp > recordsByURL[urlText][j].Timestamp
+				})
+			}
+		} else {
+			source = "本地"
+			allRecords, err := state.TamperStorage.ListAllCheckRecords()
+			if err != nil {
+				statsLabel.SetText("读取历史索引失败: " + err.Error())
+				return
+			}
+			for _, item := range baselineURLs {
+				if _, ok := byURL[item]; !ok {
+					byURL[item] = &historyURLItem{URL: item, HasBaseline: true}
+				}
+			}
+			for _, list := range allRecords {
+				for _, record := range list {
+					if strings.TrimSpace(record.URL) == "" {
+						continue
+					}
+					recordsByURL[record.URL] = append(recordsByURL[record.URL], record)
+					info, ok := byURL[record.URL]
+					if !ok {
+						info = &historyURLItem{URL: record.URL}
+						byURL[record.URL] = info
+					}
+					info.RecordCount++
+					if record.Timestamp > info.LastCheckAt {
+						info.LastCheckAt = record.Timestamp
+					}
+					if baselineSet[record.URL] {
+						info.HasBaseline = true
+					}
 				}
 			}
 		}
@@ -600,7 +644,7 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 		}
 		urlList.Refresh()
 		loadRecords()
-		statsLabel.SetText(fmt.Sprintf("已加载 %d 个监控目标", len(urlItems)))
+		statsLabel.SetText(fmt.Sprintf("已加载 %d 个监控目标（历史来源: %s，基线来源: %s）", len(urlItems), source, baselineSource))
 	}
 
 	urlList.OnSelected = func(id widget.ListItemID) {
@@ -633,11 +677,13 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 			if !confirm {
 				return
 			}
-			if err := state.TamperStorage.DeleteCheckRecords(selected.URL); err != nil {
+			source, err := runDeleteHistoryPreferAPI(context.Background(), state, selected.URL)
+			if err != nil {
 				dialog.ShowError(err, window)
 				return
 			}
 			refreshURLs()
+			statsLabel.SetText("历史已删除（来源: " + source + "）")
 		}, window)
 	})
 	deleteBaselineBtn := widget.NewButton("删除该 URL 基线", func() {
@@ -646,11 +692,13 @@ func createHistoryTab(window fyne.Window, state *AppState) fyne.CanvasObject {
 			return
 		}
 		selected := urlItems[selectedURL]
-		if err := state.Detector.DeleteBaseline(selected.URL); err != nil {
+		source, err := runDeleteBaselinePreferAPI(context.Background(), state, selected.URL)
+		if err != nil {
 			dialog.ShowError(err, window)
 			return
 		}
 		refreshURLs()
+		statsLabel.SetText("基线已删除（来源: " + source + "）")
 	})
 
 	left := container.NewBorder(
@@ -748,31 +796,16 @@ func createScreenshotTab(window fyne.Window, state *AppState) fyne.CanvasObject 
 			refreshDetail()
 			return
 		}
-		entries, err := os.ReadDir(batches[selectedBatch].Path)
+		batchName := batches[selectedBatch].Name
+		apiFiles, source, err := listScreenshotBatchFilesPreferAPI(context.Background(), batchName, baseDir)
 		if err != nil {
 			statusLabel.SetText("读取截图批次失败: " + err.Error())
 			return
 		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			files = append(files, screenshotFileItem{
-				Name:      entry.Name(),
-				Path:      filepath.Join(batches[selectedBatch].Path, entry.Name()),
-				Size:      info.Size(),
-				UpdatedAt: info.ModTime(),
-			})
-		}
-		sort.Slice(files, func(i, j int) bool {
-			return files[i].UpdatedAt.After(files[j].UpdatedAt)
-		})
+		files = apiFiles
 		fileList.Refresh()
 		refreshDetail()
+		statusLabel.SetText(fmt.Sprintf("已加载批次 %s 的 %d 个文件（来源: %s）", batchName, len(files), source))
 	}
 
 	batchList := widget.NewList(
@@ -797,50 +830,18 @@ func createScreenshotTab(window fyne.Window, state *AppState) fyne.CanvasObject 
 
 	refreshBatches := func() {
 		batches = nil
-		entries, err := os.ReadDir(baseDir)
+		apiBatches, source, err := listScreenshotBatchesPreferAPI(context.Background(), baseDir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				statusLabel.SetText("截图目录尚未创建")
-				batchList.Refresh()
-				loadFiles()
-				return
-			}
 			statusLabel.SetText("读取截图目录失败: " + err.Error())
 			return
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			fileCount := 0
-			children, err := os.ReadDir(filepath.Join(baseDir, entry.Name()))
-			if err == nil {
-				for _, child := range children {
-					if !child.IsDir() {
-						fileCount++
-					}
-				}
-			}
-			batches = append(batches, screenshotBatchItem{
-				Name:      entry.Name(),
-				Path:      filepath.Join(baseDir, entry.Name()),
-				FileCount: fileCount,
-				UpdatedAt: info.ModTime(),
-			})
-		}
-		sort.Slice(batches, func(i, j int) bool {
-			return batches[i].UpdatedAt.After(batches[j].UpdatedAt)
-		})
+		batches = apiBatches
 		if selectedBatch >= len(batches) {
 			selectedBatch = -1
 		}
 		batchList.Refresh()
 		loadFiles()
-		statusLabel.SetText(fmt.Sprintf("已加载 %d 个截图批次", len(batches)))
+		statusLabel.SetText(fmt.Sprintf("已加载 %d 个截图批次（来源: %s）", len(batches), source))
 	}
 
 	refreshBtn := widget.NewButtonWithIcon("刷新截图", theme.ViewRefreshIcon(), func() {
@@ -869,6 +870,46 @@ func createScreenshotTab(window fyne.Window, state *AppState) fyne.CanvasObject 
 			dialog.ShowError(err, window)
 		}
 	})
+	deleteFileBtn := widget.NewButton("删除所选文件", func() {
+		if selectedBatch < 0 || selectedBatch >= len(batches) || selectedFile < 0 || selectedFile >= len(files) {
+			dialog.ShowInformation("提示", "请先选择批次和截图文件", window)
+			return
+		}
+		batchName := batches[selectedBatch].Name
+		fileName := files[selectedFile].Name
+		dialog.ShowConfirm("删除截图文件", "确认删除所选截图文件？", func(confirm bool) {
+			if !confirm {
+				return
+			}
+			source, err := runDeleteScreenshotFilePreferAPI(context.Background(), batchName, fileName, files[selectedFile].Path)
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			loadFiles()
+			statusLabel.SetText("截图文件已删除（来源: " + source + "）")
+		}, window)
+	})
+	deleteBatchBtn := widget.NewButton("删除所选批次", func() {
+		if selectedBatch < 0 || selectedBatch >= len(batches) {
+			dialog.ShowInformation("提示", "请先选择一个批次", window)
+			return
+		}
+		batchName := batches[selectedBatch].Name
+		batchPath := batches[selectedBatch].Path
+		dialog.ShowConfirm("删除截图批次", "确认删除该批次及其全部截图文件？", func(confirm bool) {
+			if !confirm {
+				return
+			}
+			source, err := runDeleteScreenshotBatchPreferAPI(context.Background(), batchName, batchPath)
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			refreshBatches()
+			statusLabel.SetText("截图批次已删除（来源: " + source + "）")
+		}, window)
+	})
 
 	content := container.NewHSplit(
 		container.NewBorder(widget.NewLabelWithStyle("截图批次", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), nil, nil, nil, batchList),
@@ -888,7 +929,7 @@ func createScreenshotTab(window fyne.Window, state *AppState) fyne.CanvasObject 
 			container.NewHBox(widget.NewIcon(theme.FolderIcon()), widget.NewLabelWithStyle("截图管理", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), layout.NewSpacer(), statusLabel),
 			widget.NewLabel("截图根目录: "+baseDir),
 			widget.NewSeparator(),
-			container.NewHBox(refreshBtn, openRootBtn, openBatchBtn, openFileBtn),
+			container.NewHBox(refreshBtn, openRootBtn, openBatchBtn, openFileBtn, deleteFileBtn, deleteBatchBtn),
 			widget.NewSeparator(),
 		),
 		nil,
@@ -975,6 +1016,634 @@ func normalizeMonitorURL(rawURL string) (string, error) {
 		return "", fmt.Errorf("missing host")
 	}
 	return parsed.String(), nil
+}
+
+type guiTamperAPIResponse struct {
+	Success bool                       `json:"success"`
+	Mode    string                     `json:"mode"`
+	Summary map[string]int             `json:"summary"`
+	Results []tamper.TamperCheckResult `json:"results"`
+}
+
+type guiBaselineAPIResponse struct {
+	Success bool                    `json:"success"`
+	Summary map[string]int          `json:"summary"`
+	Results []tamper.PageHashResult `json:"results"`
+}
+
+type guiBaselinesListResponse struct {
+	Success bool     `json:"success"`
+	URLs    []string `json:"urls"`
+}
+
+type guiTamperHistoryResponse struct {
+	Success bool                     `json:"success"`
+	Records []guiTamperHistoryRecord `json:"records"`
+}
+
+type guiTamperHistoryRecord struct {
+	URL              string   `json:"url"`
+	CheckType        string   `json:"check_type"`
+	Tampered         bool     `json:"tampered"`
+	TamperedSegments []string `json:"tampered_segments"`
+	Timestamp        int64    `json:"timestamp"`
+	CurrentFullHash  string   `json:"current_full_hash"`
+	BaselineFullHash string   `json:"baseline_full_hash"`
+}
+
+func (r guiTamperHistoryRecord) toCheckRecord() *tamper.CheckRecord {
+	rec := &tamper.CheckRecord{
+		URL:              strings.TrimSpace(r.URL),
+		CheckType:        strings.TrimSpace(r.CheckType),
+		Tampered:         r.Tampered,
+		TamperedSegments: r.TamperedSegments,
+		Timestamp:        r.Timestamp,
+	}
+	if strings.TrimSpace(r.CurrentFullHash) != "" {
+		rec.CurrentHash = &tamper.PageHashResult{FullHash: r.CurrentFullHash}
+	}
+	if strings.TrimSpace(r.BaselineFullHash) != "" {
+		rec.BaselineHash = &tamper.PageHashResult{FullHash: r.BaselineFullHash}
+	}
+	if rec.URL == "" {
+		return nil
+	}
+	if rec.CheckType == "" {
+		rec.CheckType = "check"
+	}
+	return rec
+}
+
+type guiScreenshotBatchesResponse struct {
+	Success bool                    `json:"success"`
+	Batches []guiScreenshotBatchDTO `json:"batches"`
+}
+
+type guiScreenshotBatchDTO struct {
+	Name      string `json:"name"`
+	FileCount int    `json:"file_count"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+type guiScreenshotFilesResponse struct {
+	Success bool                   `json:"success"`
+	Files   []guiScreenshotFileDTO `json:"files"`
+}
+
+type guiScreenshotFileDTO struct {
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	UpdatedAt  int64  `json:"updated_at"`
+	PreviewURL string `json:"preview_url"`
+}
+
+func resolveGUIAPIBase() string {
+	if raw := strings.TrimSpace(os.Getenv("UNIMAP_API_BASE")); raw != "" {
+		return strings.TrimRight(raw, "/")
+	}
+	return "http://127.0.0.1:8448"
+}
+
+func runTamperCheckViaAPI(ctx context.Context, urls []string, concurrency int) ([]tamper.TamperCheckResult, error) {
+	base := resolveGUIAPIBase()
+	payload := map[string]interface{}{
+		"urls":        urls,
+		"concurrency": concurrency,
+		"mode":        tamper.DetectionModeRelaxed,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/tamper/check", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded guiTamperAPIResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.Success {
+		return nil, fmt.Errorf("tamper api returned unsuccessful response")
+	}
+	return decoded.Results, nil
+}
+
+func runTamperCheckPreferAPI(ctx context.Context, state *AppState, urls []string, concurrency int) ([]tamper.TamperCheckResult, string, error) {
+	apiResults, apiErr := runTamperCheckViaAPI(ctx, urls, concurrency)
+	if apiErr == nil {
+		return apiResults, "API", nil
+	}
+
+	localResults, localErr := state.Detector.BatchCheckTampering(ctx, urls, concurrency)
+	if localErr == nil {
+		return localResults, "本地", nil
+	}
+
+	return nil, "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func runSetBaselineViaAPI(ctx context.Context, urls []string, concurrency int) ([]tamper.PageHashResult, error) {
+	base := resolveGUIAPIBase()
+	payload := map[string]interface{}{
+		"urls":        urls,
+		"concurrency": concurrency,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/tamper/baseline", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded guiBaselineAPIResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.Success {
+		return nil, fmt.Errorf("baseline api returned unsuccessful response")
+	}
+	return decoded.Results, nil
+}
+
+func runSetBaselinePreferAPI(ctx context.Context, state *AppState, urls []string, concurrency int) ([]tamper.PageHashResult, string, error) {
+	apiResults, apiErr := runSetBaselineViaAPI(ctx, urls, concurrency)
+	if apiErr == nil {
+		return apiResults, "API", nil
+	}
+
+	localResults, localErr := state.Detector.BatchSetBaseline(ctx, urls, concurrency)
+	if localErr == nil {
+		return localResults, "本地", nil
+	}
+
+	return nil, "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func listBaselinesViaAPI(ctx context.Context) ([]string, error) {
+	base := resolveGUIAPIBase()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/tamper/baseline/list", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded guiBaselinesListResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.Success {
+		return nil, fmt.Errorf("baseline list api returned unsuccessful response")
+	}
+	return decoded.URLs, nil
+}
+
+func listBaselinesPreferAPI(ctx context.Context, state *AppState) ([]string, string, error) {
+	apiURLs, apiErr := listBaselinesViaAPI(ctx)
+	if apiErr == nil {
+		return apiURLs, "API", nil
+	}
+
+	localURLs, localErr := state.Detector.ListBaselines()
+	if localErr == nil {
+		return localURLs, "本地", nil
+	}
+
+	return nil, "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func runDeleteBaselineViaAPI(ctx context.Context, targetURL string) error {
+	base := resolveGUIAPIBase()
+	endpoint := fmt.Sprintf("%s/api/tamper/baseline/delete?url=%s", base, url.QueryEscape(targetURL))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func runDeleteBaselinePreferAPI(ctx context.Context, state *AppState, targetURL string) (string, error) {
+	apiErr := runDeleteBaselineViaAPI(ctx, targetURL)
+	if apiErr == nil {
+		return "API", nil
+	}
+
+	localErr := state.Detector.DeleteBaseline(targetURL)
+	if localErr == nil {
+		return "本地", nil
+	}
+
+	return "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func listTamperHistoryViaAPI(ctx context.Context, limit int) ([]guiTamperHistoryRecord, error) {
+	base := resolveGUIAPIBase()
+	endpoint := fmt.Sprintf("%s/api/tamper/history?limit=%d", base, limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded guiTamperHistoryResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.Success {
+		return nil, fmt.Errorf("history api returned unsuccessful response")
+	}
+	return decoded.Records, nil
+}
+
+func runDeleteHistoryViaAPI(ctx context.Context, targetURL string) error {
+	base := resolveGUIAPIBase()
+	endpoint := fmt.Sprintf("%s/api/tamper/history/delete?url=%s", base, url.QueryEscape(targetURL))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func runDeleteHistoryPreferAPI(ctx context.Context, state *AppState, targetURL string) (string, error) {
+	apiErr := runDeleteHistoryViaAPI(ctx, targetURL)
+	if apiErr == nil {
+		return "API", nil
+	}
+
+	localErr := state.TamperStorage.DeleteCheckRecords(targetURL)
+	if localErr == nil {
+		return "本地", nil
+	}
+
+	return "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func listScreenshotBatchesViaAPI(ctx context.Context, baseDir string) ([]screenshotBatchItem, error) {
+	base := resolveGUIAPIBase()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/screenshot/batches", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded guiScreenshotBatchesResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.Success {
+		return nil, fmt.Errorf("screenshot batches api returned unsuccessful response")
+	}
+
+	items := make([]screenshotBatchItem, 0, len(decoded.Batches))
+	for _, item := range decoded.Batches {
+		items = append(items, screenshotBatchItem{
+			Name:      item.Name,
+			Path:      filepath.Join(baseDir, item.Name),
+			FileCount: item.FileCount,
+			UpdatedAt: time.Unix(item.UpdatedAt, 0),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items, nil
+}
+
+func listScreenshotBatchesPreferAPI(ctx context.Context, baseDir string) ([]screenshotBatchItem, string, error) {
+	apiItems, apiErr := listScreenshotBatchesViaAPI(ctx, baseDir)
+	if apiErr == nil {
+		return apiItems, "API", nil
+	}
+
+	entries, localErr := os.ReadDir(baseDir)
+	if localErr != nil {
+		if os.IsNotExist(localErr) {
+			return []screenshotBatchItem{}, "本地", nil
+		}
+		return nil, "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+	}
+
+	items := make([]screenshotBatchItem, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		fileCount := 0
+		children, err := os.ReadDir(filepath.Join(baseDir, entry.Name()))
+		if err == nil {
+			for _, child := range children {
+				if !child.IsDir() {
+					fileCount++
+				}
+			}
+		}
+		items = append(items, screenshotBatchItem{
+			Name:      entry.Name(),
+			Path:      filepath.Join(baseDir, entry.Name()),
+			FileCount: fileCount,
+			UpdatedAt: info.ModTime(),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items, "本地", nil
+}
+
+func listScreenshotBatchFilesViaAPI(ctx context.Context, batchName, baseDir string) ([]screenshotFileItem, error) {
+	base := resolveGUIAPIBase()
+	endpoint := fmt.Sprintf("%s/api/screenshot/batches/files?batch=%s", base, url.QueryEscape(batchName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded guiScreenshotFilesResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.Success {
+		return nil, fmt.Errorf("screenshot files api returned unsuccessful response")
+	}
+
+	items := make([]screenshotFileItem, 0, len(decoded.Files))
+	for _, item := range decoded.Files {
+		items = append(items, screenshotFileItem{
+			Name:       item.Name,
+			Path:       filepath.Join(baseDir, batchName, item.Name),
+			PreviewURL: item.PreviewURL,
+			Size:       item.Size,
+			UpdatedAt:  time.Unix(item.UpdatedAt, 0),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items, nil
+}
+
+func listScreenshotBatchFilesPreferAPI(ctx context.Context, batchName, baseDir string) ([]screenshotFileItem, string, error) {
+	apiItems, apiErr := listScreenshotBatchFilesViaAPI(ctx, batchName, baseDir)
+	if apiErr == nil {
+		return apiItems, "API", nil
+	}
+
+	batchPath := filepath.Join(baseDir, batchName)
+	entries, localErr := os.ReadDir(batchPath)
+	if localErr != nil {
+		return nil, "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+	}
+
+	items := make([]screenshotFileItem, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		items = append(items, screenshotFileItem{
+			Name:      entry.Name(),
+			Path:      filepath.Join(batchPath, entry.Name()),
+			Size:      info.Size(),
+			UpdatedAt: info.ModTime(),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items, "本地", nil
+}
+
+func runDeleteScreenshotBatchViaAPI(ctx context.Context, batchName string) error {
+	base := resolveGUIAPIBase()
+	endpoint := fmt.Sprintf("%s/api/screenshot/batches/delete?batch=%s", base, url.QueryEscape(batchName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func runDeleteScreenshotBatchPreferAPI(ctx context.Context, batchName, batchPath string) (string, error) {
+	apiErr := runDeleteScreenshotBatchViaAPI(ctx, batchName)
+	if apiErr == nil {
+		return "API", nil
+	}
+
+	localErr := os.RemoveAll(batchPath)
+	if localErr == nil {
+		return "本地", nil
+	}
+
+	return "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func runDeleteScreenshotFileViaAPI(ctx context.Context, batchName, fileName string) error {
+	base := resolveGUIAPIBase()
+	endpoint := fmt.Sprintf("%s/api/screenshot/file/delete?batch=%s&file=%s", base, url.QueryEscape(batchName), url.QueryEscape(fileName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func runDeleteScreenshotFilePreferAPI(ctx context.Context, batchName, fileName, filePath string) (string, error) {
+	apiErr := runDeleteScreenshotFileViaAPI(ctx, batchName, fileName)
+	if apiErr == nil {
+		return "API", nil
+	}
+
+	localErr := os.Remove(filePath)
+	if localErr == nil {
+		return "本地", nil
+	}
+
+	return "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
+}
+
+func runBatchScreenshotViaAPI(ctx context.Context, urls []string, batchID string, concurrency int) ([]screenshot.BatchScreenshotResult, error) {
+	base := resolveGUIAPIBase()
+	payload := map[string]interface{}{
+		"urls":        urls,
+		"batch_id":    batchID,
+		"concurrency": concurrency,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/screenshot/batch-urls", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 180 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var decoded struct {
+		Results []screenshot.BatchScreenshotResult `json:"results"`
+	}
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded.Results, nil
+}
+
+func runBatchScreenshotPreferAPI(ctx context.Context, state *AppState, urls []string, batchID string, concurrency int) ([]screenshot.BatchScreenshotResult, string, error) {
+	apiResults, apiErr := runBatchScreenshotViaAPI(ctx, urls, batchID, concurrency)
+	if apiErr == nil {
+		return apiResults, "API", nil
+	}
+
+	localResults, localErr := state.ScreenshotMgr.CaptureBatchURLs(ctx, urls, batchID, concurrency)
+	if localErr == nil {
+		return localResults, "本地", nil
+	}
+
+	return nil, "", fmt.Errorf("API 模式失败: %v; 本地模式失败: %v", apiErr, localErr)
 }
 
 func probeURLReachability(ctx context.Context, targetURL string) (bool, int, string, string) {

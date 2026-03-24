@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/appversion"
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/exporter"
 	"github.com/unimap-icp-hunter/project/internal/logger"
@@ -18,6 +19,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		if runAPISubcommand(os.Args[1], os.Args[2:]) {
+			return
+		}
+	}
+
 	// Parse flags
 	queryPtr := flag.String("q", "", "Query string (e.g., 'country=\"CN\"')")
 	enginesPtr := flag.String("e", "", "Comma-separated list of engines to use (e.g., 'fofa,hunter')")
@@ -28,14 +35,26 @@ func main() {
 	hunterCookiePtr := flag.String("cookie-hunter", "", "Hunter cookie header (e.g., 'session=xxx; token=yyy')")
 	quakeCookiePtr := flag.String("cookie-quake", "", "Quake cookie header (e.g., 'session=xxx; token=yyy')")
 	zoomeyeCookiePtr := flag.String("cookie-zoomeye", "", "ZoomEye cookie header (e.g., 'session=xxx; token=yyy')")
+	versionPtr := flag.Bool("version", false, "Print version and exit")
 
 	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "UniMap CLI %s\n\n", appversion.Full())
+		fmt.Fprintf(os.Stderr, "API-first subcommands:\n")
+		fmt.Fprintf(os.Stderr, "  %s query -q '<uql>' [-e fofa,hunter] [-l 100] [--api-base http://127.0.0.1:8448]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s tamper-check --urls 'https://a.com,https://b.com' [--mode relaxed]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s screenshot-batch --urls 'https://a.com,https://b.com'\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Legacy direct-engine mode:\n")
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExample:\n  %s -q 'app=\"Apache\"' -e fofa,hunter -o results.csv\n", os.Args[0])
 	}
 
 	flag.Parse()
+
+	if *versionPtr {
+		fmt.Printf("UniMap CLI %s\n", appversion.Full())
+		return
+	}
 
 	if *queryPtr == "" {
 		fmt.Println("Error: Query string is required")
@@ -58,7 +77,7 @@ func main() {
 	}
 
 	// Init service
-	svc := service.NewUnifiedService()
+	svc := service.NewUnifiedServiceWithConfig(cfg)
 
 	// Register engines
 	registerEngines(svc, cfg)

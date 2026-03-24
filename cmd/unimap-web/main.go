@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/appversion"
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/service"
@@ -25,7 +26,7 @@ func main() {
 	cfg := cfgManager.GetConfig()
 
 	// 创建统一服务
-	svc := service.NewUnifiedService()
+	svc := service.NewUnifiedServiceWithConfig(cfg)
 
 	// 注册引擎适配器
 	if cfg != nil {
@@ -61,7 +62,7 @@ func main() {
 
 	// 启动Web服务器（在goroutine中运行，不阻塞）
 	go func() {
-		fmt.Println("Starting Web server on :8448...")
+		fmt.Printf("Starting Web server %s on :8448...\n", appversion.Short())
 		if err := server.Start(); err != nil {
 			logger.Errorf("Web server error: %v", err)
 			shutdownManager.Shutdown()

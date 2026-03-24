@@ -62,6 +62,12 @@
 		.options-group .form-group {
 			flex: 1;
 		}
+		.options-group .form-group select {
+			width: 100%;
+			padding: 8px 12px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+		}
 		.action-buttons {
 			display: flex;
 			gap: 10px;
@@ -318,6 +324,13 @@
             border: 1px solid #ddd;
             border-radius: 4px;
         }
+
+		.history-controls input {
+			padding: 8px 12px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			min-width: 220px;
+		}
         
         .history-item {
             border: 1px solid #ddd;
@@ -406,6 +419,13 @@
 					<input type="number" id="concurrency" min="1" max="10" value="5">
 				</div>
 				<div class="form-group">
+					<label for="tamper-mode">判定模式</label>
+					<select id="tamper-mode">
+						<option value="relaxed" selected>宽松模式（推荐）</option>
+						<option value="strict">严格模式</option>
+					</select>
+				</div>
+				<div class="form-group">
 					<label for="batch-id">批次ID (可选)</label>
 					<input type="text" id="batch-id" placeholder="自动生成">
 				</div>
@@ -485,6 +505,7 @@
 				<!-- 历史记录 -->
 				<div class="tab-content" id="history-tab">
 					<div class="history-controls">
+						<input type="text" id="history-query" placeholder="按URL/状态查询">
 						<select id="history-url-filter">
 							<option value="">全部URL</option>
 						</select>
@@ -493,6 +514,11 @@
 							<option value="first_check">首次检测</option>
 							<option value="normal">正常</option>
 							<option value="tampered">篡改</option>
+						</select>
+						<select id="history-mode-filter">
+							<option value="">全部模式</option>
+							<option value="relaxed">宽松</option>
+							<option value="strict">严格</option>
 						</select>
 						<button type="button" class="btn btn-secondary" id="btn-refresh-history">刷新</button>
 					</div>
@@ -515,6 +541,7 @@
 			const reachableUrlsEl = document.getElementById('reachable-urls');
 			const unreachableUrlsEl = document.getElementById('unreachable-urls');
 			const concurrencyInput = document.getElementById('concurrency');
+			const tamperModeInput = document.getElementById('tamper-mode');
 			const batchIdInput = document.getElementById('batch-id');
 			const progressContainer = document.getElementById('progress-container');
 			const progressBarFill = document.getElementById('progress-bar-fill');
@@ -522,8 +549,15 @@
 			const resultsSection = document.getElementById('results-section');
 			const tamperResults = document.getElementById('tamper-results');
 			const screenshotResults = document.getElementById('screenshot-results');
+			const historyResults = document.getElementById('history-results');
+			const historyUrlFilter = document.getElementById('history-url-filter');
+			const historyTypeFilter = document.getElementById('history-type-filter');
+			const historyModeFilter = document.getElementById('history-mode-filter');
+			const historyQueryInput = document.getElementById('history-query');
+			const refreshHistoryBtn = document.getElementById('btn-refresh-history');
 
 			let currentAction = null;
+			let historyRecords = [];
 
 			// 更新统计
 			function updateStats() {
@@ -679,14 +713,30 @@
 			}
 
 			async function ensureBaselinesExist(urls) {
-				const response = await fetch('/api/tamper/baseline/list');
-				if (!response.ok) {
-					throw new Error('无法检查基线状态');
+				try {
+					const response = await fetch('/api/tamper/baseline/list');
+					if (!response.ok) {
+						return { checked: false, hasBaseline: true };
+					}
+					const data = await response.json();
+					const baselineURLs = Array.isArray(data.urls) ? data.urls : [];
+					const baselineSet = new Set(baselineURLs.map(canonicalizeURL));
+					return {
+						checked: true,
+						hasBaseline: urls.some(url => baselineSet.has(canonicalizeURL(url)))
+					};
+				} catch (error) {
+					return { checked: false, hasBaseline: true };
 				}
-				const data = await response.json();
-				const baselineURLs = Array.isArray(data.urls) ? data.urls : [];
-				const baselineSet = new Set(baselineURLs.map(canonicalizeURL));
-				return urls.some(url => baselineSet.has(canonicalizeURL(url)));
+			}
+
+			async function readErrorResponse(response, fallbackMessage) {
+				try {
+					const text = (await response.text()).trim();
+					return text || fallbackMessage;
+				} catch (error) {
+					return fallbackMessage;
+				}
 			}
 
 			// 截断hash显示
@@ -696,6 +746,147 @@
 				return hash.substring(0, length) + '...';
 			}
 
+			function formatTimestamp(ts) {
+				if (!ts) return '-';
+				const date = new Date(Number(ts) * 1000);
+				if (Number.isNaN(date.getTime())) return '-';
+				return date.toLocaleString();
+			}
+
+			function statusLabel(status) {
+				switch (String(status || '').toLowerCase()) {
+					case 'tampered':
+						return '篡改';
+					case 'normal':
+						return '正常';
+					case 'first_check':
+						return '首次检测';
+					case 'no_baseline':
+						return '无基线';
+					default:
+						return '未知';
+				}
+			}
+
+			function statusClass(status) {
+				switch (String(status || '').toLowerCase()) {
+					case 'tampered':
+						return 'danger';
+					case 'normal':
+						return 'success';
+					case 'first_check':
+					case 'no_baseline':
+						return 'info';
+					default:
+						return 'warning';
+				}
+			}
+
+			function populateHistoryURLFilter(records) {
+				if (!historyUrlFilter) return;
+				const selected = historyUrlFilter.value;
+				const urls = Array.from(new Set(records.map(r => r.url).filter(Boolean))).sort();
+				historyUrlFilter.innerHTML = '<option value="">全部URL</option>';
+				urls.forEach(url => {
+					const option = document.createElement('option');
+					option.value = url;
+					option.textContent = url;
+					historyUrlFilter.appendChild(option);
+				});
+				if (selected && urls.includes(selected)) {
+					historyUrlFilter.value = selected;
+				}
+			}
+
+			function getFilteredHistoryRecords() {
+				const urlFilter = (historyUrlFilter && historyUrlFilter.value) ? historyUrlFilter.value : '';
+				const typeFilter = (historyTypeFilter && historyTypeFilter.value) ? String(historyTypeFilter.value).toLowerCase() : '';
+				const modeFilter = (historyModeFilter && historyModeFilter.value) ? String(historyModeFilter.value).toLowerCase() : '';
+				const keyword = (historyQueryInput && historyQueryInput.value) ? historyQueryInput.value.trim().toLowerCase() : '';
+
+				return historyRecords.filter(record => {
+					if (urlFilter && record.url !== urlFilter) {
+						return false;
+					}
+					if (typeFilter) {
+						const checkType = String(record.check_type || '').toLowerCase();
+						const status = String(record.status || '').toLowerCase();
+						if (checkType !== typeFilter && status !== typeFilter) {
+							return false;
+						}
+					}
+					if (modeFilter) {
+						const mode = String(record.detection_mode || '').toLowerCase();
+						if (mode !== modeFilter) {
+							return false;
+						}
+					}
+					if (!keyword) {
+						return true;
+					}
+					const haystack = [
+						record.url,
+						record.check_type,
+						record.status,
+						record.detection_mode,
+						(record.tampered_segments || []).join(',')
+					].join(' ').toLowerCase();
+					return haystack.includes(keyword);
+				});
+			}
+
+			function renderHistoryRecords(records) {
+				if (!historyResults) return;
+				historyResults.innerHTML = '';
+
+				if (!Array.isArray(records) || records.length === 0) {
+					historyResults.innerHTML = '<div class="tamper-alert info"><strong>暂无历史记录</strong><br>请先执行篡改检测后再查看。</div>';
+					return;
+				}
+
+				records.forEach(record => {
+					const status = String(record.status || '').toLowerCase();
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					const segments = Array.isArray(record.tampered_segments) ? record.tampered_segments : [];
+					const modeText = String(record.detection_mode || 'relaxed').toLowerCase() === 'strict' ? '严格' : '宽松';
+					item.innerHTML = `
+						<div class="history-item-header">
+							<div class="url">${escapeHtml(record.url || '-')}</div>
+							<span class="status-badge ${statusClass(status)}">${escapeHtml(statusLabel(status))}</span>
+						</div>
+						<div class="history-item-body">
+							<div class="timestamp">检测时间: ${escapeHtml(formatTimestamp(record.timestamp))}</div>
+							<div>类型: ${escapeHtml(record.check_type || '-')} | 模式: ${escapeHtml(modeText)} | 变更数: ${Number(record.changes_count || 0)}</div>
+							${segments.length > 0 ? `<div>变更分段: ${escapeHtml(segments.join(', '))}</div>` : ''}
+							<div class="hash-preview">current: ${escapeHtml(truncateHash(record.current_full_hash || ''))} | baseline: ${escapeHtml(truncateHash(record.baseline_full_hash || ''))}</div>
+						</div>
+					`;
+					historyResults.appendChild(item);
+				});
+			}
+
+			function applyHistoryFilters() {
+				renderHistoryRecords(getFilteredHistoryRecords());
+			}
+
+			async function loadHistory() {
+				if (!historyResults) return;
+				historyResults.innerHTML = '<div class="tamper-alert info">正在加载历史记录...</div>';
+
+				const params = new URLSearchParams();
+				params.set('limit', '500');
+				const response = await fetch(`/api/tamper/history?${params.toString()}`);
+				if (!response.ok) {
+					throw new Error(await readErrorResponse(response, '历史记录加载失败'));
+				}
+
+				const data = await response.json();
+				historyRecords = Array.isArray(data.records) ? data.records : [];
+				populateHistoryURLFilter(historyRecords);
+				applyHistoryFilters();
+			}
+
 			// Tab切换
 			document.querySelectorAll('.tab').forEach(tab => {
 				tab.addEventListener('click', function() {
@@ -703,8 +894,34 @@
 					document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 					this.classList.add('active');
 					document.getElementById(this.dataset.tab + '-tab').classList.add('active');
+					if (this.dataset.tab === 'history') {
+						loadHistory().catch(err => {
+							historyResults.innerHTML = `<div class="tamper-alert danger">历史记录加载失败: ${escapeHtml(err.message)}</div>`;
+						});
+					}
 				});
 			});
+
+			if (refreshHistoryBtn) {
+				refreshHistoryBtn.addEventListener('click', function() {
+					loadHistory().catch(err => {
+						historyResults.innerHTML = `<div class="tamper-alert danger">历史记录加载失败: ${escapeHtml(err.message)}</div>`;
+					});
+				});
+			}
+
+			if (historyUrlFilter) {
+				historyUrlFilter.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyTypeFilter) {
+				historyTypeFilter.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyModeFilter) {
+				historyModeFilter.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyQueryInput) {
+				historyQueryInput.addEventListener('input', applyHistoryFilters);
+			}
 
 			// 监听输入
 			urlList.addEventListener('input', updateStats);
@@ -794,7 +1011,8 @@
 				}
 
 				const concurrency = parseInt(concurrencyInput.value) || 5;
-				showProgress('正在进行篡改检测...');
+				const mode = (tamperModeInput && tamperModeInput.value) ? tamperModeInput.value : 'relaxed';
+				showProgress(`正在进行篡改检测（${mode === 'strict' ? '严格模式' : '宽松模式'}）...`);
 				resultsSection.style.display = 'block';
 
 				// 切换到篡改检测tab
@@ -808,8 +1026,8 @@
 						return;
 					}
 
-					const hasBaseline = await ensureBaselinesExist(reachability.reachableURLs);
-					if (!hasBaseline) {
+					const baselineCheck = await ensureBaselinesExist(reachability.reachableURLs);
+					if (baselineCheck.checked && !baselineCheck.hasBaseline) {
 						throw new Error('没有可比对的基线，请先执行“设置基线”');
 					}
 
@@ -820,11 +1038,12 @@
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
 							urls: reachability.reachableURLs,
-							concurrency: concurrency
+							concurrency: concurrency,
+							mode: mode
 						})
 					});
 
-					if (!response.ok) throw new Error('请求失败');
+					if (!response.ok) throw new Error(await readErrorResponse(response, '请求失败'));
 
 					const data = await response.json();
 					updateProgress(100, '检测完成');
@@ -865,7 +1084,7 @@
 						})
 					});
 
-					if (!response.ok) throw new Error('请求失败');
+					if (!response.ok) throw new Error(await readErrorResponse(response, '请求失败'));
 
 					const data = await response.json();
 					updateProgress(100, '基线设置完成');

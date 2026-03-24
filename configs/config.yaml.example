@@ -28,12 +28,17 @@ engines:
         use_web_api: true
 system:
     max_concurrent: 10
+    cache_ttl: 3600
+    cache_max_size: 1000
+    cache_cleanup_interval: 300
 
 # Web 截图与 CDP 配置
 screenshot:
     enabled: true
     base_dir: ./screenshots
     chrome_path: ""
+    # 浏览器代理，例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:7891
+    proxy_server: ""
     chrome_user_data_dir: ""
     chrome_profile_dir: "Default"
     chrome_remote_debug_url: "http://127.0.0.1:9222"
@@ -46,3 +51,40 @@ screenshot:
         enabled: false
         capture_search_results: true
         capture_targets: false
+
+web:
+    cors:
+        allowed_origins:
+            - http://localhost:8448
+            - http://127.0.0.1:8448
+        allowed_methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+        allowed_headers:
+            - Content-Type
+            - Authorization
+            - X-Requested-With
+            - X-WebSocket-Token
+        exposed_headers: []
+        allow_credentials: true
+        max_age: 600
+    rate_limit:
+        enabled: true
+        requests_per_window: 60
+        window_seconds: 60
+    request_limits:
+        max_body_bytes: 10485760
+        max_multipart_memory_bytes: 10485760
+
+cache:
+    # memory | redis
+    backend: memory
+    redis:
+        addr: 127.0.0.1:6379
+        password: ""
+        db: 0
+        prefix: unimap:

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp"
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/util/workerpool"
 )
 
 const (
@@ -34,9 +36,34 @@ const (
 	SegmentMeta        = "meta"
 	SegmentLinks       = "links"
 	SegmentImages      = "images"
+	SegmentJSFiles     = "js_files"
+	SegmentFavicon     = "favicon"
+	SegmentButtons     = "buttons"
 	SegmentForms       = "forms"
 	SegmentFullContent = "full_content"
+
+	DetectionModeRelaxed = "relaxed"
+	DetectionModeStrict  = "strict"
 )
+
+var relaxedVolatileSegments = map[string]struct{}{
+	SegmentHead:        {},
+	SegmentBody:        {},
+	SegmentHeader:      {},
+	SegmentNav:         {},
+	SegmentFooter:      {},
+	SegmentLinks:       {},
+	SegmentScripts:     {},
+	SegmentStyles:      {},
+	SegmentMeta:        {},
+	SegmentFullContent: {},
+}
+
+var compatibilityOptionalSegments = map[string]struct{}{
+	SegmentJSFiles: {},
+	SegmentFavicon: {},
+	SegmentButtons: {},
+}
 
 type SegmentHash struct {
 	Name     string `json:"name"`
@@ -83,14 +110,16 @@ type HashStorage struct {
 }
 
 type Detector struct {
-	storage     *HashStorage
-	allocCtx    context.Context
-	allocCancel context.CancelFunc
-	mu          sync.Mutex
+	storage       *HashStorage
+	allocCtx      context.Context
+	allocCancel   context.CancelFunc
+	detectionMode string
+	mu            sync.Mutex
 }
 
 type DetectorConfig struct {
-	BaseDir string
+	BaseDir       string
+	DetectionMode string
 }
 
 func NewHashStorage(baseDir string) *HashStorage {
@@ -200,8 +229,17 @@ func (s *HashStorage) DeleteBaseline(url string) error {
 func NewDetector(cfg DetectorConfig) *Detector {
 	storage := NewHashStorage(cfg.BaseDir)
 	return &Detector{
-		storage: storage,
+		storage:       storage,
+		detectionMode: normalizeDetectionMode(cfg.DetectionMode),
 	}
+}
+
+func normalizeDetectionMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == DetectionModeStrict {
+		return DetectionModeStrict
+	}
+	return DetectionModeRelaxed
 }
 
 func (d *Detector) SetAllocator(ctx context.Context, allocCtx context.Context, allocCancel context.CancelFunc) {
@@ -215,7 +253,23 @@ func (d *Detector) ComputePageHash(ctx context.Context, targetURL string) (*Page
 	var html string
 	var title string
 
-	if err := chromedp.Run(ctx,
+	runCtx := ctx
+	runCancel := func() {}
+	if chromedp.FromContext(runCtx) == nil {
+		d.mu.Lock()
+		allocCtx := d.allocCtx
+		d.mu.Unlock()
+		if allocCtx == nil {
+			allocCtx = context.Background()
+		}
+		runCtx, runCancel = chromedp.NewContext(allocCtx)
+	}
+	defer runCancel()
+
+	timeoutCtx, timeoutCancel := context.WithTimeout(runCtx, 45*time.Second)
+	defer timeoutCancel()
+
+	if err := chromedp.Run(timeoutCtx,
 		chromedp.Navigate(targetURL),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Sleep(500*time.Millisecond),
@@ -264,10 +318,13 @@ func (d *Detector) computeSegmentHashes(doc *goquery.Document, html string) []Se
 	segments = append(segments, d.computeElementHash(doc, "footer", SegmentFooter))
 
 	segments = append(segments, d.computeScriptHash(doc))
+	segments = append(segments, d.computeJSFileHash(doc))
 	segments = append(segments, d.computeStyleHash(doc))
 	segments = append(segments, d.computeMetaHash(doc))
+	segments = append(segments, d.computeFaviconHash(doc))
 	segments = append(segments, d.computeLinkHash(doc))
 	segments = append(segments, d.computeImageHash(doc))
+	segments = append(segments, d.computeButtonHash(doc))
 	segments = append(segments, d.computeFormHash(doc))
 
 	cleanHTML := d.cleanHTML(html)
@@ -303,8 +360,11 @@ func (d *Detector) computeScriptHash(doc *goquery.Document) SegmentHash {
 	var scripts []string
 	doc.Find("script").Each(func(i int, s *goquery.Selection) {
 		src, _ := s.Attr("src")
+		integrity, _ := s.Attr("integrity")
+		async, _ := s.Attr("async")
+		deferAttr, _ := s.Attr("defer")
 		content := s.Text()
-		scripts = append(scripts, src+":"+content)
+		scripts = append(scripts, strings.Join([]string{src, integrity, async, deferAttr, content}, ":"))
 	})
 
 	sort.Strings(scripts)
@@ -315,6 +375,27 @@ func (d *Detector) computeScriptHash(doc *goquery.Document) SegmentHash {
 		Hash:     computeSHA256(combined),
 		Length:   len(combined),
 		Elements: len(scripts),
+	}
+}
+
+func (d *Detector) computeJSFileHash(doc *goquery.Document) SegmentHash {
+	var jsFiles []string
+	doc.Find("script[src]").Each(func(i int, s *goquery.Selection) {
+		src, _ := s.Attr("src")
+		integrity, _ := s.Attr("integrity")
+		crossorigin, _ := s.Attr("crossorigin")
+		referrerpolicy, _ := s.Attr("referrerpolicy")
+		jsFiles = append(jsFiles, strings.Join([]string{src, integrity, crossorigin, referrerpolicy}, ":"))
+	})
+
+	sort.Strings(jsFiles)
+	combined := strings.Join(jsFiles, "|")
+
+	return SegmentHash{
+		Name:     SegmentJSFiles,
+		Hash:     computeSHA256(combined),
+		Length:   len(combined),
+		Elements: len(jsFiles),
 	}
 }
 
@@ -359,6 +440,31 @@ func (d *Detector) computeMetaHash(doc *goquery.Document) SegmentHash {
 	}
 }
 
+func (d *Detector) computeFaviconHash(doc *goquery.Document) SegmentHash {
+	var icons []string
+	doc.Find("link").Each(func(i int, s *goquery.Selection) {
+		rel, _ := s.Attr("rel")
+		relLower := strings.ToLower(rel)
+		if !strings.Contains(relLower, "icon") {
+			return
+		}
+		href, _ := s.Attr("href")
+		typ, _ := s.Attr("type")
+		sizes, _ := s.Attr("sizes")
+		icons = append(icons, strings.Join([]string{relLower, href, typ, sizes}, ":"))
+	})
+
+	sort.Strings(icons)
+	combined := strings.Join(icons, "|")
+
+	return SegmentHash{
+		Name:     SegmentFavicon,
+		Hash:     computeSHA256(combined),
+		Length:   len(combined),
+		Elements: len(icons),
+	}
+}
+
 func (d *Detector) computeLinkHash(doc *goquery.Document) SegmentHash {
 	var links []string
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
@@ -382,8 +488,13 @@ func (d *Detector) computeImageHash(doc *goquery.Document) SegmentHash {
 	var images []string
 	doc.Find("img").Each(func(i int, s *goquery.Selection) {
 		src, _ := s.Attr("src")
+		srcset, _ := s.Attr("srcset")
 		alt, _ := s.Attr("alt")
-		images = append(images, fmt.Sprintf("%s:%s", src, alt))
+		width, _ := s.Attr("width")
+		height, _ := s.Attr("height")
+		loading, _ := s.Attr("loading")
+		decoding, _ := s.Attr("decoding")
+		images = append(images, strings.Join([]string{src, srcset, alt, width, height, loading, decoding}, ":"))
 	})
 
 	sort.Strings(images)
@@ -394,6 +505,48 @@ func (d *Detector) computeImageHash(doc *goquery.Document) SegmentHash {
 		Hash:     computeSHA256(combined),
 		Length:   len(combined),
 		Elements: len(images),
+	}
+}
+
+func (d *Detector) computeButtonHash(doc *goquery.Document) SegmentHash {
+	var buttons []string
+
+	doc.Find("button").Each(func(i int, s *goquery.Selection) {
+		typ, _ := s.Attr("type")
+		id, _ := s.Attr("id")
+		class, _ := s.Attr("class")
+		name, _ := s.Attr("name")
+		ariaLabel, _ := s.Attr("aria-label")
+		text := strings.TrimSpace(s.Text())
+		buttons = append(buttons, strings.Join([]string{"button", typ, id, class, name, ariaLabel, text}, ":"))
+	})
+
+	doc.Find("input[type='button'], input[type='submit'], input[type='reset']").Each(func(i int, s *goquery.Selection) {
+		typ, _ := s.Attr("type")
+		id, _ := s.Attr("id")
+		class, _ := s.Attr("class")
+		name, _ := s.Attr("name")
+		value, _ := s.Attr("value")
+		buttons = append(buttons, strings.Join([]string{"input", typ, id, class, name, value}, ":"))
+	})
+
+	doc.Find("a[role='button']").Each(func(i int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		id, _ := s.Attr("id")
+		class, _ := s.Attr("class")
+		ariaLabel, _ := s.Attr("aria-label")
+		text := strings.TrimSpace(s.Text())
+		buttons = append(buttons, strings.Join([]string{"anchor", href, id, class, ariaLabel, text}, ":"))
+	})
+
+	sort.Strings(buttons)
+	combined := strings.Join(buttons, "|")
+
+	return SegmentHash{
+		Name:     SegmentButtons,
+		Hash:     computeSHA256(combined),
+		Length:   len(combined),
+		Elements: len(buttons),
 	}
 }
 
@@ -466,6 +619,33 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 
 	baseline, err := d.storage.LoadBaseline(url)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			result := &TamperCheckResult{
+				URL:          url,
+				CurrentHash:  currentHash,
+				Tampered:     false,
+				Status:       "failed",
+				ErrorType:    "baseline",
+				ErrorMessage: fmt.Sprintf("failed to load baseline: %v", err),
+				Timestamp:    time.Now().Unix(),
+			}
+
+			record := &CheckRecord{
+				ID:            fmt.Sprintf("%d", time.Now().UnixNano()),
+				URL:           url,
+				Tampered:      false,
+				CurrentHash:   currentHash,
+				Timestamp:     result.Timestamp,
+				CheckType:     "baseline_error",
+				DetectionMode: d.detectionMode,
+			}
+			if saveErr := d.storage.SaveCheckRecord(url, record); saveErr != nil {
+				logger.Warnf("Failed to save check record: %v", saveErr)
+			}
+
+			return result, nil
+		}
+
 		// 没有基线，首次检测
 		result := &TamperCheckResult{
 			URL:         url,
@@ -477,12 +657,13 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 
 		// 保存首次检测记录
 		record := &CheckRecord{
-			ID:          fmt.Sprintf("%d", time.Now().UnixNano()),
-			URL:         url,
-			Tampered:    false,
-			CurrentHash: currentHash,
-			Timestamp:   result.Timestamp,
-			CheckType:   "first_check",
+			ID:            fmt.Sprintf("%d", time.Now().UnixNano()),
+			URL:           url,
+			Tampered:      false,
+			CurrentHash:   currentHash,
+			Timestamp:     result.Timestamp,
+			CheckType:     "first_check",
+			DetectionMode: d.detectionMode,
 		}
 		if saveErr := d.storage.SaveCheckRecord(url, record); saveErr != nil {
 			logger.Warnf("Failed to save check record: %v", saveErr)
@@ -500,13 +681,20 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 		Timestamp:    time.Now().Unix(),
 	}
 
-	// 确定检测类型
+	// 确定检测类型：对高动态片段降权，避免将常规动态内容误判为篡改。
 	checkType := "normal"
-	if currentHash.FullHash != baseline.FullHash {
-		result.Tampered = true
-		result.Status = "tampered"
-		result.TamperedSegments, result.Changes = d.findChangedSegments(currentHash, baseline)
-		checkType = "tampered"
+	tamperedSegments, changes := d.findChangedSegments(currentHash, baseline)
+	result.TamperedSegments = tamperedSegments
+	result.Changes = changes
+
+	if len(changes) > 0 {
+		if d.isMeaningfulTamper(changes) {
+			result.Tampered = true
+			result.Status = "tampered"
+			checkType = "tampered"
+		} else {
+			checkType = "normal_dynamic"
+		}
 	}
 
 	// 保存检测记录
@@ -520,6 +708,7 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 		BaselineHash:     baseline,
 		Timestamp:        result.Timestamp,
 		CheckType:        checkType,
+		DetectionMode:    d.detectionMode,
 	}
 	if saveErr := d.storage.SaveCheckRecord(url, record); saveErr != nil {
 		logger.Warnf("Failed to save check record: %v", saveErr)
@@ -559,6 +748,9 @@ func (d *Detector) findChangedSegments(current, baseline *PageHashResult) ([]str
 				})
 			}
 		} else {
+			if isCompatibilityOptionalSegment(name) {
+				continue
+			}
 			tamperedSegments = append(tamperedSegments, name)
 			changes = append(changes, SegmentChange{
 				Segment:     name,
@@ -572,6 +764,9 @@ func (d *Detector) findChangedSegments(current, baseline *PageHashResult) ([]str
 
 	for name, baselineSeg := range baselineMap {
 		if _, exists := currentMap[name]; !exists {
+			if isCompatibilityOptionalSegment(name) {
+				continue
+			}
 			tamperedSegments = append(tamperedSegments, name)
 			changes = append(changes, SegmentChange{
 				Segment:     name,
@@ -586,6 +781,165 @@ func (d *Detector) findChangedSegments(current, baseline *PageHashResult) ([]str
 	return tamperedSegments, changes
 }
 
+func (d *Detector) isMeaningfulTamper(changes []SegmentChange) bool {
+	if len(changes) == 0 {
+		return false
+	}
+
+	if d.detectionMode == DetectionModeStrict {
+		return true
+	}
+
+	stableModifiedCount := 0
+	for _, change := range changes {
+		if !d.isStableSegment(change.Segment) {
+			continue
+		}
+
+		// 宽松模式下，仅当稳定分段出现新增/删除才判定为结构性变化。
+		if change.ChangeType == "added" || change.ChangeType == "removed" {
+			return true
+		}
+
+		stableModifiedCount++
+		if isCriticalStableSegment(change.Segment) {
+			return true
+		}
+	}
+
+	// 宽松模式下，单个非核心稳定分段变化通常属于页面动态内容，不立即判为篡改。
+	return stableModifiedCount >= 2
+}
+
+func isCriticalStableSegment(segment string) bool {
+	switch segment {
+	case SegmentMain, SegmentArticle, SegmentForms:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *Detector) isStableSegment(segment string) bool {
+	if d.detectionMode == DetectionModeStrict {
+		return true
+	}
+	_, volatile := relaxedVolatileSegments[segment]
+	return !volatile
+}
+
+func isCompatibilityOptionalSegment(segment string) bool {
+	_, optional := compatibilityOptionalSegments[segment]
+	return optional
+}
+
+type tamperBatchCheckResult struct {
+	index  int
+	result TamperCheckResult
+}
+
+type tamperBatchCheckTask struct {
+	detector   *Detector
+	ctx        context.Context
+	index      int
+	targetURL  string
+	resultChan chan<- tamperBatchCheckResult
+	wg         *sync.WaitGroup
+}
+
+func (t *tamperBatchCheckTask) Execute() error {
+	defer t.wg.Done()
+
+	result, err := t.detector.CheckTampering(t.ctx, t.targetURL)
+	if err != nil {
+		t.resultChan <- tamperBatchCheckResult{
+			index: t.index,
+			result: TamperCheckResult{
+				URL:          t.targetURL,
+				Tampered:     false,
+				Status:       "unreachable",
+				ErrorType:    classifyTamperError(err.Error()),
+				ErrorMessage: err.Error(),
+				Timestamp:    time.Now().Unix(),
+				CurrentHash: &PageHashResult{
+					URL:    t.targetURL,
+					Status: "error: " + err.Error(),
+				},
+			},
+		}
+		return nil
+	}
+
+	t.resultChan <- tamperBatchCheckResult{index: t.index, result: *result}
+	return nil
+}
+
+type tamperBatchBaselineResult struct {
+	index  int
+	result PageHashResult
+}
+
+type tamperBatchBaselineTask struct {
+	detector   *Detector
+	ctx        context.Context
+	index      int
+	targetURL  string
+	resultChan chan<- tamperBatchBaselineResult
+	wg         *sync.WaitGroup
+}
+
+func (t *tamperBatchBaselineTask) Execute() error {
+	defer t.wg.Done()
+
+	hashResult, err := t.detector.ComputePageHash(t.ctx, t.targetURL)
+	if err != nil {
+		t.resultChan <- tamperBatchBaselineResult{
+			index: t.index,
+			result: PageHashResult{
+				URL:    t.targetURL,
+				Status: "error: " + err.Error(),
+			},
+		}
+		return nil
+	}
+
+	if err := t.detector.SaveBaseline(t.targetURL, hashResult); err != nil {
+		t.resultChan <- tamperBatchBaselineResult{
+			index: t.index,
+			result: PageHashResult{
+				URL:    t.targetURL,
+				Status: "error saving baseline: " + err.Error(),
+			},
+		}
+		return nil
+	}
+
+	t.resultChan <- tamperBatchBaselineResult{index: t.index, result: *hashResult}
+	return nil
+}
+
+func collectOrderedTamperCheckResults(resultChan <-chan tamperBatchCheckResult, size int) []TamperCheckResult {
+	results := make([]TamperCheckResult, size)
+	for item := range resultChan {
+		if item.index < 0 || item.index >= size {
+			continue
+		}
+		results[item.index] = item.result
+	}
+	return results
+}
+
+func collectOrderedTamperBaselineResults(resultChan <-chan tamperBatchBaselineResult, size int) []PageHashResult {
+	results := make([]PageHashResult, size)
+	for item := range resultChan {
+		if item.index < 0 || item.index >= size {
+			continue
+		}
+		results[item.index] = item.result
+	}
+	return results
+}
+
 func (d *Detector) BatchCheckTampering(ctx context.Context, urls []string, concurrency int) ([]TamperCheckResult, error) {
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("no URLs provided")
@@ -596,38 +950,32 @@ func (d *Detector) BatchCheckTampering(ctx context.Context, urls []string, concu
 	}
 
 	results := make([]TamperCheckResult, len(urls))
+	pool := workerpool.NewPool(concurrency)
+	pool.Start()
+
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, concurrency)
+	resultChan := make(chan tamperBatchCheckResult, len(urls))
 
 	for i, url := range urls {
 		wg.Add(1)
-		go func(index int, targetURL string) {
-			defer wg.Done()
-
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			result, err := d.CheckTampering(ctx, targetURL)
-			if err != nil {
-				results[index] = TamperCheckResult{
-					URL:          targetURL,
-					Tampered:     false,
-					Status:       "unreachable",
-					ErrorType:    classifyTamperError(err.Error()),
-					ErrorMessage: err.Error(),
-					Timestamp:    time.Now().Unix(),
-				}
-				results[index].CurrentHash = &PageHashResult{
-					URL:    targetURL,
-					Status: "error: " + err.Error(),
-				}
-			} else {
-				results[index] = *result
-			}
-		}(i, url)
+		task := &tamperBatchCheckTask{
+			detector:   d,
+			ctx:        ctx,
+			index:      i,
+			targetURL:  url,
+			resultChan: resultChan,
+			wg:         &wg,
+		}
+		pool.Submit(task)
 	}
 
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		pool.Stop()
+		close(resultChan)
+	}()
+
+	results = collectOrderedTamperCheckResults(resultChan, len(urls))
 	return results, nil
 }
 
@@ -641,46 +989,32 @@ func (d *Detector) BatchSetBaseline(ctx context.Context, urls []string, concurre
 	}
 
 	results := make([]PageHashResult, len(urls))
+	pool := workerpool.NewPool(concurrency)
+	pool.Start()
+
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, concurrency)
-	var mu sync.Mutex
+	resultChan := make(chan tamperBatchBaselineResult, len(urls))
 
 	for i, url := range urls {
 		wg.Add(1)
-		go func(index int, targetURL string) {
-			defer wg.Done()
-
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			hashResult, err := d.ComputePageHash(ctx, targetURL)
-			if err != nil {
-				mu.Lock()
-				results[index] = PageHashResult{
-					URL:    targetURL,
-					Status: "error: " + err.Error(),
-				}
-				mu.Unlock()
-				return
-			}
-
-			if err := d.SaveBaseline(targetURL, hashResult); err != nil {
-				mu.Lock()
-				results[index] = PageHashResult{
-					URL:    targetURL,
-					Status: "error saving baseline: " + err.Error(),
-				}
-				mu.Unlock()
-				return
-			}
-
-			mu.Lock()
-			results[index] = *hashResult
-			mu.Unlock()
-		}(i, url)
+		task := &tamperBatchBaselineTask{
+			detector:   d,
+			ctx:        ctx,
+			index:      i,
+			targetURL:  url,
+			resultChan: resultChan,
+			wg:         &wg,
+		}
+		pool.Submit(task)
 	}
 
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		pool.Stop()
+		close(resultChan)
+	}()
+
+	results = collectOrderedTamperBaselineResults(resultChan, len(urls))
 	return results, nil
 }
 
@@ -718,6 +1052,8 @@ func classifyTamperError(message string) string {
 	}
 
 	switch {
+	case strings.Contains(msg, "baseline"):
+		return "baseline"
 	case strings.Contains(msg, "name_not_resolved") || strings.Contains(msg, "dns"):
 		return "dns"
 	case strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout"):
@@ -738,6 +1074,7 @@ type CheckRecord struct {
 	ID               string          `json:"id"`
 	URL              string          `json:"url"`
 	Tampered         bool            `json:"tampered"`
+	DetectionMode    string          `json:"detection_mode,omitempty"`
 	TamperedSegments []string        `json:"tampered_segments,omitempty"`
 	Changes          []SegmentChange `json:"changes,omitempty"`
 	CurrentHash      *PageHashResult `json:"current_hash"`

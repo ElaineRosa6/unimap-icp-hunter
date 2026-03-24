@@ -58,10 +58,12 @@ type Config struct {
 
 	// 系统配置
 	System struct {
-		MaxConcurrent int    `yaml:"max_concurrent"`
-		CacheTTL      int    `yaml:"cache_ttl"`
-		RetryAttempts int    `yaml:"retry_attempts"`
-		UserAgent     string `yaml:"user_agent"`
+		MaxConcurrent        int    `yaml:"max_concurrent"`
+		CacheTTL             int    `yaml:"cache_ttl"`
+		CacheMaxSize         int    `yaml:"cache_max_size"`
+		CacheCleanupInterval int    `yaml:"cache_cleanup_interval"`
+		RetryAttempts        int    `yaml:"retry_attempts"`
+		UserAgent            string `yaml:"user_agent"`
 	} `yaml:"system"`
 
 	// 日志配置
@@ -76,6 +78,7 @@ type Config struct {
 		Enabled              bool   `yaml:"enabled"`
 		BaseDir              string `yaml:"base_dir"`
 		ChromePath           string `yaml:"chrome_path"`
+		ProxyServer          string `yaml:"proxy_server"`
 		ChromeUserDataDir    string `yaml:"chrome_user_data_dir"`
 		ChromeProfileDir     string `yaml:"chrome_profile_dir"`
 		ChromeRemoteDebugURL string `yaml:"chrome_remote_debug_url"`
@@ -91,6 +94,38 @@ type Config struct {
 			CaptureTargets       bool `yaml:"capture_targets"`
 		} `yaml:"auto_capture"`
 	} `yaml:"screenshot"`
+
+	// Web 配置
+	Web struct {
+		CORS struct {
+			AllowedOrigins   []string `yaml:"allowed_origins"`
+			AllowedMethods   []string `yaml:"allowed_methods"`
+			AllowedHeaders   []string `yaml:"allowed_headers"`
+			ExposedHeaders   []string `yaml:"exposed_headers"`
+			AllowCredentials bool     `yaml:"allow_credentials"`
+			MaxAge           int      `yaml:"max_age"`
+		} `yaml:"cors"`
+		RateLimit struct {
+			Enabled           bool `yaml:"enabled"`
+			RequestsPerWindow int  `yaml:"requests_per_window"`
+			WindowSeconds     int  `yaml:"window_seconds"`
+		} `yaml:"rate_limit"`
+		RequestLimits struct {
+			MaxBodyBytes       int64 `yaml:"max_body_bytes"`
+			MaxMultipartMemory int64 `yaml:"max_multipart_memory_bytes"`
+		} `yaml:"request_limits"`
+	} `yaml:"web"`
+
+	// 缓存配置
+	Cache struct {
+		Backend string `yaml:"backend"`
+		Redis   struct {
+			Addr     string `yaml:"addr"`
+			Password string `yaml:"password"`
+			DB       int    `yaml:"db"`
+			Prefix   string `yaml:"prefix"`
+		} `yaml:"redis"`
+	} `yaml:"cache"`
 }
 
 // Cookie Cookie配置
@@ -185,9 +220,16 @@ func (m *Manager) resolveEnv(config *Config) {
 
 	// 解析截图配置
 	config.Screenshot.ChromePath = m.ResolveEnv(config.Screenshot.ChromePath)
+	config.Screenshot.ProxyServer = m.ResolveEnv(config.Screenshot.ProxyServer)
 	config.Screenshot.ChromeUserDataDir = m.ResolveEnv(config.Screenshot.ChromeUserDataDir)
 	config.Screenshot.ChromeProfileDir = m.ResolveEnv(config.Screenshot.ChromeProfileDir)
 	config.Screenshot.ChromeRemoteDebugURL = m.ResolveEnv(config.Screenshot.ChromeRemoteDebugURL)
+
+	// 解析缓存配置
+	config.Cache.Backend = m.ResolveEnv(config.Cache.Backend)
+	config.Cache.Redis.Addr = m.ResolveEnv(config.Cache.Redis.Addr)
+	config.Cache.Redis.Password = m.ResolveEnv(config.Cache.Redis.Password)
+	config.Cache.Redis.Prefix = m.ResolveEnv(config.Cache.Redis.Prefix)
 }
 
 // ResolveEnv 解析环境变量
@@ -277,6 +319,12 @@ func (m *Manager) applyDefaults(config *Config) {
 	if config.System.CacheTTL == 0 {
 		config.System.CacheTTL = 3600
 	}
+	if config.System.CacheMaxSize == 0 {
+		config.System.CacheMaxSize = 1000
+	}
+	if config.System.CacheCleanupInterval == 0 {
+		config.System.CacheCleanupInterval = 300
+	}
 	if config.System.RetryAttempts == 0 {
 		config.System.RetryAttempts = 3
 	}
@@ -314,6 +362,45 @@ func (m *Manager) applyDefaults(config *Config) {
 	}
 	if config.Screenshot.WaitTime == 0 {
 		config.Screenshot.WaitTime = 500
+	}
+
+	// 默认 Web 配置
+	if len(config.Web.CORS.AllowedOrigins) == 0 {
+		config.Web.CORS.AllowedOrigins = []string{"http://localhost:8448", "http://127.0.0.1:8448"}
+	}
+	if len(config.Web.CORS.AllowedMethods) == 0 {
+		config.Web.CORS.AllowedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	}
+	if len(config.Web.CORS.AllowedHeaders) == 0 {
+		config.Web.CORS.AllowedHeaders = []string{"Content-Type", "Authorization", "X-Requested-With", "X-WebSocket-Token"}
+	}
+	if config.Web.CORS.MaxAge == 0 {
+		config.Web.CORS.MaxAge = 600
+	}
+
+	if config.Web.RateLimit.RequestsPerWindow == 0 {
+		config.Web.RateLimit.RequestsPerWindow = 60
+	}
+	if config.Web.RateLimit.WindowSeconds == 0 {
+		config.Web.RateLimit.WindowSeconds = 60
+	}
+
+	if config.Web.RequestLimits.MaxBodyBytes == 0 {
+		config.Web.RequestLimits.MaxBodyBytes = 10 * 1024 * 1024
+	}
+	if config.Web.RequestLimits.MaxMultipartMemory == 0 {
+		config.Web.RequestLimits.MaxMultipartMemory = 10 * 1024 * 1024
+	}
+
+	// 默认缓存后端配置
+	if strings.TrimSpace(config.Cache.Backend) == "" {
+		config.Cache.Backend = "memory"
+	}
+	if strings.TrimSpace(config.Cache.Redis.Addr) == "" {
+		config.Cache.Redis.Addr = "127.0.0.1:6379"
+	}
+	if strings.TrimSpace(config.Cache.Redis.Prefix) == "" {
+		config.Cache.Redis.Prefix = "unimap:"
 	}
 }
 
@@ -383,11 +470,42 @@ func (m *Manager) validate(config *Config) error {
 	if config.System.CacheTTL <= 0 {
 		return fmt.Errorf("system cache_ttl must be greater than 0")
 	}
+	if config.System.CacheMaxSize <= 0 {
+		return fmt.Errorf("system cache_max_size must be greater than 0")
+	}
+	if config.System.CacheCleanupInterval <= 0 {
+		return fmt.Errorf("system cache_cleanup_interval must be greater than 0")
+	}
 	if config.System.RetryAttempts < 0 {
 		return fmt.Errorf("system retry_attempts must be greater than or equal to 0")
 	}
 	if config.System.UserAgent == "" {
 		return fmt.Errorf("system user_agent must be set")
+	}
+
+	// 验证 Web 配置
+	if config.Web.CORS.MaxAge < 0 {
+		return fmt.Errorf("web cors max_age must be greater than or equal to 0")
+	}
+	if config.Web.RateLimit.RequestsPerWindow <= 0 {
+		return fmt.Errorf("web rate_limit requests_per_window must be greater than 0")
+	}
+	if config.Web.RateLimit.WindowSeconds <= 0 {
+		return fmt.Errorf("web rate_limit window_seconds must be greater than 0")
+	}
+	if config.Web.RequestLimits.MaxBodyBytes <= 0 {
+		return fmt.Errorf("web request_limits max_body_bytes must be greater than 0")
+	}
+	if config.Web.RequestLimits.MaxMultipartMemory <= 0 {
+		return fmt.Errorf("web request_limits max_multipart_memory_bytes must be greater than 0")
+	}
+
+	backend := strings.ToLower(strings.TrimSpace(config.Cache.Backend))
+	if backend != "memory" && backend != "redis" {
+		return fmt.Errorf("cache backend must be one of: memory, redis")
+	}
+	if backend == "redis" && strings.TrimSpace(config.Cache.Redis.Addr) == "" {
+		return fmt.Errorf("cache redis addr must be set when backend is redis")
 	}
 
 	return nil

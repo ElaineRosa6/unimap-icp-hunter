@@ -67,6 +67,11 @@ func (o *EngineOrchestrator) SetConcurrency(concurrency int) {
 	o.concurrency = concurrency
 }
 
+// GetConcurrency 获取当前并发设置。
+func (o *EngineOrchestrator) GetConcurrency() int {
+	return o.concurrency
+}
+
 // RegisterAdapter 注册引擎适配器
 func (o *EngineOrchestrator) RegisterAdapter(adapter EngineAdapter) {
 	o.mutex.Lock()
@@ -142,6 +147,7 @@ func (o *EngineOrchestrator) TranslateQuery(ast *model.UQLAST, engineNames []str
 // 实现workerpool.Task接口
 type SearchTask struct {
 	orchestrator *EngineOrchestrator
+	ctx          context.Context
 	query        model.EngineQuery
 	pageSize     int
 	resultChan   chan *model.EngineResult
@@ -158,7 +164,7 @@ func (t *SearchTask) Execute() error {
 		select {
 		case t.errorChan <- fmt.Errorf("adapter %s not found", t.query.EngineName):
 		default:
-			logger.Errorf("Failed to send error: adapter %s not found", t.query.EngineName)
+			logger.CtxErrorf(t.ctx, "failed to send error: adapter %s not found", t.query.EngineName)
 		}
 		return nil
 	}
@@ -183,7 +189,7 @@ func (t *SearchTask) Execute() error {
 		select {
 		case t.resultChan <- result:
 		default:
-			logger.Errorf("Failed to send cached result: channel full")
+			logger.CtxErrorf(t.ctx, "failed to send cached result: channel full")
 		}
 		return nil
 	}
@@ -194,7 +200,7 @@ func (t *SearchTask) Execute() error {
 		select {
 		case t.errorChan <- fmt.Errorf("%s search error: %v", t.query.EngineName, err):
 		default:
-			logger.Errorf("Failed to send error: %s search error: %v", t.query.EngineName, err)
+			logger.CtxErrorf(t.ctx, "failed to send error: %s search error: %v", t.query.EngineName, err)
 		}
 		return nil
 	}
@@ -202,7 +208,7 @@ func (t *SearchTask) Execute() error {
 	// 标准化结果并存入缓存
 	normalized, err := adapter.Normalize(result)
 	if err != nil {
-		logger.Warnf("Failed to normalize results from %s: %v", t.query.EngineName, err)
+		logger.CtxWarnf(t.ctx, "failed to normalize results from %s: %v", t.query.EngineName, err)
 		// 标准化失败，但仍返回原始结果
 	} else if len(normalized) > 0 {
 		t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
@@ -211,7 +217,7 @@ func (t *SearchTask) Execute() error {
 	select {
 	case t.resultChan <- result:
 	default:
-		logger.Errorf("Failed to send result: channel full")
+		logger.CtxErrorf(t.ctx, "failed to send result: channel full")
 	}
 	return nil
 }
@@ -249,6 +255,7 @@ func (o *EngineOrchestrator) SearchEnginesWithContext(ctx context.Context, queri
 		wg.Add(1)
 		task := &SearchTask{
 			orchestrator: o,
+			ctx:          ctx,
 			query:        q,
 			pageSize:     pageSize,
 			resultChan:   resultChan,
@@ -285,7 +292,7 @@ func (o *EngineOrchestrator) SearchEnginesWithContext(ctx context.Context, queri
 		case err, ok := <-errorChan:
 			if ok && err != nil {
 				errs = append(errs, err.Error())
-				logger.Errorf("Engine search error: %v", err)
+				logger.CtxErrorf(ctx, "engine search error: %v", err)
 			} else if !ok {
 				errorChan = nil
 			}
