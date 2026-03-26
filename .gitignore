@@ -51,4 +51,4 @@ tmp/
 archive/
 
 # Runtime data
-# hash_store/  # Not ignored - user wants to keep
+hash_store/records/
