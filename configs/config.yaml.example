@@ -88,3 +88,36 @@ cache:
         password: ""
         db: 0
         prefix: unimap:
+        # 连接池配置（可选）
+        pool_size: 10           # 连接池大小
+        min_idle_conns: 2       # 最小空闲连接数
+        max_idle_conns: 0       # 最大空闲连接数（0表示不限制）
+        max_retries: 3          # 最大重试次数
+        dial_timeout: 5000      # 连接超时（毫秒）
+        read_timeout: 3000      # 读超时（毫秒）
+        write_timeout: 3000     # 写超时（毫秒）
+        pool_timeout: 4000      # 连接池超时（毫秒）
+        conn_max_lifetime: 0    # 连接最大存活时间（毫秒，0表示不限制）
+        conn_max_idle_time: 300000  # 连接最大空闲时间（毫秒，5分钟）
+    # 按引擎的缓存配置（可选，未配置的引擎使用全局默认值）
+    engines:
+        quake:
+            enabled: true
+            ttl: 3600      # 缓存时间（秒），1小时
+            max_size: 500  # 最大缓存条目数
+        zoomeye:
+            enabled: true
+            ttl: 1800      # 30分钟，ZoomEye API 限制较严格
+            max_size: 500
+        hunter:
+            enabled: true
+            ttl: 3600      # 1小时
+            max_size: 500
+        fofa:
+            enabled: true
+            ttl: 1800      # 30分钟，FOFA 数据更新频繁
+            max_size: 500
+        shodan:
+            enabled: true
+            ttl: 7200      # 2小时，Shodan 数据相对稳定
+            max_size: 500

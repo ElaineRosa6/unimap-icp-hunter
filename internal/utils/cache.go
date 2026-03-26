@@ -28,6 +28,10 @@ type QueryCache interface {
 	Size() int
 	// GetStats 获取缓存统计信息
 	GetStats() CacheStats
+	// Close 关闭缓存，释放资源
+	Close()
+	// IsHealthy 检查缓存是否健康
+	IsHealthy() bool
 }
 
 // CacheStats 缓存统计信息
@@ -50,6 +54,8 @@ type MemoryCache struct {
 	misses          int
 	lastCleanup     time.Time
 	accessCounter   uint64
+	stopChan        chan struct{} // 用于停止清理 goroutine
+	stopped         bool          // 标记是否已停止
 }
 
 // cacheItem 缓存项
@@ -67,6 +73,7 @@ func NewMemoryCache(maxSize int, cleanupInterval time.Duration) *MemoryCache {
 		maxSize:         maxSize,
 		cleanupInterval: cleanupInterval,
 		lastCleanup:     time.Now(),
+		stopChan:        make(chan struct{}),
 	}
 
 	// 启动定期清理过期缓存的 goroutine
@@ -205,9 +212,31 @@ func (c *MemoryCache) startCleanupLoop() {
 	ticker := time.NewTicker(c.cleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		c.cleanupExpired()
+	for {
+		select {
+		case <-ticker.C:
+			c.cleanupExpired()
+		case <-c.stopChan:
+			return
+		}
 	}
+}
+
+// Close 关闭缓存，停止清理 goroutine
+func (c *MemoryCache) Close() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.stopped {
+		return
+	}
+	c.stopped = true
+	close(c.stopChan)
+}
+
+// IsHealthy 内存缓存始终健康
+func (c *MemoryCache) IsHealthy() bool {
+	return true
 }
 
 // cleanupExpired 清理过期的缓存项
@@ -237,26 +266,81 @@ func GenerateCacheKey(engineName, query string, page, pageSize int) string {
 
 // RedisCache Redis缓存实现
 type RedisCache struct {
-	client *redis.Client
-	ctx    context.Context
-	prefix string
-	hits   int
-	misses int
-	mutex  sync.RWMutex
+	client    *redis.Client
+	ctx       context.Context
+	prefix    string
+	hits      int
+	misses    int
+	mutex     sync.RWMutex
+	healthy   bool
+	lastCheck time.Time
+}
+
+// RedisConfig Redis配置
+type RedisConfig struct {
+	Addr            string
+	Password        string
+	DB              int
+	Prefix          string
+	PoolSize        int
+	MinIdleConns    int
+	MaxIdleConns    int
+	MaxRetries      int
+	DialTimeout     time.Duration
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	PoolTimeout     time.Duration
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
 
 // NewRedisCache 创建Redis缓存
-func NewRedisCache(addr, password string, db int, prefix string) *RedisCache {
-	client := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: password,
-		DB:       db,
-	})
+func NewRedisCache(cfg RedisConfig) *RedisCache {
+	opts := &redis.Options{
+		Addr:            cfg.Addr,
+		Password:        cfg.Password,
+		DB:              cfg.DB,
+		PoolSize:        cfg.PoolSize,
+		MinIdleConns:    cfg.MinIdleConns,
+		MaxIdleConns:    cfg.MaxIdleConns,
+		MaxRetries:      cfg.MaxRetries,
+		DialTimeout:     cfg.DialTimeout,
+		ReadTimeout:     cfg.ReadTimeout,
+		WriteTimeout:    cfg.WriteTimeout,
+		PoolTimeout:     cfg.PoolTimeout,
+		ConnMaxLifetime: cfg.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.ConnMaxIdleTime,
+	}
+
+	// 设置默认值
+	if opts.PoolSize == 0 {
+		opts.PoolSize = 10
+	}
+	if opts.MinIdleConns == 0 {
+		opts.MinIdleConns = 2
+	}
+	if opts.MaxRetries == 0 {
+		opts.MaxRetries = 3
+	}
+	if opts.DialTimeout == 0 {
+		opts.DialTimeout = 5 * time.Second
+	}
+	if opts.ReadTimeout == 0 {
+		opts.ReadTimeout = 3 * time.Second
+	}
+	if opts.WriteTimeout == 0 {
+		opts.WriteTimeout = 3 * time.Second
+	}
+	if opts.PoolTimeout == 0 {
+		opts.PoolTimeout = 4 * time.Second
+	}
+
+	client := redis.NewClient(opts)
 
 	cache := &RedisCache{
 		client: client,
 		ctx:    context.Background(),
-		prefix: prefix,
+		prefix: cfg.Prefix,
 	}
 
 	// 测试连接
@@ -265,7 +349,41 @@ func NewRedisCache(addr, password string, db int, prefix string) *RedisCache {
 		return nil
 	}
 
+	cache.healthy = true
+	cache.lastCheck = time.Now()
+	logger.Infof("Redis cache initialized: addr=%s pool_size=%d prefix=%s", cfg.Addr, opts.PoolSize, cfg.Prefix)
 	return cache
+}
+
+// IsHealthy 检查Redis连接是否健康
+func (c *RedisCache) IsHealthy() bool {
+	c.mutex.RLock()
+	healthy := c.healthy
+	lastCheck := c.lastCheck
+	c.mutex.RUnlock()
+
+	// 每30秒检查一次
+	if time.Since(lastCheck) < 30*time.Second {
+		return healthy
+	}
+
+	// 执行健康检查
+	ctx, cancel := context.WithTimeout(c.ctx, 2*time.Second)
+	defer cancel()
+
+	err := c.client.Ping(ctx).Err()
+
+	c.mutex.Lock()
+	if err != nil {
+		c.healthy = false
+		logger.Warnf("Redis health check failed: %v", err)
+	} else {
+		c.healthy = true
+	}
+	c.lastCheck = time.Now()
+	c.mutex.Unlock()
+
+	return c.healthy
 }
 
 // Get 从缓存中获取查询结果
@@ -368,10 +486,23 @@ func (c *RedisCache) GetStats() CacheStats {
 	}
 }
 
-// NewCache 创建缓存实例，优先使用Redis，失败则使用内存缓存
+// Close 关闭Redis连接
+func (c *RedisCache) Close() {
+	if c.client != nil {
+		c.client.Close()
+	}
+}
+
+// NewCache 创建缓存实例，优先使用Redis，失败则使用内存缓存（简化版本）
 func NewCache(useRedis bool, redisAddr, redisPassword string, redisDB int, redisPrefix string, memoryMaxSize int, cleanupInterval time.Duration) QueryCache {
 	if useRedis {
-		redisCache := NewRedisCache(redisAddr, redisPassword, redisDB, redisPrefix)
+		cfg := RedisConfig{
+			Addr:     redisAddr,
+			Password: redisPassword,
+			DB:       redisDB,
+			Prefix:   redisPrefix,
+		}
+		redisCache := NewRedisCache(cfg)
 		if redisCache != nil {
 			return redisCache
 		}
@@ -379,6 +510,33 @@ func NewCache(useRedis bool, redisAddr, redisPassword string, redisDB int, redis
 
 	// 回退到内存缓存
 	return NewMemoryCache(memoryMaxSize, cleanupInterval)
+}
+
+// NewCacheWithConfig 创建缓存实例，支持完整的Redis配置
+func NewCacheWithConfig(backend string, redisCfg RedisConfig, memoryMaxSize int, cleanupInterval time.Duration) QueryCache {
+	if stringsEqualFold(backend, "redis") {
+		redisCache := NewRedisCache(redisCfg)
+		if redisCache != nil {
+			return redisCache
+		}
+		logger.Warnf("Redis cache initialization failed, falling back to memory cache")
+	}
+
+	// 回退到内存缓存
+	return NewMemoryCache(memoryMaxSize, cleanupInterval)
+}
+
+// stringsEqualFold 检查字符串是否相等（忽略大小写）
+func stringsEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i]|32 != b[i]|32 {
+			return false
+		}
+	}
+	return true
 }
 
 // WarmupCache 预热缓存

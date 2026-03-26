@@ -96,7 +96,7 @@ go run ./cmd/unimap-cli --help
 
 ## 技术栈
 
-- Go 1.24
+- Go 1.24.0
 - Web: net/http
 - GUI: Fyne
 - HTML 解析: goquery

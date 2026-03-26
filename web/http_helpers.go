@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/unimap-icp-hunter/project/internal/logger"
 )
 
 type apiErrorPayload struct {
@@ -24,7 +26,9 @@ type apiErrorResponse struct {
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		logger.Errorf("failed to encode JSON response: %v", err)
+	}
 }
 
 func writeAPIError(w http.ResponseWriter, status int, code, message string, details interface{}) {

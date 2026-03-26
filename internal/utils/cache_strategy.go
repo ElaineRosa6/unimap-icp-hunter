@@ -3,10 +3,29 @@ package utils
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/logger"
 )
+
+// EngineCacheConfig 引擎缓存配置接口
+type EngineCacheConfig interface {
+	IsEnabled() bool
+	GetTTL() time.Duration
+	GetMaxSize() int
+}
+
+// SimpleEngineCacheConfig 简单的引擎缓存配置实现
+type SimpleEngineCacheConfig struct {
+	Enabled bool
+	TTL     time.Duration
+	MaxSize int
+}
+
+func (c *SimpleEngineCacheConfig) IsEnabled() bool      { return c.Enabled }
+func (c *SimpleEngineCacheConfig) GetTTL() time.Duration { return c.TTL }
+func (c *SimpleEngineCacheConfig) GetMaxSize() int      { return c.MaxSize }
 
 // CacheStrategy 缓存策略接口
 type CacheStrategy interface {
@@ -366,4 +385,126 @@ func (m *CacheStrategyManager) PrintStats() {
 	logger.Infof("  Cache misses: %d", defaultStats.CacheMisses)
 	logger.Infof("  Average duration: %v", defaultStats.AverageDuration)
 	logger.Infof("  Last update: %v", defaultStats.LastUpdate)
+}
+
+// ConfigBasedCacheStrategy 基于配置的缓存策略
+// 根据引擎配置提供不同的缓存时间
+type ConfigBasedCacheStrategy struct {
+	engineConfigs map[string]EngineCacheConfig
+	defaultTTL    time.Duration
+	stats         CacheStrategyStats
+	mu            sync.RWMutex
+}
+
+// NewConfigBasedCacheStrategy 创建基于配置的缓存策略
+func NewConfigBasedCacheStrategy(defaultTTL time.Duration) *ConfigBasedCacheStrategy {
+	return &ConfigBasedCacheStrategy{
+		engineConfigs: make(map[string]EngineCacheConfig),
+		defaultTTL:    defaultTTL,
+		stats: CacheStrategyStats{
+			StrategyName: "ConfigBasedCacheStrategy",
+			LastUpdate:   time.Now(),
+		},
+	}
+}
+
+// SetEngineConfig 设置引擎缓存配置
+func (s *ConfigBasedCacheStrategy) SetEngineConfig(engineName string, cfg EngineCacheConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.engineConfigs[strings.ToLower(engineName)] = cfg
+}
+
+// SetEngineConfigFromMap 从 map 设置引擎缓存配置
+// cfgMap 格式: map[engineName]{enabled, ttl_seconds, max_size}
+func (s *ConfigBasedCacheStrategy) SetEngineConfigFromMap(cfgMap map[string]struct {
+	Enabled bool
+	TTL     int
+	MaxSize int
+}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for engine, cfg := range cfgMap {
+		s.engineConfigs[strings.ToLower(engine)] = &SimpleEngineCacheConfig{
+			Enabled: cfg.Enabled,
+			TTL:     time.Duration(cfg.TTL) * time.Second,
+			MaxSize: cfg.MaxSize,
+		}
+	}
+}
+
+// GetCacheDuration 根据引擎配置获取缓存时间
+func (s *ConfigBasedCacheStrategy) GetCacheDuration(engineName, query string, page, pageSize int) time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	engineName = strings.ToLower(engineName)
+	if cfg, exists := s.engineConfigs[engineName]; exists {
+		if !cfg.IsEnabled() {
+			return 0 // 缓存禁用
+		}
+		ttl := cfg.GetTTL()
+		if ttl > 0 {
+			return ttl
+		}
+	}
+	return s.defaultTTL
+}
+
+// IsCacheEnabledForEngine 检查指定引擎是否启用缓存
+func (s *ConfigBasedCacheStrategy) IsCacheEnabledForEngine(engineName string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	engineName = strings.ToLower(engineName)
+	if cfg, exists := s.engineConfigs[engineName]; exists {
+		return cfg.IsEnabled()
+	}
+	return true // 默认启用
+}
+
+// GetMaxSizeForEngine 获取指定引擎的最大缓存条目数
+func (s *ConfigBasedCacheStrategy) GetMaxSizeForEngine(engineName string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	engineName = strings.ToLower(engineName)
+	if cfg, exists := s.engineConfigs[engineName]; exists {
+		if size := cfg.GetMaxSize(); size > 0 {
+			return size
+		}
+	}
+	return 1000 // 默认值
+}
+
+// RecordQuery 记录查询信息
+func (s *ConfigBasedCacheStrategy) RecordQuery(engineName, query string, page, pageSize int, duration time.Duration, success bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.stats.TotalQueries++
+	s.stats.TotalDuration += duration
+	if s.stats.TotalQueries > 0 {
+		s.stats.AverageDuration = s.stats.TotalDuration / time.Duration(s.stats.TotalQueries)
+	}
+	s.stats.LastUpdate = time.Now()
+}
+
+// GetStats 获取策略统计信息
+func (s *ConfigBasedCacheStrategy) GetStats() CacheStrategyStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stats
+}
+
+// GetAllEngineConfigs 获取所有引擎的缓存配置
+func (s *ConfigBasedCacheStrategy) GetAllEngineConfigs() map[string]EngineCacheConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]EngineCacheConfig, len(s.engineConfigs))
+	for k, v := range s.engineConfigs {
+		result[k] = v
+	}
+	return result
 }

@@ -8,12 +8,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/service"
 )
 
@@ -224,12 +224,18 @@ func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Req
 		queryID = fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 
+	startTime := time.Now()
 	screenshotPath, engine, query, queryID, err := s.screenshotApp.CaptureSearchEngineResult(r.Context(), s.screenshotMgr, engine, query, queryID)
 	if err != nil {
 		logger.Errorf("Failed to capture search engine screenshot: %v", err)
+		metrics.IncScreenshotRequest("search_engine", "error")
+		metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
 		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
 		return
 	}
+
+	metrics.IncScreenshotRequest("search_engine", "success")
+	metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -266,6 +272,7 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	startTime := time.Now()
 	screenshotPath, targetURL, ip, port, protocol, queryID, err := s.screenshotApp.CaptureTargetWebsite(
 		r.Context(),
 		s.screenshotMgr,
@@ -277,6 +284,8 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 	)
 	if err != nil {
 		logger.Errorf("Failed to capture target screenshot: %v", err)
+		metrics.IncScreenshotRequest("target", "error")
+		metrics.ObserveScreenshotDuration("target", time.Since(startTime))
 		if strings.Contains(strings.ToLower(err.Error()), "missing url or ip") {
 			writeAPIError(w, http.StatusBadRequest, "missing_parameters", "missing url or ip parameter", nil)
 			return
@@ -284,6 +293,9 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
 		return
 	}
+
+	metrics.IncScreenshotRequest("target", "success")
+	metrics.ObserveScreenshotDuration("target", time.Since(startTime))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -386,6 +398,9 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	metrics.IncBatchOperation("screenshot")
+	metrics.ObserveBatchOperationSize("screenshot", len(req.URLs))
+
 	results, err := s.screenshotApp.CaptureBatchURLs(r.Context(), s.screenshotMgr, service.BatchURLsRequest{
 		URLs:        req.URLs,
 		BatchID:     req.BatchID,
@@ -402,6 +417,15 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 			writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
 		}
 		return
+	}
+
+	// 记录批量截图成功/失败统计
+	if results != nil {
+		metrics.IncScreenshotRequest("batch", "success")
+		metrics.ObserveScreenshotBatchSize(results.Success)
+		if results.Failed > 0 {
+			metrics.IncScreenshotRequest("batch", "partial")
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -453,56 +477,11 @@ func (s *Server) handleScreenshotBatches(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	baseDir := s.resolveScreenshotBaseDir()
-	entries, err := os.ReadDir(baseDir)
+	batches, err := s.screenshotApp.ListBatches()
 	if err != nil {
-		if os.IsNotExist(err) {
-			writeJSON(w, http.StatusOK, map[string]interface{}{
-				"success": true,
-				"count":   0,
-				"batches": []interface{}{},
-			})
-			return
-		}
 		writeAPIError(w, http.StatusInternalServerError, "list_batches_failed", "list screenshot batches failed", err.Error())
 		return
 	}
-
-	type batchItem struct {
-		Name      string `json:"name"`
-		FileCount int    `json:"file_count"`
-		UpdatedAt int64  `json:"updated_at"`
-	}
-	batches := make([]batchItem, 0)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			continue
-		}
-
-		fileCount := 0
-		children, childErr := os.ReadDir(filepath.Join(baseDir, entry.Name()))
-		if childErr == nil {
-			for _, child := range children {
-				if !child.IsDir() {
-					fileCount++
-				}
-			}
-		}
-
-		batches = append(batches, batchItem{
-			Name:      entry.Name(),
-			FileCount: fileCount,
-			UpdatedAt: info.ModTime().Unix(),
-		})
-	}
-
-	sort.Slice(batches, func(i, j int) bool {
-		return batches[i].UpdatedAt > batches[j].UpdatedAt
-	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -517,49 +496,24 @@ func (s *Server) handleScreenshotBatchFiles(w http.ResponseWriter, r *http.Reque
 	}
 
 	batch := strings.TrimSpace(r.URL.Query().Get("batch"))
-	batchDir, ok := s.resolveScreenshotBatchDir(batch)
-	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "invalid_batch", "invalid batch name", nil)
+	if batch == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_batch", "batch parameter is required", nil)
 		return
 	}
 
-	entries, err := os.ReadDir(batchDir)
+	files, err := s.screenshotApp.ListBatchFiles(batch, s.screenshotPathToPreviewURL)
 	if err != nil {
-		if os.IsNotExist(err) {
+		errText := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(errText, "invalid batch"):
+			writeAPIError(w, http.StatusBadRequest, "invalid_batch", "invalid batch name", nil)
+		case strings.Contains(errText, "not found"):
 			writeAPIError(w, http.StatusNotFound, "batch_not_found", "batch not found", nil)
-			return
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "list_batch_files_failed", "list batch files failed", err.Error())
 		}
-		writeAPIError(w, http.StatusInternalServerError, "list_batch_files_failed", "list batch files failed", err.Error())
 		return
 	}
-
-	type fileItem struct {
-		Name       string `json:"name"`
-		Size       int64  `json:"size"`
-		UpdatedAt  int64  `json:"updated_at"`
-		PreviewURL string `json:"preview_url,omitempty"`
-	}
-	files := make([]fileItem, 0)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			continue
-		}
-		absPath := filepath.Join(batchDir, entry.Name())
-		files = append(files, fileItem{
-			Name:       entry.Name(),
-			Size:       info.Size(),
-			UpdatedAt:  info.ModTime().Unix(),
-			PreviewURL: s.screenshotPathToPreviewURL(absPath),
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].UpdatedAt > files[j].UpdatedAt
-	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -575,23 +529,21 @@ func (s *Server) handleScreenshotBatchDelete(w http.ResponseWriter, r *http.Requ
 	}
 
 	batch := strings.TrimSpace(r.URL.Query().Get("batch"))
-	batchDir, ok := s.resolveScreenshotBatchDir(batch)
-	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "invalid_batch", "invalid batch name", nil)
+	if batch == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_batch", "batch parameter is required", nil)
 		return
 	}
 
-	if _, err := os.Stat(batchDir); err != nil {
-		if os.IsNotExist(err) {
+	if err := s.screenshotApp.DeleteBatch(batch); err != nil {
+		errText := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(errText, "invalid"):
+			writeAPIError(w, http.StatusBadRequest, "invalid_batch", "invalid batch name", nil)
+		case strings.Contains(errText, "not found"):
 			writeAPIError(w, http.StatusNotFound, "batch_not_found", "batch not found", nil)
-			return
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "delete_batch_failed", "delete batch failed", err.Error())
 		}
-		writeAPIError(w, http.StatusInternalServerError, "batch_stat_failed", "failed to access batch", err.Error())
-		return
-	}
-
-	if err := os.RemoveAll(batchDir); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "delete_batch_failed", "delete batch failed", err.Error())
 		return
 	}
 
@@ -608,51 +560,34 @@ func (s *Server) handleScreenshotFileDelete(w http.ResponseWriter, r *http.Reque
 
 	batch := strings.TrimSpace(r.URL.Query().Get("batch"))
 	fileName := strings.TrimSpace(r.URL.Query().Get("file"))
-	batchDir, ok := s.resolveScreenshotBatchDir(batch)
-	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "invalid_batch", "invalid batch name", nil)
+
+	if batch == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_batch", "batch parameter is required", nil)
 		return
 	}
-	fileToken, ok := normalizeScreenshotPathToken(fileName)
-	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "invalid_file", "invalid file name", nil)
+	if fileName == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_file", "file parameter is required", nil)
 		return
 	}
 
-	targetFile := filepath.Join(batchDir, fileToken)
-	absTarget, err := filepath.Abs(targetFile)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_file", "invalid file name", nil)
-		return
-	}
-	rel, err := filepath.Rel(batchDir, absTarget)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		writeAPIError(w, http.StatusBadRequest, "invalid_file", "invalid file name", nil)
-		return
-	}
-
-	info, err := os.Stat(absTarget)
-	if err != nil {
-		if os.IsNotExist(err) {
+	if err := s.screenshotApp.DeleteFile(batch, fileName); err != nil {
+		errText := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(errText, "invalid batch"):
+			writeAPIError(w, http.StatusBadRequest, "invalid_batch", "invalid batch name", nil)
+		case strings.Contains(errText, "invalid file"):
+			writeAPIError(w, http.StatusBadRequest, "invalid_file", "invalid file name", nil)
+		case strings.Contains(errText, "not found"):
 			writeAPIError(w, http.StatusNotFound, "file_not_found", "file not found", nil)
-			return
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "delete_file_failed", "delete file failed", err.Error())
 		}
-		writeAPIError(w, http.StatusInternalServerError, "file_stat_failed", "failed to access file", err.Error())
-		return
-	}
-	if info.IsDir() {
-		writeAPIError(w, http.StatusBadRequest, "invalid_file", "file name points to a directory", nil)
-		return
-	}
-
-	if err := os.Remove(absTarget); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "delete_file_failed", "delete file failed", err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"batch":   batch,
-		"file":    fileToken,
+		"file":    fileName,
 	})
 }

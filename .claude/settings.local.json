@@ -10,7 +10,9 @@
       "Bash(powershell -Command:*)",
       "Bash(python:*)",
       "Bash(xxd:*)",
-      "Bash(printf '\\\\t\\\\tCount\\(\\\\®istered\\)\\\\n')"
+      "Bash(printf '\\\\t\\\\tCount\\(\\\\®istered\\)\\\\n')",
+      "Bash(go vet:*)",
+      "Bash(go test:*)"
     ]
   }
 }

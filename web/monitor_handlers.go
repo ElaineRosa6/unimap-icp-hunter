@@ -12,6 +12,9 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// 预编译正则表达式，避免每次调用时重新编译
+var reURLPattern = regexp.MustCompile(`^(https?://)?([\w.-]+)(:\d+)?(/.*)?$`)
+
 // handleScreenshot 处理截图请求
 func (s *Server) handleMonitorPage(w http.ResponseWriter, r *http.Request) {
 	s.templates.ExecuteTemplate(w, "monitor.html", map[string]interface{}{
@@ -212,8 +215,8 @@ func filterValidURLs(urls []string) []string {
 			continue
 		}
 
-		// 简单URL验证
-		if matched, _ := regexp.MatchString(`^(https?://)?([\w.-]+)(:\d+)?(/.*)?$`, u); matched {
+		// 简单URL验证（使用预编译正则）
+		if reURLPattern.MatchString(u) {
 			valid = append(valid, u)
 			seen[u] = true
 		}

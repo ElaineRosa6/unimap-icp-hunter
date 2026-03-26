@@ -120,12 +120,32 @@ type Config struct {
 	Cache struct {
 		Backend string `yaml:"backend"`
 		Redis   struct {
-			Addr     string `yaml:"addr"`
-			Password string `yaml:"password"`
-			DB       int    `yaml:"db"`
-			Prefix   string `yaml:"prefix"`
+			Addr            string `yaml:"addr"`
+			Password        string `yaml:"password"`
+			DB              int    `yaml:"db"`
+			Prefix          string `yaml:"prefix"`
+			// 连接池配置
+			PoolSize        int `yaml:"pool_size"`          // 连接池大小
+			MinIdleConns    int `yaml:"min_idle_conns"`     // 最小空闲连接数
+			MaxIdleConns    int `yaml:"max_idle_conns"`     // 最大空闲连接数
+			MaxRetries      int `yaml:"max_retries"`        // 最大重试次数
+			DialTimeout     int `yaml:"dial_timeout"`       // 连接超时（毫秒）
+			ReadTimeout     int `yaml:"read_timeout"`       // 读超时（毫秒）
+			WriteTimeout    int `yaml:"write_timeout"`      // 写超时（毫秒）
+			PoolTimeout     int `yaml:"pool_timeout"`       // 连接池超时（毫秒）
+			ConnMaxLifetime int `yaml:"conn_max_lifetime"`  // 连接最大存活时间（毫秒）
+			ConnMaxIdleTime int `yaml:"conn_max_idle_time"` // 连接最大空闲时间（毫秒）
 		} `yaml:"redis"`
+		// 按引擎的缓存配置
+		Engines map[string]EngineCacheConfig `yaml:"engines"`
 	} `yaml:"cache"`
+}
+
+// EngineCacheConfig 引擎级别的缓存配置
+type EngineCacheConfig struct {
+	Enabled bool `yaml:"enabled"` // 是否启用缓存
+	TTL     int  `yaml:"ttl"`     // 缓存时间（秒），0 表示使用全局默认
+	MaxSize int  `yaml:"max_size"` // 最大缓存条目数，0 表示使用全局默认
 }
 
 // Cookie Cookie配置
@@ -402,6 +422,65 @@ func (m *Manager) applyDefaults(config *Config) {
 	if strings.TrimSpace(config.Cache.Redis.Prefix) == "" {
 		config.Cache.Redis.Prefix = "unimap:"
 	}
+
+	// 默认 Redis 连接池配置
+	if config.Cache.Redis.PoolSize == 0 {
+		config.Cache.Redis.PoolSize = 10
+	}
+	if config.Cache.Redis.MinIdleConns == 0 {
+		config.Cache.Redis.MinIdleConns = 2
+	}
+	if config.Cache.Redis.MaxRetries == 0 {
+		config.Cache.Redis.MaxRetries = 3
+	}
+	if config.Cache.Redis.DialTimeout == 0 {
+		config.Cache.Redis.DialTimeout = 5000 // 5秒
+	}
+	if config.Cache.Redis.ReadTimeout == 0 {
+		config.Cache.Redis.ReadTimeout = 3000 // 3秒
+	}
+	if config.Cache.Redis.WriteTimeout == 0 {
+		config.Cache.Redis.WriteTimeout = 3000 // 3秒
+	}
+	if config.Cache.Redis.PoolTimeout == 0 {
+		config.Cache.Redis.PoolTimeout = 4000 // 4秒
+	}
+	if config.Cache.Redis.ConnMaxLifetime == 0 {
+		config.Cache.Redis.ConnMaxLifetime = 0 // 不限制
+	}
+	if config.Cache.Redis.ConnMaxIdleTime == 0 {
+		config.Cache.Redis.ConnMaxIdleTime = 300000 // 5分钟
+	}
+
+	// 初始化引擎级别缓存配置（如果未设置）
+	if config.Cache.Engines == nil {
+		config.Cache.Engines = make(map[string]EngineCacheConfig)
+	}
+
+	// 为各引擎设置默认缓存配置
+	engineDefaults := map[string]EngineCacheConfig{
+		"quake":   {Enabled: true, TTL: 3600, MaxSize: 500},
+		"zoomeye": {Enabled: true, TTL: 1800, MaxSize: 500}, // ZoomEye API 限制更严格
+		"hunter":  {Enabled: true, TTL: 3600, MaxSize: 500},
+		"fofa":    {Enabled: true, TTL: 1800, MaxSize: 500}, // FOFA 数据更新频繁
+		"shodan":  {Enabled: true, TTL: 7200, MaxSize: 500}, // Shodan 数据相对稳定
+	}
+
+	for engine, defaultCfg := range engineDefaults {
+		if _, exists := config.Cache.Engines[engine]; !exists {
+			config.Cache.Engines[engine] = defaultCfg
+		} else {
+			// 合并配置：如果某个字段为零值，使用默认值
+			cfg := config.Cache.Engines[engine]
+			if cfg.TTL == 0 {
+				cfg.TTL = defaultCfg.TTL
+			}
+			if cfg.MaxSize == 0 {
+				cfg.MaxSize = defaultCfg.MaxSize
+			}
+			config.Cache.Engines[engine] = cfg
+		}
+	}
 }
 
 // validate 验证配置有效性
@@ -559,4 +638,105 @@ func (m *Manager) Save() error {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	return nil
+}
+
+// GetEngineCacheConfig 获取引擎级别的缓存配置
+func (m *Manager) GetEngineCacheConfig(engineName string) EngineCacheConfig {
+	if !m.IsValid() {
+		return EngineCacheConfig{Enabled: true, TTL: 3600, MaxSize: 500}
+	}
+
+	engineName = strings.ToLower(strings.TrimSpace(engineName))
+	if cfg, exists := m.config.Cache.Engines[engineName]; exists {
+		return cfg
+	}
+
+	// 返回默认配置
+	return EngineCacheConfig{Enabled: true, TTL: m.config.System.CacheTTL, MaxSize: m.config.System.CacheMaxSize}
+}
+
+// GetAllEngineCacheConfigs 获取所有引擎的缓存配置
+func (m *Manager) GetAllEngineCacheConfigs() map[string]EngineCacheConfig {
+	if !m.IsValid() {
+		return make(map[string]EngineCacheConfig)
+	}
+	return m.config.Cache.Engines
+}
+
+// IsCacheEnabledForEngine 检查指定引擎是否启用缓存
+func (m *Manager) IsCacheEnabledForEngine(engineName string) bool {
+	cfg := m.GetEngineCacheConfig(engineName)
+	return cfg.Enabled
+}
+
+// GetCacheTTLForEngine 获取指定引擎的缓存 TTL（秒）
+func (m *Manager) GetCacheTTLForEngine(engineName string) int {
+	cfg := m.GetEngineCacheConfig(engineName)
+	if cfg.TTL > 0 {
+		return cfg.TTL
+	}
+	if m.IsValid() {
+		return m.config.System.CacheTTL
+	}
+	return 3600 // 默认1小时
+}
+
+// GetCacheMaxSizeForEngine 获取指定引擎的最大缓存条目数
+func (m *Manager) GetCacheMaxSizeForEngine(engineName string) int {
+	cfg := m.GetEngineCacheConfig(engineName)
+	if cfg.MaxSize > 0 {
+		return cfg.MaxSize
+	}
+	if m.IsValid() {
+		return m.config.System.CacheMaxSize
+	}
+	return 1000 // 默认1000条
+}
+
+// GetCacheBackend 获取缓存后端类型
+func (m *Manager) GetCacheBackend() string {
+	if !m.IsValid() {
+		return "memory"
+	}
+	backend := strings.ToLower(strings.TrimSpace(m.config.Cache.Backend))
+	if backend == "" {
+		return "memory"
+	}
+	return backend
+}
+
+// GetRedisAddr 获取Redis地址
+func (m *Manager) GetRedisAddr() string {
+	if !m.IsValid() {
+		return "127.0.0.1:6379"
+	}
+	return strings.TrimSpace(m.config.Cache.Redis.Addr)
+}
+
+// GetRedisPassword 获取Redis密码
+func (m *Manager) GetRedisPassword() string {
+	if !m.IsValid() {
+		return ""
+	}
+	return m.config.Cache.Redis.Password
+}
+
+// GetRedisDB 获取Redis数据库
+func (m *Manager) GetRedisDB() int {
+	if !m.IsValid() {
+		return 0
+	}
+	return m.config.Cache.Redis.DB
+}
+
+// GetRedisPrefix 获取Redis键前缀
+func (m *Manager) GetRedisPrefix() string {
+	if !m.IsValid() {
+		return "unimap:"
+	}
+	prefix := strings.TrimSpace(m.config.Cache.Redis.Prefix)
+	if prefix == "" {
+		return "unimap:"
+	}
+	return prefix
 }

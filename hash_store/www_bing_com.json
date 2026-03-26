@@ -1,0 +1,124 @@
+{
+  "url": "https://www.bing.com",
+  "title": "Search - Microsoft Bing",
+  "full_hash": "84cb065b2ac24787c5982cfde0d864b6484f86e5903e5e78a18628442ef8e324",
+  "segment_hashes": [
+    {
+      "name": "head",
+      "hash": "afb1da6f918b19910cf5bba2691ece23ef3b35a6892ea54413b38c488c4eaa56",
+      "length": 6099,
+      "elements": 1
+    },
+    {
+      "name": "body",
+      "hash": "e8db99bb9229e5dc211be0261aa8f79e8618a0689d52a8e9c0a93baeb112e4ad",
+      "length": 8794,
+      "elements": 1
+    },
+    {
+      "name": "header",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "nav",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "main",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "article",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "section",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "aside",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "footer",
+      "hash": "30d447b4870511ed999d6f3b0a8006dc77a421e57b7c7666492b9836cbf5e007",
+      "length": 1334,
+      "elements": 1
+    },
+    {
+      "name": "scripts",
+      "hash": "4f7e4851b6270277f21195f2f64a4baf041563b7065995824a8a783b354b11d4",
+      "length": 8953,
+      "elements": 31
+    },
+    {
+      "name": "js_files",
+      "hash": "1be4d40fcaf52ca800d658b7d305b038c8bc902e88649022049906b9764f5791",
+      "length": 1320,
+      "elements": 25
+    },
+    {
+      "name": "styles",
+      "hash": "79bdfc4618439c29ed52b88418aea49b69b2d98104a1062f91609ae4cee60d3e",
+      "length": 70,
+      "elements": 1
+    },
+    {
+      "name": "meta",
+      "hash": "3a3042c195a174f5f8008efccdb7ec4aac9ff2908a12101a6b370058fba4f542",
+      "length": 725,
+      "elements": 13
+    },
+    {
+      "name": "favicon",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "links",
+      "hash": "920cb4af23892faee1cad46b35afcf70aa2cefac8a46430d678c675a6df878e3",
+      "length": 637,
+      "elements": 10
+    },
+    {
+      "name": "images",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "buttons",
+      "hash": "cb3436608054ef8b448aceb0b944d5e79e201359c1ca3bc6487897b522bd7c95",
+      "length": 32,
+      "elements": 1
+    },
+    {
+      "name": "forms",
+      "hash": "467bd2bdcd0e9e5131d2ffb29fee9beb036c361c17f6ee27cfe1642d3d7bee78",
+      "length": 61,
+      "elements": 4
+    },
+    {
+      "name": "full_content",
+      "hash": "dc3eb05250c2d38177e05c93f9d7fb1f904f54da8f4a38aef368c77bf28966a6",
+      "length": 14930,
+      "elements": 1
+    }
+  ],
+  "timestamp": 1774252603,
+  "html_length": 15090,
+  "status": "success"
+}

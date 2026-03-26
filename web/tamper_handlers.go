@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -179,128 +178,26 @@ func (s *Server) handleTamperHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	urlFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("url")))
-	typeFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
-	modeFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
-	queryFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	filter := service.HistoryFilter{
+		URLFilter:   strings.TrimSpace(r.URL.Query().Get("url")),
+		TypeFilter:  strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type"))),
+		ModeFilter:  strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode"))),
+		QueryFilter: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q"))),
+		Limit:       limit,
+	}
 
-	storage := tamper.NewHashStorage("./hash_store")
-	allRecords, err := storage.ListAllCheckRecords()
+	result, err := s.tamperApp.QueryHistory(filter)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "list_history_failed", "list history failed", err.Error())
 		return
 	}
 
-	type historyRecord struct {
-	ID               string   `json:"id"`
-	URL              string   `json:"url"`
-	CheckType        string   `json:"check_type"`
-	DetectionMode    string   `json:"detection_mode,omitempty"`
-	Status           string   `json:"status"`
-	Tampered         bool     `json:"tampered"`
-	TamperedSegments []string `json:"tampered_segments,omitempty"`
-	ChangesCount     int      `json:"changes_count"`
-	Timestamp        int64    `json:"timestamp"`
-	BaselineTimestamp int64   `json:"baseline_timestamp,omitempty"`
-	CurrentFullHash  string   `json:"current_full_hash,omitempty"`
-	BaselineFullHash string   `json:"baseline_full_hash,omitempty"`
-}
-
-	records := make([]historyRecord, 0)
-	urlSet := make(map[string]struct{})
-
-	for _, list := range allRecords {
-		for _, rec := range list {
-			if rec == nil {
-				continue
-			}
-			recordURL := strings.TrimSpace(rec.URL)
-			if recordURL == "" {
-				continue
-			}
-
-			status := "normal"
-			switch {
-			case rec.CheckType == "first_check":
-				status = "first_check"
-			case rec.Tampered:
-				status = "tampered"
-			case rec.BaselineHash == nil:
-				status = "no_baseline"
-			default:
-				status = "normal"
-			}
-
-			urlLower := strings.ToLower(recordURL)
-			if urlFilter != "" && urlLower != urlFilter {
-				continue
-			}
-			if typeFilter != "" {
-				if strings.ToLower(rec.CheckType) != typeFilter && status != typeFilter {
-					continue
-				}
-			}
-
-			recordMode := strings.ToLower(strings.TrimSpace(rec.DetectionMode))
-			if recordMode == "" {
-				recordMode = tamper.DetectionModeRelaxed
-			}
-			if modeFilter != "" && modeFilter != recordMode {
-				continue
-			}
-
-			if queryFilter != "" {
-				if !strings.Contains(urlLower, queryFilter) &&
-					!strings.Contains(strings.ToLower(rec.CheckType), queryFilter) &&
-					!strings.Contains(status, queryFilter) &&
-					!strings.Contains(recordMode, queryFilter) {
-					continue
-				}
-			}
-
-			item := historyRecord{
-				ID:               rec.ID,
-				URL:              recordURL,
-				CheckType:        rec.CheckType,
-				DetectionMode:    recordMode,
-				Status:           status,
-				Tampered:         rec.Tampered,
-				TamperedSegments: rec.TamperedSegments,
-				ChangesCount:     len(rec.Changes),
-				Timestamp:        rec.Timestamp,
-			}
-			if rec.CurrentHash != nil {
-				item.CurrentFullHash = rec.CurrentHash.FullHash
-			}
-			if rec.BaselineHash != nil {
-				item.BaselineFullHash = rec.BaselineHash.FullHash
-				item.BaselineTimestamp = rec.BaselineHash.Timestamp
-			}
-
-			records = append(records, item)
-			urlSet[recordURL] = struct{}{}
-		}
-	}
-
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].Timestamp > records[j].Timestamp
-	})
-	if limit > 0 && len(records) > limit {
-		records = records[:limit]
-	}
-
-	urlOptions := make([]string, 0, len(urlSet))
-	for u := range urlSet {
-		urlOptions = append(urlOptions, u)
-	}
-	sort.Strings(urlOptions)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"count":   len(records),
-		"records": records,
-		"urls":    urlOptions,
+		"count":   result.Count,
+		"records": result.Records,
+		"urls":    result.URLOptions,
 	})
 }
 
@@ -316,8 +213,7 @@ func (s *Server) handleTamperHistoryDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	storage := tamper.NewHashStorage("./hash_store")
-	if err := storage.DeleteCheckRecords(urlValue); err != nil {
+	if err := s.tamperApp.DeleteCheckRecords(urlValue); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "delete_history_failed", "delete history failed", err.Error())
 		return
 	}

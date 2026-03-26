@@ -44,7 +44,7 @@ func TestHandleTamperHistoryDelete(t *testing.T) {
 	}
 	recordsDir := filepath.Join(recordsBase, entries[0].Name())
 
-	s := &Server{}
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store")}
 
 	missingReq := httptest.NewRequest(http.MethodDelete, "/api/tamper/history/delete", nil)
 	missingW := httptest.NewRecorder()

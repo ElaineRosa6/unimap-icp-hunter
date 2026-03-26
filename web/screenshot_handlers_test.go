@@ -9,12 +9,16 @@ import (
 	"testing"
 
 	"github.com/unimap-icp-hunter/project/internal/config"
+	"github.com/unimap-icp-hunter/project/internal/service"
 )
 
 func buildTestServerWithScreenshotBase(baseDir string) *Server {
 	cfg := &config.Config{}
 	cfg.Screenshot.BaseDir = baseDir
-	return &Server{config: cfg}
+	return &Server{
+		config:        cfg,
+		screenshotApp: service.NewScreenshotAppService(baseDir),
+	}
 }
 
 func TestNormalizeScreenshotPathToken(t *testing.T) {

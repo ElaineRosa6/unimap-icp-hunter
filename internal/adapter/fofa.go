@@ -477,12 +477,8 @@ func (f *FofaAdapter) GetQuota() (*model.QuotaInfo, error) {
 		used = 0
 	}
 
-	// 打印详细的配额信息，包括用户类型
-	logger.Infof("FOFA user info: category=%s, isvip=%t, vip_level=%d",
-		result.Category, result.IsVIP, result.VIPLevel)
-	logger.Infof("FOFA quota details: remain_free_point=%d, remain_api_query=%d",
-		result.RemainFreePoint, result.RemainAPIQuery)
-	logger.Infof("FOFA quota: total=%d, used=%d, remain=%d", total, used, remain)
+	// 仅记录必要的配额信息（不记录敏感用户详情）
+	logger.Debugf("FOFA quota: total=%d, used=%d, remain=%d", total, used, remain)
 
 	return &model.QuotaInfo{
 		Remaining: remain,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/unimap-icp-hunter/project/internal/metrics"
@@ -210,6 +211,161 @@ func (s *TamperAppService) GetCheckStats(url string) (map[string]interface{}, er
 func (s *TamperAppService) DeleteCheckRecords(url string) error {
 	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
 	return detector.DeleteCheckRecords(url)
+}
+
+// HistoryFilter 历史记录过滤条件
+type HistoryFilter struct {
+	URLFilter   string
+	TypeFilter  string
+	ModeFilter  string
+	QueryFilter string
+	Limit       int
+}
+
+// HistoryRecord 历史记录
+type HistoryRecord struct {
+	ID                string   `json:"id"`
+	URL               string   `json:"url"`
+	CheckType         string   `json:"check_type"`
+	DetectionMode     string   `json:"detection_mode,omitempty"`
+	Status            string   `json:"status"`
+	Tampered          bool     `json:"tampered"`
+	TamperedSegments  []string `json:"tampered_segments,omitempty"`
+	ChangesCount      int      `json:"changes_count"`
+	Timestamp         int64    `json:"timestamp"`
+	BaselineTimestamp int64    `json:"baseline_timestamp,omitempty"`
+	CurrentFullHash   string   `json:"current_full_hash,omitempty"`
+	BaselineFullHash  string   `json:"baseline_full_hash,omitempty"`
+}
+
+// HistoryResult 历史记录查询结果
+type HistoryResult struct {
+	Records    []HistoryRecord `json:"records"`
+	URLOptions []string        `json:"urls"`
+	Count      int             `json:"count"`
+}
+
+// QueryHistory 查询检测历史记录（带过滤和排序）
+func (s *TamperAppService) QueryHistory(filter HistoryFilter) (*HistoryResult, error) {
+	storage := tamper.NewHashStorage(s.baseDir)
+	allRecords, err := storage.ListAllCheckRecords()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list history: %w", err)
+	}
+
+	records := make([]HistoryRecord, 0)
+	urlSet := make(map[string]struct{})
+
+	for _, list := range allRecords {
+		for _, rec := range list {
+			if rec == nil {
+				continue
+			}
+			recordURL := strings.TrimSpace(rec.URL)
+			if recordURL == "" {
+				continue
+			}
+
+			// 计算状态
+			status := "normal"
+			switch {
+			case rec.CheckType == "first_check":
+				status = "first_check"
+			case rec.Tampered:
+				status = "tampered"
+			case rec.BaselineHash == nil:
+				status = "no_baseline"
+			default:
+				status = "normal"
+			}
+
+			// URL 过滤
+			urlLower := strings.ToLower(recordURL)
+			if filter.URLFilter != "" && urlLower != strings.ToLower(filter.URLFilter) {
+				continue
+			}
+
+			// 类型过滤
+			if filter.TypeFilter != "" {
+				if strings.ToLower(rec.CheckType) != strings.ToLower(filter.TypeFilter) &&
+					strings.ToLower(status) != strings.ToLower(filter.TypeFilter) {
+					continue
+				}
+			}
+
+			// 模式过滤
+			recordMode := strings.ToLower(strings.TrimSpace(rec.DetectionMode))
+			if recordMode == "" {
+				recordMode = tamper.DetectionModeRelaxed
+			}
+			if filter.ModeFilter != "" && strings.ToLower(filter.ModeFilter) != recordMode {
+				continue
+			}
+
+			// 查询过滤
+			if filter.QueryFilter != "" {
+				queryLower := strings.ToLower(filter.QueryFilter)
+				if !strings.Contains(urlLower, queryLower) &&
+					!strings.Contains(strings.ToLower(rec.CheckType), queryLower) &&
+					!strings.Contains(status, queryLower) &&
+					!strings.Contains(recordMode, queryLower) {
+					continue
+				}
+			}
+
+			item := HistoryRecord{
+				ID:               rec.ID,
+				URL:              recordURL,
+				CheckType:        rec.CheckType,
+				DetectionMode:    recordMode,
+				Status:           status,
+				Tampered:         rec.Tampered,
+				TamperedSegments: rec.TamperedSegments,
+				ChangesCount:     len(rec.Changes),
+				Timestamp:        rec.Timestamp,
+			}
+			if rec.CurrentHash != nil {
+				item.CurrentFullHash = rec.CurrentHash.FullHash
+			}
+			if rec.BaselineHash != nil {
+				item.BaselineFullHash = rec.BaselineHash.FullHash
+				item.BaselineTimestamp = rec.BaselineHash.Timestamp
+			}
+
+			records = append(records, item)
+			urlSet[recordURL] = struct{}{}
+		}
+	}
+
+	// 按时间戳降序排序
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Timestamp > records[j].Timestamp
+	})
+
+	// 限制数量
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if len(records) > limit {
+		records = records[:limit]
+	}
+
+	// URL 选项列表
+	urlOptions := make([]string, 0, len(urlSet))
+	for u := range urlSet {
+		urlOptions = append(urlOptions, u)
+	}
+	sort.Strings(urlOptions)
+
+	return &HistoryResult{
+		Records:    records,
+		URLOptions: urlOptions,
+		Count:      len(records),
+	}, nil
 }
 
 func (s *TamperAppService) newDetector(ctx context.Context, mode string, allocatorFactory TamperAllocatorFactory) (*tamper.Detector, context.CancelFunc, error) {

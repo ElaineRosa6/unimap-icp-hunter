@@ -167,6 +167,12 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 		logger.Infof("Screenshot manager initialized with base dir: %s", cfg.Screenshot.BaseDir)
 	}
 
+	// 解析截图基础目录
+	screenshotBaseDir := "./screenshots"
+	if cfg != nil && strings.TrimSpace(cfg.Screenshot.BaseDir) != "" {
+		screenshotBaseDir = strings.TrimSpace(cfg.Screenshot.BaseDir)
+	}
+
 	return &Server{
 		port:          port,
 		templates:     templates,
@@ -174,7 +180,7 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 		queryApp:      service.NewQueryAppService(unifiedSvc, orchestrator),
 		monitorApp:    service.NewMonitorAppService(),
 		tamperApp:     service.NewTamperAppService("./hash_store"),
-		screenshotApp: service.NewScreenshotAppService(),
+		screenshotApp: service.NewScreenshotAppService(screenshotBaseDir),
 		orchestrator:  orchestrator,
 		upgrader:      upgrader,
 		connManager:   &ConnectionManager{connections: make(map[string]*managedConn)},

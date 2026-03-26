@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/util/workerpool"
 	"github.com/unimap-icp-hunter/project/internal/utils"
@@ -24,12 +25,20 @@ const (
 	DefaultRateLimitDelay = 100 * time.Millisecond
 )
 
+// EngineCacheTTLConfig 引擎缓存TTL配置
+type EngineCacheTTLConfig struct {
+	TTL     time.Duration
+	Enabled bool
+}
+
 // EngineOrchestrator 引擎编排器
 type EngineOrchestrator struct {
-	adapters    map[string]EngineAdapter
-	mutex       sync.RWMutex
-	cache       utils.QueryCache
-	concurrency int
+	adapters       map[string]EngineAdapter
+	mutex          sync.RWMutex
+	cache          utils.QueryCache
+	concurrency    int
+	engineCacheTTL map[string]EngineCacheTTLConfig // 按引擎的缓存TTL配置
+	defaultCacheTTL time.Duration                   // 默认缓存TTL
 }
 
 // NewEngineOrchestrator 创建引擎编排器
@@ -50,10 +59,65 @@ func NewEngineOrchestratorWithConfig(useRedis bool, redisAddr, redisPassword str
 	)
 
 	return &EngineOrchestrator{
-		adapters:    make(map[string]EngineAdapter),
-		cache:       cache,
-		concurrency: DefaultConcurrency,
+		adapters:       make(map[string]EngineAdapter),
+		cache:          cache,
+		concurrency:    DefaultConcurrency,
+		engineCacheTTL: make(map[string]EngineCacheTTLConfig),
+		defaultCacheTTL: DefaultCacheTTL,
 	}
+}
+
+// SetEngineCacheTTL 设置引擎缓存TTL配置
+func (o *EngineOrchestrator) SetEngineCacheTTL(engineName string, ttl time.Duration, enabled bool) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+	o.engineCacheTTL[strings.ToLower(engineName)] = EngineCacheTTLConfig{
+		TTL:     ttl,
+		Enabled: enabled,
+	}
+}
+
+// SetEngineCacheTTLFromConfig 从配置map设置引擎缓存TTL
+// configMap 格式: map[engineName]{ttl_seconds, enabled}
+func (o *EngineOrchestrator) SetEngineCacheTTLFromConfig(configMap map[string]struct {
+	TTL     int
+	Enabled bool
+}) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+	for engine, cfg := range configMap {
+		o.engineCacheTTL[strings.ToLower(engine)] = EngineCacheTTLConfig{
+			TTL:     time.Duration(cfg.TTL) * time.Second,
+			Enabled: cfg.Enabled,
+		}
+	}
+}
+
+// GetEngineCacheTTL 获取引擎缓存TTL
+func (o *EngineOrchestrator) GetEngineCacheTTL(engineName string) (time.Duration, bool) {
+	o.mutex.RLock()
+	defer o.mutex.RUnlock()
+	if cfg, exists := o.engineCacheTTL[strings.ToLower(engineName)]; exists && cfg.Enabled {
+		return cfg.TTL, true
+	}
+	return o.defaultCacheTTL, true
+}
+
+// IsCacheEnabledForEngine 检查引擎是否启用缓存
+func (o *EngineOrchestrator) IsCacheEnabledForEngine(engineName string) bool {
+	o.mutex.RLock()
+	defer o.mutex.RUnlock()
+	if cfg, exists := o.engineCacheTTL[strings.ToLower(engineName)]; exists {
+		return cfg.Enabled
+	}
+	return true // 默认启用
+}
+
+// SetDefaultCacheTTL 设置默认缓存TTL
+func (o *EngineOrchestrator) SetDefaultCacheTTL(ttl time.Duration) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+	o.defaultCacheTTL = ttl
 }
 
 // SetConcurrency 设置并发数
@@ -159,9 +223,11 @@ type SearchTask struct {
 // Execute 执行搜索任务
 func (t *SearchTask) Execute() error {
 	defer t.wg.Done()
+	startTime := time.Now()
 
 	adapter, exists := t.orchestrator.GetAdapter(t.query.EngineName)
 	if !exists {
+		metrics.IncEngineQuery(t.query.EngineName, "error")
 		select {
 		case t.errorChan <- fmt.Errorf("adapter %s not found", t.query.EngineName):
 		default:
@@ -186,6 +252,9 @@ func (t *SearchTask) Execute() error {
 			Cached:         true,
 			NormalizedData: cachedResults, // 保存已标准化的数据
 		}
+
+		metrics.IncEngineQuery(t.query.EngineName, "cached")
+		metrics.ObserveEngineQueryDuration(t.query.EngineName, time.Since(startTime))
 
 		select {
 		case t.resultChan <- result:
@@ -214,6 +283,8 @@ func (t *SearchTask) Execute() error {
 		// 如果是最后一次尝试，不再重试
 		if attempt == retryCount {
 			logger.CtxErrorf(t.ctx, "%s search failed after %d attempts: %v", t.query.EngineName, retryCount+1, err)
+			metrics.IncEngineQuery(t.query.EngineName, "error")
+			metrics.IncEngineErrorByName(t.query.EngineName)
 			select {
 			case t.errorChan <- fmt.Errorf("%s search error: %v", t.query.EngineName, err):
 			default:
@@ -246,13 +317,31 @@ func (t *SearchTask) Execute() error {
 	}
 
 	// 标准化结果并存入缓存
+	if result == nil {
+		logger.CtxWarnf(t.ctx, "nil result from %s", t.query.EngineName)
+		metrics.IncEngineQuery(t.query.EngineName, "error")
+		select {
+		case t.resultChan <- &model.EngineResult{
+			EngineName: t.query.EngineName,
+			Error:      "nil result from search",
+		}:
+		default:
+			logger.CtxErrorf(t.ctx, "failed to send nil result error: channel full")
+		}
+		return nil
+	}
 	normalized, err := adapter.Normalize(result)
 	if err != nil {
 		logger.CtxWarnf(t.ctx, "failed to normalize results from %s: %v", t.query.EngineName, err)
 		// 标准化失败，但仍返回原始结果
 	} else if len(normalized) > 0 {
-		t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
+		// 使用按引擎的缓存TTL
+		cacheTTL, _ := t.orchestrator.GetEngineCacheTTL(t.query.EngineName)
+		t.orchestrator.cache.Set(cacheKey, normalized, cacheTTL)
 	}
+
+	metrics.IncEngineQuery(t.query.EngineName, "success")
+	metrics.ObserveEngineQueryDuration(t.query.EngineName, time.Since(startTime))
 
 	select {
 	case t.resultChan <- result:
@@ -353,6 +442,7 @@ func (o *EngineOrchestrator) SearchEnginesWithContext(ctx context.Context, queri
 // PaginatedSearchTask 分页搜索任务
 type PaginatedSearchTask struct {
 	orchestrator *EngineOrchestrator
+	ctx          context.Context
 	query        model.EngineQuery
 	pageSize     int
 	maxPages     int
@@ -372,7 +462,7 @@ func (t *PaginatedSearchTask) Execute() error {
 			Error:      fmt.Sprintf("failed to find adapter: %s", t.query.EngineName),
 		}:
 		default:
-			logger.Errorf("Failed to send error: adapter %s not found", t.query.EngineName)
+			logger.CtxErrorf(t.ctx, "Failed to send error: adapter %s not found", t.query.EngineName)
 		}
 		return nil
 	}
@@ -399,7 +489,7 @@ func (t *PaginatedSearchTask) Execute() error {
 			select {
 			case t.resultChan <- result:
 			default:
-				logger.Errorf("Failed to send cached result: channel full")
+				logger.CtxErrorf(t.ctx, "Failed to send cached result: channel full")
 			}
 			continue
 		}
@@ -412,7 +502,20 @@ func (t *PaginatedSearchTask) Execute() error {
 				Error:      fmt.Sprintf("search failed on page %d: %v", page, err),
 			}:
 			default:
-				logger.Errorf("Failed to send error: search failed on page %d: %v", page, err)
+				logger.CtxErrorf(t.ctx, "Failed to send error: search failed on page %d: %v", page, err)
+			}
+			break
+		}
+
+		// 检查 result 是否为 nil
+		if result == nil {
+			select {
+			case t.resultChan <- &model.EngineResult{
+				EngineName: t.query.EngineName,
+				Error:      fmt.Sprintf("nil result on page %d", page),
+			}:
+			default:
+				logger.CtxErrorf(t.ctx, "Failed to send error: nil result on page %d", page)
 			}
 			break
 		}
@@ -420,16 +523,18 @@ func (t *PaginatedSearchTask) Execute() error {
 		// 标准化结果并存入缓存
 		normalized, err := adapter.Normalize(result)
 		if err != nil {
-			logger.Warnf("Failed to normalize results from %s page %d: %v", t.query.EngineName, page, err)
+			logger.CtxWarnf(t.ctx, "Failed to normalize results from %s page %d: %v", t.query.EngineName, page, err)
 			// 标准化失败，但仍返回原始结果
 		} else if len(normalized) > 0 {
-			t.orchestrator.cache.Set(cacheKey, normalized, DefaultCacheTTL)
+			// 使用按引擎的缓存TTL
+			cacheTTL, _ := t.orchestrator.GetEngineCacheTTL(t.query.EngineName)
+			t.orchestrator.cache.Set(cacheKey, normalized, cacheTTL)
 		}
 
 		select {
 		case t.resultChan <- result:
 		default:
-			logger.Errorf("Failed to send result: channel full")
+			logger.CtxErrorf(t.ctx, "Failed to send result: channel full")
 		}
 
 		if !result.HasMore || page >= t.maxPages {
@@ -475,6 +580,7 @@ func (o *EngineOrchestrator) SearchEnginesWithPaginationAndContext(ctx context.C
 		wg.Add(1)
 		task := &PaginatedSearchTask{
 			orchestrator: o,
+			ctx:          ctx,
 			query:        q,
 			pageSize:     pageSize,
 			maxPages:     maxPages,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/service"
 )
@@ -46,6 +47,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.connManager.mutex.Lock()
 	s.connManager.connections[connID] = managed
 	s.connManager.mutex.Unlock()
+	metrics.IncWebSocketConnection()
 
 	// 连接关闭时从管理器中移除
 	defer func() {
@@ -54,6 +56,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.connManager.mutex.Lock()
 		delete(s.connManager.connections, connID)
 		s.connManager.mutex.Unlock()
+		metrics.DecWebSocketConnection()
 		logger.Infof("WebSocket connection closed: %s", connID)
 	}()
 
@@ -93,11 +96,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
+		metrics.IncWebSocketMessage("inbound")
+
 		// 处理不同类型的消息
 		if messageType, ok := message["type"].(string); ok {
 			switch messageType {
 			case "ping":
 				// 回复ping消息
+				metrics.IncWebSocketMessage("outbound")
 				if err := writeJSON(map[string]interface{}{"type": "pong"}); err != nil {
 					logger.Errorf("WebSocket write error: %v", err)
 					break

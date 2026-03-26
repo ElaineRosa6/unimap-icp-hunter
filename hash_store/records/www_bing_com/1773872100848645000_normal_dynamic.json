@@ -1,0 +1,255 @@
+{
+  "id": "1773872100848645000",
+  "url": "https://www.bing.com",
+  "tampered": false,
+  "tampered_segments": [
+    "footer",
+    "full_content",
+    "body",
+    "scripts"
+  ],
+  "changes": [
+    {
+      "segment": "footer",
+      "old_hash": "94c2d74a32e8404d046d3871cf237ee084deb1abf9ac07205e92a157de833d60",
+      "new_hash": "30d447b4870511ed999d6f3b0a8006dc77a421e57b7c7666492b9836cbf5e007",
+      "change_type": "modified",
+      "description": "Segment 'footer' has been modified"
+    },
+    {
+      "segment": "full_content",
+      "old_hash": "baf8e3fbf8c08cc01602470ea1b50b3695173b482166ba846a44ab9861226873",
+      "new_hash": "150c9e319770af47e87c66abc849cbb122f382e687f8bc58b3ad852b95e74e91",
+      "change_type": "modified",
+      "description": "Segment 'full_content' has been modified"
+    },
+    {
+      "segment": "body",
+      "old_hash": "faf92fef95799cf443858cd9e9031cf76972e350efd6ebff9cae99b5b0be394c",
+      "new_hash": "5aa95797095aaf355973cce2f375ee1d7a2c4634c279e9069fcc9c8433362a53",
+      "change_type": "modified",
+      "description": "Segment 'body' has been modified"
+    },
+    {
+      "segment": "scripts",
+      "old_hash": "6d5ff257680170183bdac84f9ac8dd5f1b087817d300cb734bcc3a7578599d7c",
+      "new_hash": "197606f70f65efe88483d0d72d5e5897f474d02f01da42eddc8a28433c044472",
+      "change_type": "structure_changed",
+      "description": "Segment 'scripts' has been modified"
+    }
+  ],
+  "current_hash": {
+    "url": "https://www.bing.com",
+    "title": "Search - Microsoft Bing",
+    "full_hash": "735efd43e3ff70a161be216ae3d4796096384ce455844e039e0e7c597abae77d",
+    "segment_hashes": [
+      {
+        "name": "head",
+        "hash": "efbe7e0835970ccf1cab99ca8b710262f84fb627bb0712073620bf65818ff1c0",
+        "length": 6114,
+        "elements": 1
+      },
+      {
+        "name": "body",
+        "hash": "5aa95797095aaf355973cce2f375ee1d7a2c4634c279e9069fcc9c8433362a53",
+        "length": 8799,
+        "elements": 1
+      },
+      {
+        "name": "header",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "nav",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "main",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "article",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "section",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "aside",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "footer",
+        "hash": "30d447b4870511ed999d6f3b0a8006dc77a421e57b7c7666492b9836cbf5e007",
+        "length": 1334,
+        "elements": 1
+      },
+      {
+        "name": "scripts",
+        "hash": "197606f70f65efe88483d0d72d5e5897f474d02f01da42eddc8a28433c044472",
+        "length": 8865,
+        "elements": 31
+      },
+      {
+        "name": "styles",
+        "hash": "79bdfc4618439c29ed52b88418aea49b69b2d98104a1062f91609ae4cee60d3e",
+        "length": 70,
+        "elements": 1
+      },
+      {
+        "name": "meta",
+        "hash": "f5dbd78f1d18ce364ffaa7b808de7679ad9e6dfe2bb22d9c1b37f1a4fc670e72",
+        "length": 740,
+        "elements": 13
+      },
+      {
+        "name": "links",
+        "hash": "920cb4af23892faee1cad46b35afcf70aa2cefac8a46430d678c675a6df878e3",
+        "length": 637,
+        "elements": 10
+      },
+      {
+        "name": "images",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "forms",
+        "hash": "467bd2bdcd0e9e5131d2ffb29fee9beb036c361c17f6ee27cfe1642d3d7bee78",
+        "length": 61,
+        "elements": 4
+      },
+      {
+        "name": "full_content",
+        "hash": "150c9e319770af47e87c66abc849cbb122f382e687f8bc58b3ad852b95e74e91",
+        "length": 14950,
+        "elements": 1
+      }
+    ],
+    "timestamp": 1773872100,
+    "html_length": 15110,
+    "status": "success"
+  },
+  "baseline_hash": {
+    "url": "https://www.bing.com",
+    "title": "Search - Microsoft Bing",
+    "full_hash": "6fbd38f634143bcd3bb15e73d9dd19b96dca89740eb0078d527009bb1d179631",
+    "segment_hashes": [
+      {
+        "name": "head",
+        "hash": "efbe7e0835970ccf1cab99ca8b710262f84fb627bb0712073620bf65818ff1c0",
+        "length": 6114,
+        "elements": 1
+      },
+      {
+        "name": "body",
+        "hash": "faf92fef95799cf443858cd9e9031cf76972e350efd6ebff9cae99b5b0be394c",
+        "length": 7556,
+        "elements": 1
+      },
+      {
+        "name": "header",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "nav",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "main",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "article",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "section",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "aside",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "footer",
+        "hash": "94c2d74a32e8404d046d3871cf237ee084deb1abf9ac07205e92a157de833d60",
+        "length": 1310,
+        "elements": 1
+      },
+      {
+        "name": "scripts",
+        "hash": "6d5ff257680170183bdac84f9ac8dd5f1b087817d300cb734bcc3a7578599d7c",
+        "length": 8325,
+        "elements": 20
+      },
+      {
+        "name": "styles",
+        "hash": "79bdfc4618439c29ed52b88418aea49b69b2d98104a1062f91609ae4cee60d3e",
+        "length": 70,
+        "elements": 1
+      },
+      {
+        "name": "meta",
+        "hash": "f5dbd78f1d18ce364ffaa7b808de7679ad9e6dfe2bb22d9c1b37f1a4fc670e72",
+        "length": 740,
+        "elements": 13
+      },
+      {
+        "name": "links",
+        "hash": "920cb4af23892faee1cad46b35afcf70aa2cefac8a46430d678c675a6df878e3",
+        "length": 637,
+        "elements": 10
+      },
+      {
+        "name": "images",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "forms",
+        "hash": "467bd2bdcd0e9e5131d2ffb29fee9beb036c361c17f6ee27cfe1642d3d7bee78",
+        "length": 61,
+        "elements": 4
+      },
+      {
+        "name": "full_content",
+        "hash": "baf8e3fbf8c08cc01602470ea1b50b3695173b482166ba846a44ab9861226873",
+        "length": 13707,
+        "elements": 1
+      }
+    ],
+    "timestamp": 1773872085,
+    "html_length": 13867,
+    "status": "success"
+  },
+  "timestamp": 1773872100,
+  "check_type": "normal_dynamic"
+}

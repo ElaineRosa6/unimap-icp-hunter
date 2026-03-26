@@ -1,0 +1,263 @@
+{
+  "id": "1773871916952805300",
+  "url": "https://www.github.com",
+  "tampered": true,
+  "tampered_segments": [
+    "head",
+    "full_content",
+    "body",
+    "header",
+    "scripts"
+  ],
+  "changes": [
+    {
+      "segment": "head",
+      "old_hash": "7cdc5dfd81225570103c4652819aa71419a3098f1c6754f3a54f286b55303eac",
+      "new_hash": "370b9230b90ae1c273ff97abebee2152a2152bd1e169ba6ee56624d68b128b48",
+      "change_type": "modified",
+      "description": "Segment 'head' has been modified"
+    },
+    {
+      "segment": "full_content",
+      "old_hash": "dfcf8870d5816c49f97d676907920f1599de036bf55addbf0b0bfb0e3084b513",
+      "new_hash": "5f59fcdf69e6bd2a9d79435a519fba9a8176ca1f29cfdcdac1927920dba0b43c",
+      "change_type": "modified",
+      "description": "Segment 'full_content' has been modified"
+    },
+    {
+      "segment": "body",
+      "old_hash": "cb21fa9537c6b2310e861f57bfc1a906841fb84333f47864a670ecdddef5dedc",
+      "new_hash": "ae4aecae0240664bc28170afc52121d7f41a0591ebc5779d5da976871eaa5ff4",
+      "change_type": "modified",
+      "description": "Segment 'body' has been modified"
+    },
+    {
+      "segment": "header",
+      "old_hash": "e244cf1ae53da486070745d796a98c07d6bf74a1ddb40926ecf54e73aab78bef",
+      "new_hash": "4658d61b8b8f4e20536f8a59dd95f72b0d4a22490ca3e9e18d147203fab1bb15",
+      "change_type": "modified",
+      "description": "Segment 'header' has been modified"
+    },
+    {
+      "segment": "scripts",
+      "old_hash": "465151299d56524f863a525c9bb771ab4acbda59d1dc9c7e5b465dea4a63b44b",
+      "new_hash": "786c245fb9545132eb1dc7330051e639cc55a3a1e551acb25879e91081455f2a",
+      "change_type": "structure_changed",
+      "description": "Segment 'scripts' has been modified"
+    }
+  ],
+  "current_hash": {
+    "url": "https://www.github.com",
+    "title": "GitHub · Change is constant. GitHub keeps you ahead. · GitHub",
+    "full_hash": "8588c58f23adfd153bc2caaf71ef3d6f28c27bef012a68a52afe962667a28a8d",
+    "segment_hashes": [
+      {
+        "name": "head",
+        "hash": "370b9230b90ae1c273ff97abebee2152a2152bd1e169ba6ee56624d68b128b48",
+        "length": 40974,
+        "elements": 1
+      },
+      {
+        "name": "body",
+        "hash": "ae4aecae0240664bc28170afc52121d7f41a0591ebc5779d5da976871eaa5ff4",
+        "length": 542345,
+        "elements": 1
+      },
+      {
+        "name": "header",
+        "hash": "4658d61b8b8f4e20536f8a59dd95f72b0d4a22490ca3e9e18d147203fab1bb15",
+        "length": 110422,
+        "elements": 5
+      },
+      {
+        "name": "nav",
+        "hash": "94921e816fc35ef5203b1a91153ecc428bd6e91d08d920bf8fe0ad9d6375b7f0",
+        "length": 57455,
+        "elements": 7
+      },
+      {
+        "name": "main",
+        "hash": "057f015d75d4ab4b3d6bc3f88d4cd590903ee0eb21c3d5c8e69ee14f985913b6",
+        "length": 385165,
+        "elements": 1
+      },
+      {
+        "name": "article",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "section",
+        "hash": "f98f102266ec1d5c442980ce817b605dc8b6e2c0d653d50147a41a7793a57fbf",
+        "length": 153249,
+        "elements": 11
+      },
+      {
+        "name": "aside",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "footer",
+        "hash": "d6181ae176674a5313976e1514ece2690a248321872d0643ba07b0a3566b66cf",
+        "length": 32581,
+        "elements": 1
+      },
+      {
+        "name": "scripts",
+        "hash": "786c245fb9545132eb1dc7330051e639cc55a3a1e551acb25879e91081455f2a",
+        "length": 136944,
+        "elements": 80
+      },
+      {
+        "name": "styles",
+        "hash": "83dda2e8ae2b60722175d07889b1dabb620b0d797782f8cab15d9f148be8110e",
+        "length": 15286,
+        "elements": 40
+      },
+      {
+        "name": "meta",
+        "hash": "bd43fe2a421aec3c55264813f5c74540131e8aca96bf644cf75d403e7aeac234",
+        "length": 3213,
+        "elements": 51
+      },
+      {
+        "name": "links",
+        "hash": "2e9621984f4d3bb3576ff51c12f372c5c117fc45184a588388d84fe780b4dbba",
+        "length": 8387,
+        "elements": 154
+      },
+      {
+        "name": "images",
+        "hash": "5f2bb8a3b35f5c60149ff992491a61c242023f959d1f4a8dacf996535e2cd15e",
+        "length": 3568,
+        "elements": 24
+      },
+      {
+        "name": "forms",
+        "hash": "98a0ba7e40079dbe3f90d17b90778e70da1df1a740a1ea8ec4aff60a04088959",
+        "length": 404,
+        "elements": 18
+      },
+      {
+        "name": "full_content",
+        "hash": "5f59fcdf69e6bd2a9d79435a519fba9a8176ca1f29cfdcdac1927920dba0b43c",
+        "length": 586482,
+        "elements": 1
+      }
+    ],
+    "timestamp": 1773871916,
+    "html_length": 593770,
+    "status": "success"
+  },
+  "baseline_hash": {
+    "url": "https://www.github.com",
+    "title": "GitHub · Change is constant. GitHub keeps you ahead. · GitHub",
+    "full_hash": "e189e8507230a643ca279935c0090dfd88e7aca828edbc515c9fa1b510e58f95",
+    "segment_hashes": [
+      {
+        "name": "head",
+        "hash": "7cdc5dfd81225570103c4652819aa71419a3098f1c6754f3a54f286b55303eac",
+        "length": 41769,
+        "elements": 1
+      },
+      {
+        "name": "body",
+        "hash": "cb21fa9537c6b2310e861f57bfc1a906841fb84333f47864a670ecdddef5dedc",
+        "length": 542343,
+        "elements": 1
+      },
+      {
+        "name": "header",
+        "hash": "e244cf1ae53da486070745d796a98c07d6bf74a1ddb40926ecf54e73aab78bef",
+        "length": 110420,
+        "elements": 5
+      },
+      {
+        "name": "nav",
+        "hash": "94921e816fc35ef5203b1a91153ecc428bd6e91d08d920bf8fe0ad9d6375b7f0",
+        "length": 57455,
+        "elements": 7
+      },
+      {
+        "name": "main",
+        "hash": "057f015d75d4ab4b3d6bc3f88d4cd590903ee0eb21c3d5c8e69ee14f985913b6",
+        "length": 385165,
+        "elements": 1
+      },
+      {
+        "name": "article",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "section",
+        "hash": "f98f102266ec1d5c442980ce817b605dc8b6e2c0d653d50147a41a7793a57fbf",
+        "length": 153249,
+        "elements": 11
+      },
+      {
+        "name": "aside",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "length": 0,
+        "elements": 0
+      },
+      {
+        "name": "footer",
+        "hash": "d6181ae176674a5313976e1514ece2690a248321872d0643ba07b0a3566b66cf",
+        "length": 32581,
+        "elements": 1
+      },
+      {
+        "name": "scripts",
+        "hash": "465151299d56524f863a525c9bb771ab4acbda59d1dc9c7e5b465dea4a63b44b",
+        "length": 137280,
+        "elements": 85
+      },
+      {
+        "name": "styles",
+        "hash": "83dda2e8ae2b60722175d07889b1dabb620b0d797782f8cab15d9f148be8110e",
+        "length": 15286,
+        "elements": 40
+      },
+      {
+        "name": "meta",
+        "hash": "bd43fe2a421aec3c55264813f5c74540131e8aca96bf644cf75d403e7aeac234",
+        "length": 3213,
+        "elements": 51
+      },
+      {
+        "name": "links",
+        "hash": "2e9621984f4d3bb3576ff51c12f372c5c117fc45184a588388d84fe780b4dbba",
+        "length": 8387,
+        "elements": 154
+      },
+      {
+        "name": "images",
+        "hash": "5f2bb8a3b35f5c60149ff992491a61c242023f959d1f4a8dacf996535e2cd15e",
+        "length": 3568,
+        "elements": 24
+      },
+      {
+        "name": "forms",
+        "hash": "98a0ba7e40079dbe3f90d17b90778e70da1df1a740a1ea8ec4aff60a04088959",
+        "length": 404,
+        "elements": 18
+      },
+      {
+        "name": "full_content",
+        "hash": "dfcf8870d5816c49f97d676907920f1599de036bf55addbf0b0bfb0e3084b513",
+        "length": 587271,
+        "elements": 1
+      }
+    ],
+    "timestamp": 1773871909,
+    "html_length": 594556,
+    "status": "success"
+  },
+  "timestamp": 1773871916,
+  "check_type": "tampered"
+}

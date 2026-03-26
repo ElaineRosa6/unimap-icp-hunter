@@ -50,13 +50,10 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 	cacheCleanupInterval := 5 * time.Minute
 	memoryMaxSize := 1000
 	cacheBackend := "memory"
-	useRedis := false
-	redisAddr := ""
-	redisPassword := ""
-	redisDB := 0
-	redisPrefix := "unimap:"
 	maxMemoryMB := 512  // 默认最大内存限制512MB
 	maxConcurrent := 10 // 默认最大并发查询数
+
+	var redisCfg utils.RedisConfig
 
 	if cfg != nil {
 		if cfg.System.CacheTTL > 0 {
@@ -71,32 +68,48 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 		if cfg.System.MaxConcurrent > 0 {
 			maxConcurrent = cfg.System.MaxConcurrent
 		}
-		if strings.EqualFold(strings.TrimSpace(cfg.Cache.Backend), "redis") {
-			useRedis = true
-			cacheBackend = "redis"
-			redisAddr = strings.TrimSpace(cfg.Cache.Redis.Addr)
-			redisPassword = cfg.Cache.Redis.Password
-			redisDB = cfg.Cache.Redis.DB
-			if prefix := strings.TrimSpace(cfg.Cache.Redis.Prefix); prefix != "" {
-				redisPrefix = prefix
-			}
+		cacheBackend = strings.ToLower(strings.TrimSpace(cfg.Cache.Backend))
+		if cacheBackend == "" {
+			cacheBackend = "memory"
+		}
+
+		// 构建Redis配置
+		redisCfg = utils.RedisConfig{
+			Addr:            strings.TrimSpace(cfg.Cache.Redis.Addr),
+			Password:        cfg.Cache.Redis.Password,
+			DB:              cfg.Cache.Redis.DB,
+			Prefix:          strings.TrimSpace(cfg.Cache.Redis.Prefix),
+			PoolSize:        cfg.Cache.Redis.PoolSize,
+			MinIdleConns:    cfg.Cache.Redis.MinIdleConns,
+			MaxIdleConns:    cfg.Cache.Redis.MaxIdleConns,
+			MaxRetries:      cfg.Cache.Redis.MaxRetries,
+			DialTimeout:     time.Duration(cfg.Cache.Redis.DialTimeout) * time.Millisecond,
+			ReadTimeout:     time.Duration(cfg.Cache.Redis.ReadTimeout) * time.Millisecond,
+			WriteTimeout:    time.Duration(cfg.Cache.Redis.WriteTimeout) * time.Millisecond,
+			PoolTimeout:     time.Duration(cfg.Cache.Redis.PoolTimeout) * time.Millisecond,
+			ConnMaxLifetime: time.Duration(cfg.Cache.Redis.ConnMaxLifetime) * time.Millisecond,
+			ConnMaxIdleTime: time.Duration(cfg.Cache.Redis.ConnMaxIdleTime) * time.Millisecond,
 		}
 	}
 
 	// 初始化缓存
-	cache := utils.NewCache(
-		useRedis,
-		redisAddr,
-		redisPassword,
-		redisDB,
-		redisPrefix,
-		memoryMaxSize,        // 内存缓存最大大小
-		cacheCleanupInterval, // 清理间隔
-	)
+	cache := utils.NewCacheWithConfig(cacheBackend, redisCfg, memoryMaxSize, cacheCleanupInterval)
 
-	orchestrator := adapter.NewEngineOrchestratorWithConfig(useRedis, redisAddr, redisPassword, redisDB)
+	// 检测实际使用的缓存后端
+	useRedis := strings.EqualFold(cacheBackend, "redis")
+	orchestrator := adapter.NewEngineOrchestratorWithConfig(useRedis, redisCfg.Addr, redisCfg.Password, redisCfg.DB)
 	if cfg != nil {
 		orchestrator.SetConcurrency(cfg.System.MaxConcurrent)
+
+		// 设置默认缓存TTL
+		orchestrator.SetDefaultCacheTTL(cacheTTL)
+
+		// 从配置加载引擎级别的缓存设置
+		for engineName, engineCfg := range cfg.Cache.Engines {
+			if engineCfg.TTL > 0 {
+				orchestrator.SetEngineCacheTTL(engineName, time.Duration(engineCfg.TTL)*time.Second, engineCfg.Enabled)
+			}
+		}
 	}
 
 	// Redis连接失败时，缓存工厂会回退到内存缓存。
@@ -491,12 +504,15 @@ func (s *UnifiedService) ListProcessors() []map[string]interface{} {
 
 // checkResourceLimits 检查资源限制
 func (s *UnifiedService) checkResourceLimits(ctx context.Context) error {
+	// 更新内存统计指标
+	metrics.UpdateMemoryStats()
+
 	// 检查内存使用
 	if s.maxMemoryMB > 0 {
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
 		memUsageMB := mem.Alloc / (1024 * 1024)
-		
+
 		if memUsageMB >= uint64(s.maxMemoryMB) {
 			logger.CtxWarnf(ctx, "memory usage exceeds limit: %dMB >= %dMB", memUsageMB, s.maxMemoryMB)
 			return fmt.Errorf("memory usage exceeds limit: %dMB >= %dMB", memUsageMB, s.maxMemoryMB)

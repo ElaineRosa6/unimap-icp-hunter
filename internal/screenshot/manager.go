@@ -553,7 +553,7 @@ func (m *Manager) CaptureSearchEngineResult(ctx context.Context, engine, query s
 		return "", fmt.Errorf("failed to save screenshot: %w", err)
 	}
 
-	logger.Infof("Captured %s result page: %s", engine, filepath)
+	logger.CtxInfof(ctx, "Captured %s result page: %s", engine, filepath)
 	return filepath, nil
 }
 
@@ -603,7 +603,7 @@ func (m *Manager) CaptureTargetWebsite(ctx context.Context, targetURL, ip, port,
 		return "", fmt.Errorf("failed to save screenshot: %w", err)
 	}
 
-	logger.Infof("Captured target website: %s", filepath)
+	logger.CtxInfof(ctx, "Captured target website: %s", filepath)
 	return filepath, nil
 }
 
@@ -739,7 +739,7 @@ func (m *Manager) CaptureBatchURLsWithTamper(ctx context.Context, urls []string,
 			if err != nil {
 				result.Success = false
 				result.Error = err.Error()
-				logger.Warnf("Failed to capture screenshot for %s: %v", url, err)
+				logger.CtxWarnf(ctx, "Failed to capture screenshot for %s: %v", url, err)
 			} else {
 				// 保存文件
 				if err := os.WriteFile(filepath, buf, 0644); err != nil {
@@ -748,7 +748,7 @@ func (m *Manager) CaptureBatchURLsWithTamper(ctx context.Context, urls []string,
 				} else {
 					result.Success = true
 					result.FilePath = filepath
-					logger.Infof("Captured screenshot for %s: %s", url, filepath)
+					logger.CtxInfof(ctx, "Captured screenshot for %s: %s", url, filepath)
 				}
 			}
 
