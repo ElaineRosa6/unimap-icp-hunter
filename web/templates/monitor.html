@@ -1140,15 +1140,21 @@
 
 				const concurrency = parseInt(concurrencyInput.value) || 5;
 				showProgress('正在设置基线...');
+				resultsSection.style.display = 'block';
+
+				// 切换到篡改检测tab以显示结果
+				document.querySelector('.tab[data-tab="tamper"]').click();
 
 				try {
 					const reachability = await runReachabilityCheck(urls, '设置基线');
 					if ((reachability.reachableURLs || []).length === 0) {
+						// 即使没有可达URL，也显示结果（包含不可达URL）
+						renderBaselineResults([], { precheckResults: reachability.results || [] });
 						showErrorProgress('没有可达URL，无法设置基线');
 						return;
 					}
 					updateProgress(45, '正在计算并保存基线...');
-					
+
 					const response = await fetch('/api/tamper/baseline', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
@@ -1162,16 +1168,10 @@
 
 					const data = await response.json();
 					updateProgress(100, '基线设置完成');
-					const summary = data.summary || {};
-					const saved = summary.saved || 0;
-					const unreachable = summary.unreachable || 0;
-					const failed = summary.failed || 0;
-					if (saved === 0) {
-						alert(`未能设置任何基线。不可达: ${unreachable}，失败: ${failed}。请先修复可达性后重试。`);
-					} else {
-						alert(`基线设置完成：成功 ${saved}，不可达 ${unreachable}，失败 ${failed}`);
-					}
-					
+
+					// 显示基线设置结果（包含不可达URL）
+					renderBaselineResults(data.results || [], { precheckResults: reachability.results || [] });
+
 					setTimeout(hideProgress, 1000);
 				} catch (error) {
 					showErrorProgress('设置失败: ' + error.message);
@@ -1236,10 +1236,8 @@
 						precheckMap.set(key, item);
 					}
 				});
-				
-				// 保存当前结果
-				currentTamperResults = results;
 
+				// 合并结果：包含不可达的URL
 				const merged = Array.isArray(results) ? [...results] : [];
 				precheckResults
 					.filter(item => item && item.status !== 'reachable')
@@ -1253,6 +1251,9 @@
 							tampered: false
 						});
 					});
+
+				// 保存合并后的结果（包含不可达URL）
+				currentTamperResults = merged;
 
 				if (merged.length === 0) {
 					tamperResults.innerHTML = '<div class="tamper-alert info"><strong>暂无结果</strong><br>请先输入 URL 并执行检测。</div>';
@@ -1414,6 +1415,109 @@
 				document.getElementById('tamper-safe').textContent = safeCount;
 				document.getElementById('tamper-first').textContent = firstCount;
 				document.getElementById('tamper-unreachable').textContent = unreachableCount;
+			}
+
+			// 渲染基线设置结果
+			function renderBaselineResults(results, options = {}) {
+				tamperResults.innerHTML = '';
+				const precheckResults = Array.isArray(options.precheckResults) ? options.precheckResults : [];
+
+				// 合并结果：包含不可达的URL
+				const merged = Array.isArray(results) ? [...results] : [];
+				precheckResults
+					.filter(item => item && item.status !== 'reachable')
+					.forEach(item => {
+						merged.push({
+							url: item.url || item.input,
+							status: item.status === 'invalid_format' ? 'invalid_format' : 'unreachable',
+							probe_status: item.status,
+							probe_reason_type: item.reason_type,
+							probe_reason: item.reason
+						});
+					});
+
+				// 保存合并后的结果（包含不可达URL）供导出使用
+				currentTamperResults = merged.map(result => ({
+					url: result.url,
+					status: result.status || (result.Status && result.Status.startsWith('error') ? 'unreachable' : 'success'),
+					tampered: false,
+					timestamp: result.timestamp || Date.now() / 1000,
+					baseline_hash: result.full_hash ? { timestamp: result.timestamp } : null
+				}));
+
+				if (merged.length === 0) {
+					tamperResults.innerHTML = '<div class="tamper-alert info"><strong>暂无结果</strong><br>请先输入 URL 并执行设置基线。</div>';
+					document.getElementById('tamper-summary').style.display = 'grid';
+					document.getElementById('tamper-total').textContent = '0';
+					document.getElementById('tamper-count').textContent = '0';
+					document.getElementById('tamper-safe').textContent = '0';
+					document.getElementById('tamper-first').textContent = '0';
+					document.getElementById('tamper-unreachable').textContent = '0';
+					return;
+				}
+
+				let savedCount = 0;
+				let unreachableCount = 0;
+				let failedCount = 0;
+
+				merged.forEach(result => {
+					const card = document.createElement('div');
+					card.className = 'result-card';
+
+					const isSuccess = result.Status === 'success' || (result.status === undefined && !result.Status?.startsWith('error'));
+					const isUnreachable = result.status === 'unreachable' || result.status === 'invalid_format' || (result.Status || '').includes('failed to load');
+
+					let statusBadge = '';
+					let statusClass = '';
+
+					if (isUnreachable) {
+						statusBadge = '<span class="status-badge danger">不可达</span>';
+						statusClass = 'danger';
+						unreachableCount++;
+					} else if (!isSuccess) {
+						statusBadge = '<span class="status-badge warning">失败</span>';
+						statusClass = 'warning';
+						failedCount++;
+					} else {
+						statusBadge = '<span class="status-badge success">已保存</span>';
+						statusClass = 'success';
+						savedCount++;
+					}
+
+					const probeStatus = isUnreachable ? 'unreachable' : 'reachable';
+					const probeReason = result.probe_reason || result.Status || '';
+					const probeReasonType = result.probe_reason_type || '';
+
+					card.innerHTML = `
+						<div class="result-card-header">
+							<span class="url">${escapeHtml(result.url || '')}</span>
+							${statusBadge}
+						</div>
+						<div class="result-card-body">
+							<div class="status-blocks">
+								<div class="status-block ${probeStatus === 'reachable' ? 'success' : 'danger'}">
+									<div class="label">探活状态</div>
+									<div class="value">${probeStatus === 'reachable' ? '可达' : '不可达'}</div>
+									${probeStatus === 'reachable' ? '' : `<div>${escapeHtml(reasonTypeLabel(probeReasonType))}</div><div>${escapeHtml(probeReason)}</div>`}
+								</div>
+								<div class="status-block ${statusClass}">
+									<div class="label">基线状态</div>
+									<div class="value">${isSuccess ? '已保存' : (isUnreachable ? '无法设置' : '设置失败')}</div>
+								</div>
+							</div>
+						</div>
+					`;
+
+					tamperResults.appendChild(card);
+				});
+
+				// 更新统计
+				document.getElementById('tamper-summary').style.display = 'grid';
+				document.getElementById('tamper-total').textContent = merged.length;
+				document.getElementById('tamper-count').textContent = savedCount;
+				document.getElementById('tamper-safe').textContent = savedCount;
+				document.getElementById('tamper-first').textContent = '0';
+				document.getElementById('tamper-unreachable').textContent = unreachableCount + failedCount;
 			}
 
 			// 渲染截图结果
