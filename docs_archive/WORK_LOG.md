@@ -819,3 +819,96 @@ ok  github.com/unimap-icp-hunter/project/internal/tamper
 
 ### 相关记录
 - [修复项验收记录（2026-03-25）](ACCEPTANCE_RECORD_2026-03-25.md)
+
+---
+
+## 2026-03-26 工作记录（续）
+
+### 批量截图功能修复
+
+#### 问题
+- 批量截图返回 `screenshot_manager_unavailable` 错误
+
+#### 原因
+- `configs/config.yaml` 中 `screenshot.enabled: false`，导致截图管理器未初始化
+
+#### 修复
+- **文件**: `configs/config.yaml`
+- **内容**: 将 `screenshot.enabled` 改为 `true`
+
+#### 验证
+```bash
+curl -X POST http://localhost:8448/api/screenshot/batch-urls \
+  -H "Content-Type: application/json" \
+  -d '{"urls": ["https://www.baidu.com"]}'
+```
+
+结果：`{"success": 1, "failed": 0}`
+
+---
+
+### 篡改检测导出功能修复
+
+#### 问题
+- 设置基线或执行篡改检测后导出时，不可达的URL缺失
+
+#### 原因
+- `currentTamperResults` 只保存后端返回的结果，未包含预检中的不可达URL
+- 设置基线流程没有显示结果列表，也未保存到 `currentTamperResults`
+
+#### 修复
+- **文件**: `web/templates/monitor.html`
+- **内容**:
+  - `renderTamperResults`: 将 `currentTamperResults` 改为保存合并后的 `merged` 数组
+  - 设置基线流程: 调用 `renderBaselineResults` 显示所有URL状态
+  - 新增 `renderBaselineResults` 函数: 显示基线设置结果并保存供导出使用
+
+#### 验证
+- 设置基线时输入可达和不可达URL，导出时两者均包含在结果中
+
+---
+
+### 文件整理与归档
+
+#### 操作内容
+- 历史文档归档至 `archive/` 目录
+- 核心文档整理至 `docs_archive/` 目录
+- 示例文件移动至 `examples/` 目录
+- 更新 `.gitignore`：
+  - 添加 `output/`、`.trae/`、`.venv/`、`archive/`
+  - 添加 `hash_store/records/**/*.json` 但保留 `.gitkeep`
+
+---
+
+### 正则表达式预编译优化
+
+#### 文件
+- `internal/plugin/processors/validation.go`
+- `web/monitor_handlers.go`
+
+#### 内容
+- 将 `regexp.MatchString()` 动态编译改为 `regexp.MustCompile` 预编译
+- 提升匹配性能，避免重复编译开销
+
+---
+
+### 文档验证脚本
+
+#### 文件
+- `scripts/verify_docs.sh`
+
+#### 内容
+- 检查目录结构
+- 验证文档文件存在性
+- 检查配置参数完整性
+- 验证引擎适配器
+- 检查 Go 版本一致性
+
+---
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| `c36b77f` | fix: 篡改检测导出功能包含不可达URL |
+| `76ec33e` | 优化网站篡改检测系统，添加历史记录持久化和导出功能 |
