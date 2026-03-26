@@ -153,6 +153,7 @@ type SearchTask struct {
 	resultChan   chan *model.EngineResult
 	errorChan    chan error
 	wg           *sync.WaitGroup
+	retryAttempts int
 }
 
 // Execute 执行搜索任务
@@ -194,15 +195,54 @@ func (t *SearchTask) Execute() error {
 		return nil
 	}
 
-	// 执行搜索，获取第一页
-	result, err := adapter.Search(t.query.Query, 1, t.pageSize)
-	if err != nil {
-		select {
-		case t.errorChan <- fmt.Errorf("%s search error: %v", t.query.EngineName, err):
-		default:
-			logger.CtxErrorf(t.ctx, "failed to send error: %s search error: %v", t.query.EngineName, err)
+	// 获取重试次数，默认为3次
+	retryCount := t.retryAttempts
+	if retryCount <= 0 {
+		retryCount = 3
+	}
+
+	var result *model.EngineResult
+	var err error
+
+	// 执行搜索，带重试机制
+	for attempt := 0; attempt <= retryCount; attempt++ {
+		result, err = adapter.Search(t.query.Query, 1, t.pageSize)
+		if err == nil {
+			break
 		}
-		return nil
+
+		// 如果是最后一次尝试，不再重试
+		if attempt == retryCount {
+			logger.CtxErrorf(t.ctx, "%s search failed after %d attempts: %v", t.query.EngineName, retryCount+1, err)
+			select {
+			case t.errorChan <- fmt.Errorf("%s search error: %v", t.query.EngineName, err):
+			default:
+				logger.CtxErrorf(t.ctx, "failed to send error: %s search error: %v", t.query.EngineName, err)
+			}
+			return nil
+		}
+
+		// 指数退避策略
+		backoff := time.Duration(1<<uint(attempt)) * 100 * time.Millisecond
+		if backoff > 2*time.Second {
+			backoff = 2 * time.Second
+		}
+
+		logger.CtxWarnf(t.ctx, "%s search attempt %d failed, retrying in %s: %v", t.query.EngineName, attempt+1, backoff, err)
+		
+		// 等待退避时间，但可以被上下文取消
+		select {
+		case <-time.After(backoff):
+			continue
+		case <-t.ctx.Done():
+			logger.CtxWarnf(t.ctx, "%s search cancelled during retry: %v", t.query.EngineName, t.ctx.Err())
+			select {
+			case t.errorChan <- fmt.Errorf("%s search cancelled: %v", t.query.EngineName, t.ctx.Err()):
+			default:
+				logger.CtxErrorf(t.ctx, "failed to send cancellation error")
+			}
+			return nil
+		}
 	}
 
 	// 标准化结果并存入缓存
@@ -254,13 +294,14 @@ func (o *EngineOrchestrator) SearchEnginesWithContext(ctx context.Context, queri
 	for _, q := range queries {
 		wg.Add(1)
 		task := &SearchTask{
-			orchestrator: o,
-			ctx:          ctx,
-			query:        q,
-			pageSize:     pageSize,
-			resultChan:   resultChan,
-			errorChan:    errorChan,
-			wg:           &wg,
+			orchestrator:  o,
+			ctx:           ctx,
+			query:         q,
+			pageSize:      pageSize,
+			resultChan:    resultChan,
+			errorChan:     errorChan,
+			wg:            &wg,
+			retryAttempts: 3, // 默认重试3次
 		}
 		pool.Submit(task)
 	}

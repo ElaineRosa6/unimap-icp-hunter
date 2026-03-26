@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,10 @@ type UnifiedService struct {
 	cacheCleanup  time.Duration
 	cacheBackend  string
 	mu            sync.RWMutex
+	maxMemoryMB   int        // 最大内存使用限制（MB）
+	maxConcurrent int        // 最大并发查询数
+	activeQueries int        // 当前活跃查询数
+	queryMutex    sync.Mutex // 查询并发控制锁
 }
 
 // NewUnifiedService 创建统一服务
@@ -50,6 +55,8 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 	redisPassword := ""
 	redisDB := 0
 	redisPrefix := "unimap:"
+	maxMemoryMB := 512  // 默认最大内存限制512MB
+	maxConcurrent := 10 // 默认最大并发查询数
 
 	if cfg != nil {
 		if cfg.System.CacheTTL > 0 {
@@ -60,6 +67,9 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 		}
 		if cfg.System.CacheMaxSize > 0 {
 			memoryMaxSize = cfg.System.CacheMaxSize
+		}
+		if cfg.System.MaxConcurrent > 0 {
+			maxConcurrent = cfg.System.MaxConcurrent
 		}
 		if strings.EqualFold(strings.TrimSpace(cfg.Cache.Backend), "redis") {
 			useRedis = true
@@ -104,6 +114,9 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 		cacheMaxSize:  memoryMaxSize,
 		cacheCleanup:  cacheCleanupInterval,
 		cacheBackend:  cacheBackend,
+		maxMemoryMB:   maxMemoryMB,
+		maxConcurrent: maxConcurrent,
+		activeQueries: 0,
 	}
 }
 
@@ -156,6 +169,19 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 	if req.PageSize <= 0 {
 		req.PageSize = 100
 	}
+
+	// 检查资源限制
+	if err := s.checkResourceLimits(ctx); err != nil {
+		queryStatus = "error"
+		return nil, err
+	}
+
+	// 获取查询并发锁
+	if !s.acquireQueryLock() {
+		queryStatus = "error"
+		return nil, fmt.Errorf("too many concurrent queries, please try again later")
+	}
+	defer s.releaseQueryLock()
 
 	// 尝试从缓存获取结果
 	sortedEngines := make([]string, len(req.Engines))
@@ -461,6 +487,45 @@ func (s *UnifiedService) ListProcessors() []map[string]interface{} {
 	}
 
 	return result
+}
+
+// checkResourceLimits 检查资源限制
+func (s *UnifiedService) checkResourceLimits(ctx context.Context) error {
+	// 检查内存使用
+	if s.maxMemoryMB > 0 {
+		var mem runtime.MemStats
+		runtime.ReadMemStats(&mem)
+		memUsageMB := mem.Alloc / (1024 * 1024)
+		
+		if memUsageMB >= uint64(s.maxMemoryMB) {
+			logger.CtxWarnf(ctx, "memory usage exceeds limit: %dMB >= %dMB", memUsageMB, s.maxMemoryMB)
+			return fmt.Errorf("memory usage exceeds limit: %dMB >= %dMB", memUsageMB, s.maxMemoryMB)
+		}
+	}
+	return nil
+}
+
+// acquireQueryLock 获取查询并发锁
+func (s *UnifiedService) acquireQueryLock() bool {
+	s.queryMutex.Lock()
+	defer s.queryMutex.Unlock()
+	
+	if s.activeQueries >= s.maxConcurrent {
+		return false
+	}
+	
+	s.activeQueries++
+	return true
+}
+
+// releaseQueryLock 释放查询并发锁
+func (s *UnifiedService) releaseQueryLock() {
+	s.queryMutex.Lock()
+	defer s.queryMutex.Unlock()
+	
+	if s.activeQueries > 0 {
+		s.activeQueries--
+	}
 }
 
 // HealthCheck 健康检查

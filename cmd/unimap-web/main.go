@@ -18,6 +18,13 @@ import (
 const configPath = "configs/config.yaml"
 
 func main() {
+	// 初始化日志系统
+	logger.Init(logger.Config{
+		Level:    logger.LevelInfo,
+		Encoding: "console",
+		File:     "",
+	})
+
 	// 加载配置
 	cfgManager := config.NewManager(configPath)
 	if err := cfgManager.Load(); err != nil {

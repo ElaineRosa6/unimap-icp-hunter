@@ -453,3 +453,25 @@ ok  github.com/unimap-icp-hunter/project/internal/tamper
 - [安全修复总结](SECURITY_FIXES.md)
 - [中优先级问题修复](MEDIUM_PRIORITY_FIXES.md)
 - [架构改进说明](ARCHITECTURE_IMPROVEMENTS.md)
+
+---
+
+## 2026-03-25 验收结论摘要
+
+### 执行内容
+- 对修复清单与功能对齐项进行逐项验收（代码证据 + 自动化验证）。
+- 生成独立验收记录文档，沉淀“通过 / 证据 / 残余风险”。
+
+### 验证结果
+- 编译：`go build ./...` 通过。
+- 测试：`go test ./...` 通过。
+
+### 结论
+- 当前修复项在代码存在性和自动化验证维度均通过。
+- 未发现阻断发布的回归信号。
+
+### 风险与建议
+- 建议发布前补一轮 Web 与 GUI 的端到端冒烟，覆盖网络环境、字体差异、真实 API 波动等环境因素。
+
+### 相关记录
+- [修复项验收记录（2026-03-25）](ACCEPTANCE_RECORD_2026-03-25.md)

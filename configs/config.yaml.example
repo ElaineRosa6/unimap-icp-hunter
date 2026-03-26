@@ -1,26 +1,26 @@
 engines:
     quake:
         enabled: true
-        api_key: "your_quake_api_key_here"
+        api_key: "${QUAKE_API_KEY}"
         base_url: https://quake.360.net/api
         qps: 5
         timeout: 30
     zoomeye:
         enabled: true
-        api_key: "your_zoomeye_api_key_here"
+        api_key: "${ZOOMEYE_API_KEY}"
         base_url: https://api.zoomeye.org
         qps: 3
         timeout: 30
     hunter:
         enabled: true
-        api_key: "your_hunter_api_key_here"
+        api_key: "${HUNTER_API_KEY}"
         base_url: https://hunter.qianxin.com
         qps: 5
         timeout: 30
     fofa:
         enabled: true
-        api_key: "your_fofa_api_key_here"
-        email: "your_fofa_email_here"
+        api_key: "${FOFA_API_KEY}"
+        email: "${FOFA_EMAIL}"
         base_url: https://fofa.info
         web_url: https://fofa.info
         qps: 3
