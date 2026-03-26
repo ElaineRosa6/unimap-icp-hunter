@@ -314,22 +314,47 @@
 		
 		.history-controls {
 			display: flex;
+			flex-wrap: wrap;
 			gap: 10px;
 			margin-bottom: 15px;
-            align-items: center;
-        }
-        
-        .history-controls select {
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
+		    align-items: center;
+		}
+		
+		.history-controls select {
+		    padding: 8px 12px;
+		    border: 1px solid #ddd;
+		    border-radius: 4px;
+		    min-width: 150px;
+		}
 
-		.history-controls input {
+		.history-controls input[type="text"] {
 			padding: 8px 12px;
 			border: 1px solid #ddd;
 			border-radius: 4px;
 			min-width: 220px;
+		}
+
+		.history-controls input[type="datetime-local"] {
+			padding: 6px 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			min-width: 180px;
+			font-size: 14px;
+		}
+
+		.history-controls .btn {
+			padding: 8px 16px;
+			font-size: 14px;
+			border: 1px solid #007bff;
+			background: #007bff;
+			color: white;
+			border-radius: 4px;
+			cursor: pointer;
+		}
+
+		.history-controls .btn:hover {
+			background: #0069d9;
+			border-color: #0062cc;
 		}
         
         .history-item {
@@ -432,14 +457,16 @@
 			</div>
 
 			<div class="action-buttons">
-				<button type="button" class="btn" id="btn-tamper-check">🔍 篡改检测</button>
-				<button type="button" class="btn" id="btn-set-baseline">📌 设置基线</button>
-				<button type="button" class="btn" id="btn-batch-screenshot">📷 批量截图</button>
-				<button type="button" class="btn" id="btn-clear">🗑️ 清空</button>
-				<button type="button" class="btn" id="btn-load-example">📝 加载示例</button>
-				<button type="button" class="btn" id="btn-import-file">📁 导入文件</button>
-				<input type="file" id="file-input" accept=".txt,.csv" style="display: none;">
-			</div>
+					<button type="button" class="btn" id="btn-tamper-check">🔍 篡改检测</button>
+					<button type="button" class="btn" id="btn-set-baseline">📌 设置基线</button>
+					<button type="button" class="btn" id="btn-batch-screenshot">📷 批量截图</button>
+					<button type="button" class="btn" id="btn-export-json">📄 导出JSON</button>
+					<button type="button" class="btn" id="btn-export-excel">📊 导出Excel</button>
+					<button type="button" class="btn" id="btn-clear">🗑️ 清空</button>
+					<button type="button" class="btn" id="btn-load-example">📝 加载示例</button>
+					<button type="button" class="btn" id="btn-import-file">📁 导入文件</button>
+					<input type="file" id="file-input" accept=".txt,.csv" style="display: none;">
+				</div>
 
 			<div class="progress-container" id="progress-container">
 				<div class="progress-bar">
@@ -505,23 +532,25 @@
 				<!-- 历史记录 -->
 				<div class="tab-content" id="history-tab">
 					<div class="history-controls">
-						<input type="text" id="history-query" placeholder="按URL/状态查询">
-						<select id="history-url-filter">
-							<option value="">全部URL</option>
-						</select>
-						<select id="history-type-filter">
-							<option value="">全部类型</option>
-							<option value="first_check">首次检测</option>
-							<option value="normal">正常</option>
-							<option value="tampered">篡改</option>
-						</select>
-						<select id="history-mode-filter">
-							<option value="">全部模式</option>
-							<option value="relaxed">宽松</option>
-							<option value="strict">严格</option>
-						</select>
-						<button type="button" class="btn btn-secondary" id="btn-refresh-history">刷新</button>
-					</div>
+							<input type="text" id="history-query" placeholder="按URL/状态查询">
+							<select id="history-url-filter">
+								<option value="">全部URL</option>
+							</select>
+							<select id="history-type-filter">
+								<option value="">全部类型</option>
+								<option value="first_check">首次检测</option>
+								<option value="normal">正常</option>
+								<option value="tampered">篡改</option>
+							</select>
+							<select id="history-mode-filter">
+								<option value="">全部模式</option>
+								<option value="relaxed">宽松</option>
+								<option value="strict">严格</option>
+							</select>
+							<input type="datetime-local" id="history-start-time" placeholder="开始时间">
+							<input type="datetime-local" id="history-end-time" placeholder="结束时间">
+							<button type="button" class="btn btn-secondary" id="btn-refresh-history">刷新</button>
+						</div>
 					<div id="history-results"></div>
 				</div>
 			</div>
@@ -554,10 +583,22 @@
 			const historyTypeFilter = document.getElementById('history-type-filter');
 			const historyModeFilter = document.getElementById('history-mode-filter');
 			const historyQueryInput = document.getElementById('history-query');
+			const historyStartTimeInput = document.getElementById('history-start-time');
+			const historyEndTimeInput = document.getElementById('history-end-time');
 			const refreshHistoryBtn = document.getElementById('btn-refresh-history');
 
 			let currentAction = null;
-			let historyRecords = [];
+		let historyRecords = [];
+		let currentTamperResults = [];
+
+			// 页面加载时自动加载历史记录
+			loadHistory().catch(err => {
+				console.error('历史记录加载失败:', err);
+			});
+
+			// 页面加载时显示结果区域并切换到历史记录标签页
+			resultsSection.style.display = 'block';
+			document.querySelector('.tab[data-tab="history"]').click();
 
 			// 更新统计
 			function updateStats() {
@@ -804,6 +845,24 @@
 				const modeFilter = (historyModeFilter && historyModeFilter.value) ? String(historyModeFilter.value).toLowerCase() : '';
 				const keyword = (historyQueryInput && historyQueryInput.value) ? historyQueryInput.value.trim().toLowerCase() : '';
 
+				// 获取时间范围
+				let startTime = null;
+				let endTime = null;
+
+				if (historyStartTimeInput && historyStartTimeInput.value) {
+					startTime = new Date(historyStartTimeInput.value).getTime() / 1000;
+				}
+
+				if (historyEndTimeInput && historyEndTimeInput.value) {
+					endTime = new Date(historyEndTimeInput.value).getTime() / 1000;
+				}
+
+				// 检查时间范围有效性
+				if (startTime && endTime && startTime > endTime) {
+					alert('开始时间不能晚于结束时间');
+					return [];
+				}
+
 				return historyRecords.filter(record => {
 					if (urlFilter && record.url !== urlFilter) {
 						return false;
@@ -821,17 +880,26 @@
 							return false;
 						}
 					}
-					if (!keyword) {
-						return true;
+					if (keyword) {
+						const haystack = [
+							record.url,
+							record.check_type,
+							record.status,
+							record.detection_mode,
+							(record.tampered_segments || []).join(',')
+						].join(' ').toLowerCase();
+						if (!haystack.includes(keyword)) {
+							return false;
+						}
 					}
-					const haystack = [
-						record.url,
-						record.check_type,
-						record.status,
-						record.detection_mode,
-						(record.tampered_segments || []).join(',')
-					].join(' ').toLowerCase();
-					return haystack.includes(keyword);
+					// 时间范围过滤
+					if (startTime && record.timestamp < startTime) {
+						return false;
+					}
+					if (endTime && record.timestamp > endTime) {
+						return false;
+					}
+					return true;
 				});
 			}
 
@@ -921,6 +989,12 @@
 			}
 			if (historyQueryInput) {
 				historyQueryInput.addEventListener('input', applyHistoryFilters);
+			}
+			if (historyStartTimeInput) {
+				historyStartTimeInput.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyEndTimeInput) {
+				historyEndTimeInput.addEventListener('change', applyHistoryFilters);
 			}
 
 			// 监听输入
@@ -1162,6 +1236,9 @@
 						precheckMap.set(key, item);
 					}
 				});
+				
+				// 保存当前结果
+				currentTamperResults = results;
 
 				const merged = Array.isArray(results) ? [...results] : [];
 				precheckResults
@@ -1375,6 +1452,148 @@
 				document.getElementById('screenshot-success').textContent = successCount;
 				document.getElementById('screenshot-failed').textContent = failedCount;
 			}
+
+			// 导出为JSON
+			function exportToJSON() {
+				// 确定当前激活的标签页
+				const activeTab = document.querySelector('.tab.active').dataset.tab;
+				let exportData = [];
+
+				if (activeTab === 'history') {
+					// 导出历史记录
+					if (historyRecords.length === 0) {
+						alert('暂无历史记录可导出');
+						return;
+					}
+					exportData = historyRecords.map(record => {
+						return {
+							URL: record.url || '',
+							Reachable: '是', // 历史记录默认视为可达
+							Screenshot: '', // 截图功能需要单独实现
+							Tampered: record.tampered ? '是' : '否',
+							BaselineTime: record.baseline_timestamp ? formatTimestamp(record.baseline_timestamp) : '',
+							CheckTime: record.timestamp ? formatTimestamp(record.timestamp) : ''
+						};
+					});
+				} else {
+					// 导出当前检测结果
+					if (currentTamperResults.length === 0) {
+						alert('暂无检测结果可导出');
+						return;
+					}
+					exportData = currentTamperResults.map(result => {
+						return {
+							URL: result.url || '',
+							Reachable: (result.status !== 'unreachable' && result.status !== 'invalid_format') ? '是' : '否',
+							Screenshot: '', // 截图功能需要单独实现
+							Tampered: result.tampered ? '是' : '否',
+							BaselineTime: result.baseline_hash?.timestamp ? formatTimestamp(result.baseline_hash.timestamp) : '',
+							CheckTime: result.timestamp ? formatTimestamp(result.timestamp) : ''
+						};
+					});
+				}
+
+				showProgress('正在导出JSON...');
+
+				// 创建下载链接
+				const jsonString = JSON.stringify(exportData, null, 2);
+				const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+				const link = document.createElement('a');
+				const url = URL.createObjectURL(blob);
+				const fileName = activeTab === 'history' ? `tamper_history_${new Date().toISOString().slice(0, 10)}.json` : `tamper_detection_${new Date().toISOString().slice(0, 10)}.json`;
+				link.setAttribute('href', url);
+				link.setAttribute('download', fileName);
+				link.style.visibility = 'hidden';
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+
+				updateProgress(100, '导出成功');
+				setTimeout(hideProgress, 1000);
+			}
+
+			// 导出为Excel（CSV格式）
+			function exportToExcel() {
+				// 确定当前激活的标签页
+				const activeTab = document.querySelector('.tab.active').dataset.tab;
+				let exportData = [];
+
+				if (activeTab === 'history') {
+					// 导出历史记录
+					if (historyRecords.length === 0) {
+						alert('暂无历史记录可导出');
+						return;
+					}
+					exportData = historyRecords;
+				} else {
+					// 导出当前检测结果
+					if (currentTamperResults.length === 0) {
+						alert('暂无检测结果可导出');
+						return;
+					}
+					exportData = currentTamperResults;
+				}
+
+				showProgress('正在导出Excel...');
+
+				// 构建CSV内容
+				let csvContent = 'URL,可达性,网页截图,是否被篡改,基线时间,检测时间\n';
+
+				exportData.forEach(item => {
+					let url, reachable, screenshot, tampered, baselineTime, checkTime;
+
+					if (activeTab === 'history') {
+						// 处理历史记录
+						url = item.url || '';
+						reachable = '是'; // 历史记录默认视为可达
+						screenshot = '';
+						tampered = item.tampered ? '是' : '否';
+						baselineTime = item.baseline_timestamp ? formatTimestamp(item.baseline_timestamp) : '';
+						checkTime = item.timestamp ? formatTimestamp(item.timestamp) : '';
+					} else {
+						// 处理当前检测结果
+						url = item.url || '';
+						reachable = (item.status !== 'unreachable' && item.status !== 'invalid_format') ? '是' : '否';
+						screenshot = '';
+						tampered = item.tampered ? '是' : '否';
+						baselineTime = item.baseline_hash?.timestamp ? formatTimestamp(item.baseline_hash.timestamp) : '';
+						checkTime = item.timestamp ? formatTimestamp(item.timestamp) : '';
+					}
+
+					// 处理包含逗号的内容
+					const row = [url, reachable, screenshot, tampered, baselineTime, checkTime].map(field => {
+						if (field.includes(',')) {
+							return `"${field.replace(/"/g, '""')}"`;
+						}
+						return field;
+					}).join(',');
+
+					csvContent += row + '\n';
+				});
+
+				// 创建下载链接
+				const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+				const link = document.createElement('a');
+				const url = URL.createObjectURL(blob);
+				link.setAttribute('href', url);
+				link.setAttribute('download', `tamper_detection_${new Date().toISOString().slice(0, 10)}.csv`);
+				link.style.visibility = 'hidden';
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+
+				updateProgress(100, '导出成功');
+				setTimeout(hideProgress, 1000);
+			}
+
+			// 导出按钮事件
+			document.getElementById('btn-export-json').addEventListener('click', function() {
+				exportToJSON();
+			});
+
+			document.getElementById('btn-export-excel').addEventListener('click', function() {
+				exportToExcel();
+			});
 		});
 	</script>
 </body>

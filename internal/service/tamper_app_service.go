@@ -188,6 +188,30 @@ func (s *TamperAppService) DeleteBaseline(targetURL string) error {
 	return detector.DeleteBaseline(targetURL)
 }
 
+// LoadCheckRecords 加载指定URL的检测记录
+func (s *TamperAppService) LoadCheckRecords(url string, limit int) ([]*tamper.CheckRecord, error) {
+	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	return detector.LoadCheckRecords(url, limit)
+}
+
+// ListAllCheckRecords 列出所有URL的检测记录
+func (s *TamperAppService) ListAllCheckRecords() (map[string][]*tamper.CheckRecord, error) {
+	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	return detector.ListAllCheckRecords()
+}
+
+// GetCheckStats 获取检测统计信息
+func (s *TamperAppService) GetCheckStats(url string) (map[string]interface{}, error) {
+	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	return detector.GetCheckStats(url)
+}
+
+// DeleteCheckRecords 删除指定URL的所有检测记录
+func (s *TamperAppService) DeleteCheckRecords(url string) error {
+	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	return detector.DeleteCheckRecords(url)
+}
+
 func (s *TamperAppService) newDetector(ctx context.Context, mode string, allocatorFactory TamperAllocatorFactory) (*tamper.Detector, context.CancelFunc, error) {
 	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir, DetectionMode: mode})
 	cleanup := func() {}

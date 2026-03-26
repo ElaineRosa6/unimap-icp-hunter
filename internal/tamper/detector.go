@@ -44,6 +44,10 @@ const (
 
 	DetectionModeRelaxed = "relaxed"
 	DetectionModeStrict  = "strict"
+
+	PerformanceModeFast          = "fast"
+	PerformanceModeBalanced      = "balanced"
+	PerformanceModeComprehensive = "comprehensive"
 )
 
 var relaxedVolatileSegments = map[string]struct{}{
@@ -64,6 +68,14 @@ var compatibilityOptionalSegments = map[string]struct{}{
 	SegmentFavicon: {},
 	SegmentButtons: {},
 }
+
+var (
+	reMultipleSpaces = regexp.MustCompile(`(?i)\s+`)
+	reComments       = regexp.MustCompile(`(?i)<!--.*?-->`)
+	reDataImages     = regexp.MustCompile(`(?i)data:image/[^"']*`)
+	reNonce          = regexp.MustCompile(`(?i)nonce="[^"]*"`)
+	reCSRFToken      = regexp.MustCompile(`(?i)csrf[^"]*_token["']?\s*[:=]\s*["'][^"']*["']`)
+)
 
 type SegmentHash struct {
 	Name     string `json:"name"`
@@ -109,17 +121,26 @@ type HashStorage struct {
 	mu      sync.RWMutex
 }
 
+type cacheEntry struct {
+	result    *PageHashResult
+	timestamp time.Time
+}
+
 type Detector struct {
-	storage       *HashStorage
-	allocCtx      context.Context
-	allocCancel   context.CancelFunc
-	detectionMode string
-	mu            sync.Mutex
+	storage         *HashStorage
+	allocCtx        context.Context
+	allocCancel     context.CancelFunc
+	detectionMode   string
+	performanceMode string
+	cache           map[string]*cacheEntry
+	cacheMu         sync.RWMutex
+	mu              sync.Mutex
 }
 
 type DetectorConfig struct {
-	BaseDir       string
-	DetectionMode string
+	BaseDir         string
+	DetectionMode   string
+	PerformanceMode string
 }
 
 func NewHashStorage(baseDir string) *HashStorage {
@@ -229,8 +250,10 @@ func (s *HashStorage) DeleteBaseline(url string) error {
 func NewDetector(cfg DetectorConfig) *Detector {
 	storage := NewHashStorage(cfg.BaseDir)
 	return &Detector{
-		storage:       storage,
-		detectionMode: normalizeDetectionMode(cfg.DetectionMode),
+		storage:         storage,
+		detectionMode:   normalizeDetectionMode(cfg.DetectionMode),
+		performanceMode: normalizePerformanceMode(cfg.PerformanceMode),
+		cache:           make(map[string]*cacheEntry),
 	}
 }
 
@@ -242,6 +265,20 @@ func normalizeDetectionMode(raw string) string {
 	return DetectionModeRelaxed
 }
 
+func normalizePerformanceMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case PerformanceModeFast:
+		return PerformanceModeFast
+	case PerformanceModeBalanced:
+		return PerformanceModeBalanced
+	case PerformanceModeComprehensive:
+		return PerformanceModeComprehensive
+	default:
+		return PerformanceModeBalanced
+	}
+}
+
 func (d *Detector) SetAllocator(ctx context.Context, allocCtx context.Context, allocCancel context.CancelFunc) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -250,6 +287,18 @@ func (d *Detector) SetAllocator(ctx context.Context, allocCtx context.Context, a
 }
 
 func (d *Detector) ComputePageHash(ctx context.Context, targetURL string) (*PageHashResult, error) {
+	cacheKey := fmt.Sprintf("%s:%s", targetURL, d.performanceMode)
+
+	d.cacheMu.RLock()
+	if entry, exists := d.cache[cacheKey]; exists {
+		if time.Since(entry.timestamp) < 5*time.Minute {
+			d.cacheMu.RUnlock()
+			logger.CtxDebugf(ctx, "Using cached hash result for %s", targetURL)
+			return entry.result, nil
+		}
+	}
+	d.cacheMu.RUnlock()
+
 	var html string
 	var title string
 
@@ -279,7 +328,17 @@ func (d *Detector) ComputePageHash(ctx context.Context, targetURL string) (*Page
 		return nil, fmt.Errorf("failed to load page: %w", err)
 	}
 
-	return d.ComputeHashFromHTML(targetURL, title, html)
+	result, err := d.ComputeHashFromHTML(targetURL, title, html)
+	if err == nil {
+		d.cacheMu.Lock()
+		d.cache[cacheKey] = &cacheEntry{
+			result:    result,
+			timestamp: time.Now(),
+		}
+		d.cacheMu.Unlock()
+	}
+
+	return result, err
 }
 
 func (d *Detector) ComputeHashFromHTML(url, title, html string) (*PageHashResult, error) {
@@ -304,37 +363,89 @@ func (d *Detector) ComputeHashFromHTML(url, title, html string) (*PageHashResult
 	return result, nil
 }
 
+type segmentTask struct {
+	name     string
+	hashFunc func() SegmentHash
+}
+
 func (d *Detector) computeSegmentHashes(doc *goquery.Document, html string) []SegmentHash {
-	var segments []SegmentHash
+	var tasks []segmentTask
 
-	segments = append(segments, d.computeElementHash(doc, "head", SegmentHead))
-	segments = append(segments, d.computeElementHash(doc, "body", SegmentBody))
-	segments = append(segments, d.computeElementHash(doc, "header", SegmentHeader))
-	segments = append(segments, d.computeElementHash(doc, "nav", SegmentNav))
-	segments = append(segments, d.computeElementHash(doc, "main", SegmentMain))
-	segments = append(segments, d.computeElementHash(doc, "article", SegmentArticle))
-	segments = append(segments, d.computeElementHash(doc, "section", SegmentSection))
-	segments = append(segments, d.computeElementHash(doc, "aside", SegmentAside))
-	segments = append(segments, d.computeElementHash(doc, "footer", SegmentFooter))
+	switch d.performanceMode {
+	case PerformanceModeFast:
+		tasks = []segmentTask{
+			{name: SegmentScripts, hashFunc: func() SegmentHash { return d.computeScriptHash(doc) }},
+			{name: SegmentJSFiles, hashFunc: func() SegmentHash { return d.computeJSFileHash(doc) }},
+			{name: SegmentForms, hashFunc: func() SegmentHash { return d.computeFormHash(doc) }},
+			{name: SegmentMain, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "main", SegmentMain) }},
+			{name: SegmentArticle, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "article", SegmentArticle) }},
+		}
 
-	segments = append(segments, d.computeScriptHash(doc))
-	segments = append(segments, d.computeJSFileHash(doc))
-	segments = append(segments, d.computeStyleHash(doc))
-	segments = append(segments, d.computeMetaHash(doc))
-	segments = append(segments, d.computeFaviconHash(doc))
-	segments = append(segments, d.computeLinkHash(doc))
-	segments = append(segments, d.computeImageHash(doc))
-	segments = append(segments, d.computeButtonHash(doc))
-	segments = append(segments, d.computeFormHash(doc))
+	case PerformanceModeBalanced:
+		tasks = []segmentTask{
+			{name: SegmentScripts, hashFunc: func() SegmentHash { return d.computeScriptHash(doc) }},
+			{name: SegmentJSFiles, hashFunc: func() SegmentHash { return d.computeJSFileHash(doc) }},
+			{name: SegmentForms, hashFunc: func() SegmentHash { return d.computeFormHash(doc) }},
+			{name: SegmentLinks, hashFunc: func() SegmentHash { return d.computeLinkHash(doc) }},
+			{name: SegmentMain, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "main", SegmentMain) }},
+			{name: SegmentArticle, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "article", SegmentArticle) }},
+			{name: SegmentBody, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "body", SegmentBody) }},
+		}
 
-	cleanHTML := d.cleanHTML(html)
-	fullContentHash := SegmentHash{
-		Name:     SegmentFullContent,
-		Hash:     computeSHA256(cleanHTML),
-		Length:   len(cleanHTML),
-		Elements: 1,
+	default:
+		tasks = []segmentTask{
+			{name: SegmentHead, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "head", SegmentHead) }},
+			{name: SegmentBody, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "body", SegmentBody) }},
+			{name: SegmentHeader, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "header", SegmentHeader) }},
+			{name: SegmentNav, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "nav", SegmentNav) }},
+			{name: SegmentMain, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "main", SegmentMain) }},
+			{name: SegmentArticle, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "article", SegmentArticle) }},
+			{name: SegmentSection, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "section", SegmentSection) }},
+			{name: SegmentAside, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "aside", SegmentAside) }},
+			{name: SegmentFooter, hashFunc: func() SegmentHash { return d.computeElementHash(doc, "footer", SegmentFooter) }},
+			{name: SegmentScripts, hashFunc: func() SegmentHash { return d.computeScriptHash(doc) }},
+			{name: SegmentJSFiles, hashFunc: func() SegmentHash { return d.computeJSFileHash(doc) }},
+			{name: SegmentStyles, hashFunc: func() SegmentHash { return d.computeStyleHash(doc) }},
+			{name: SegmentMeta, hashFunc: func() SegmentHash { return d.computeMetaHash(doc) }},
+			{name: SegmentFavicon, hashFunc: func() SegmentHash { return d.computeFaviconHash(doc) }},
+			{name: SegmentLinks, hashFunc: func() SegmentHash { return d.computeLinkHash(doc) }},
+			{name: SegmentImages, hashFunc: func() SegmentHash { return d.computeImageHash(doc) }},
+			{name: SegmentButtons, hashFunc: func() SegmentHash { return d.computeButtonHash(doc) }},
+			{name: SegmentForms, hashFunc: func() SegmentHash { return d.computeFormHash(doc) }},
+		}
 	}
-	segments = append(segments, fullContentHash)
+
+	resultChan := make(chan SegmentHash, len(tasks))
+	var wg sync.WaitGroup
+
+	for _, task := range tasks {
+		wg.Add(1)
+		go func(t segmentTask) {
+			defer wg.Done()
+			resultChan <- t.hashFunc()
+		}(task)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	var segments []SegmentHash
+	for segment := range resultChan {
+		segments = append(segments, segment)
+	}
+
+	if d.performanceMode == PerformanceModeComprehensive {
+		cleanHTML := d.cleanHTML(html)
+		fullContentHash := SegmentHash{
+			Name:     SegmentFullContent,
+			Hash:     computeSHA256(cleanHTML),
+			Length:   len(cleanHTML),
+			Elements: 1,
+		}
+		segments = append(segments, fullContentHash)
+	}
 
 	return segments
 }
@@ -589,11 +700,11 @@ func (d *Detector) cleanHTML(html string) string {
 		return ""
 	}
 
-	html = regexp.MustCompile(`(?i)\s+`).ReplaceAllString(html, " ")
-	html = regexp.MustCompile(`(?i)<!--.*?-->`).ReplaceAllString(html, "")
-	html = regexp.MustCompile(`(?i)data:image/[^"']*`).ReplaceAllString(html, "DATA_IMAGE_REMOVED")
-	html = regexp.MustCompile(`(?i)nonce="[^"]*"`).ReplaceAllString(html, "")
-	html = regexp.MustCompile(`(?i)csrf[^"]*_token["']?\s*[:=]\s*["'][^"']*["']`).ReplaceAllString(html, "")
+	html = reMultipleSpaces.ReplaceAllString(html, " ")
+	html = reComments.ReplaceAllString(html, "")
+	html = reDataImages.ReplaceAllString(html, "DATA_IMAGE_REMOVED")
+	html = reNonce.ReplaceAllString(html, "")
+	html = reCSRFToken.ReplaceAllString(html, "")
 	html = strings.TrimSpace(html)
 
 	return html
@@ -1026,6 +1137,26 @@ func (d *Detector) DeleteBaseline(url string) error {
 	return d.storage.DeleteBaseline(url)
 }
 
+// LoadCheckRecords 加载指定URL的检测记录
+func (d *Detector) LoadCheckRecords(url string, limit int) ([]*CheckRecord, error) {
+	return d.storage.LoadCheckRecords(url, limit)
+}
+
+// ListAllCheckRecords 列出所有URL的检测记录
+func (d *Detector) ListAllCheckRecords() (map[string][]*CheckRecord, error) {
+	return d.storage.ListAllCheckRecords()
+}
+
+// GetCheckStats 获取检测统计信息
+func (d *Detector) GetCheckStats(url string) (map[string]interface{}, error) {
+	return d.storage.GetCheckStats(url)
+}
+
+// DeleteCheckRecords 删除指定URL的所有检测记录
+func (d *Detector) DeleteCheckRecords(url string) error {
+	return d.storage.DeleteCheckRecords(url)
+}
+
 func computeSHA256(data string) string {
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])
@@ -1189,8 +1320,7 @@ func (s *HashStorage) ListAllCheckRecords() (map[string][]*CheckRecord, error) {
 			continue
 		}
 
-		url := urlDir.Name()
-		recordsDir := filepath.Join(recordsBaseDir, url)
+		recordsDir := filepath.Join(recordsBaseDir, urlDir.Name())
 
 		files, err := os.ReadDir(recordsDir)
 		if err != nil {
@@ -1218,7 +1348,10 @@ func (s *HashStorage) ListAllCheckRecords() (map[string][]*CheckRecord, error) {
 				continue
 			}
 
-			result[url] = append(result[url], &record)
+			// 使用记录中的实际URL作为键
+			if record.URL != "" {
+				result[record.URL] = append(result[record.URL], &record)
+			}
 		}
 	}
 

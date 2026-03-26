@@ -192,18 +192,19 @@ func (s *Server) handleTamperHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type historyRecord struct {
-		ID               string   `json:"id"`
-		URL              string   `json:"url"`
-		CheckType        string   `json:"check_type"`
-		DetectionMode    string   `json:"detection_mode,omitempty"`
-		Status           string   `json:"status"`
-		Tampered         bool     `json:"tampered"`
-		TamperedSegments []string `json:"tampered_segments,omitempty"`
-		ChangesCount     int      `json:"changes_count"`
-		Timestamp        int64    `json:"timestamp"`
-		CurrentFullHash  string   `json:"current_full_hash,omitempty"`
-		BaselineFullHash string   `json:"baseline_full_hash,omitempty"`
-	}
+	ID               string   `json:"id"`
+	URL              string   `json:"url"`
+	CheckType        string   `json:"check_type"`
+	DetectionMode    string   `json:"detection_mode,omitempty"`
+	Status           string   `json:"status"`
+	Tampered         bool     `json:"tampered"`
+	TamperedSegments []string `json:"tampered_segments,omitempty"`
+	ChangesCount     int      `json:"changes_count"`
+	Timestamp        int64    `json:"timestamp"`
+	BaselineTimestamp int64   `json:"baseline_timestamp,omitempty"`
+	CurrentFullHash  string   `json:"current_full_hash,omitempty"`
+	BaselineFullHash string   `json:"baseline_full_hash,omitempty"`
+}
 
 	records := make([]historyRecord, 0)
 	urlSet := make(map[string]struct{})
@@ -273,6 +274,7 @@ func (s *Server) handleTamperHistory(w http.ResponseWriter, r *http.Request) {
 			}
 			if rec.BaselineHash != nil {
 				item.BaselineFullHash = rec.BaselineHash.FullHash
+				item.BaselineTimestamp = rec.BaselineHash.Timestamp
 			}
 
 			records = append(records, item)
