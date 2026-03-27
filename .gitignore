@@ -51,5 +51,11 @@ tmp/
 archive/
 
 # Runtime data
+hash_store/**
+!hash_store/
+!hash_store/.gitkeep
+screenshots/**
+!screenshots/
+!screenshots/.gitkeep
 hash_store/records/**/*.json
 !hash_store/records/.gitkeep
