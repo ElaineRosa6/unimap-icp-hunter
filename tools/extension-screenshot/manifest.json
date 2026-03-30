@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Unimap Screenshot Bridge",
+  "version": "0.1.0",
+  "description": "Browser extension bridge for screenshot task execution.",
+  "action": {
+    "default_title": "Unimap Screenshot Bridge"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ]
+}
