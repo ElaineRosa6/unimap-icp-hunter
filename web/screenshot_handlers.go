@@ -206,7 +206,7 @@ func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if s.screenshotMgr == nil {
+	if s.screenshotApp == nil || !s.screenshotApp.IsCaptureAvailable(s.screenshotMgr) {
 		writeAPIError(w, http.StatusServiceUnavailable, "screenshot_manager_unavailable", "screenshot manager not initialized", nil)
 		return
 	}
@@ -253,7 +253,7 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if s.screenshotMgr == nil {
+	if s.screenshotApp == nil || !s.screenshotApp.IsCaptureAvailable(s.screenshotMgr) {
 		writeAPIError(w, http.StatusServiceUnavailable, "screenshot_manager_unavailable", "screenshot manager not initialized", nil)
 		return
 	}
@@ -315,7 +315,7 @@ func (s *Server) handleBatchScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.screenshotMgr == nil {
+	if s.screenshotApp == nil || !s.screenshotApp.IsCaptureAvailable(s.screenshotMgr) {
 		writeAPIError(w, http.StatusServiceUnavailable, "screenshot_manager_unavailable", "screenshot manager not initialized", nil)
 		return
 	}
@@ -380,7 +380,7 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if s.screenshotMgr == nil {
+	if s.screenshotApp == nil || !s.screenshotApp.IsCaptureAvailable(s.screenshotMgr) {
 		writeAPIError(w, http.StatusServiceUnavailable, "screenshot_manager_unavailable", "screenshot manager not initialized", nil)
 		return
 	}

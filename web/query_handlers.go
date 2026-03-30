@@ -20,6 +20,8 @@ func (s *Server) runBrowserQueryAsync(ctx context.Context, query string, engines
 		autoCaptureEnabled = s.config.Screenshot.AutoCapture.Enabled && s.config.Screenshot.AutoCapture.CaptureSearchResults
 	}
 
+	// TODO(day8): Replace direct CDP dependency with engine-aware screenshot availability checks.
+
 	return s.queryApp.RunBrowserQueryAsync(
 		ctx,
 		query,
