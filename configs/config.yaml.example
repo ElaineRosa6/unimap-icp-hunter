@@ -35,6 +35,8 @@ system:
 # Web 截图与 CDP 配置
 screenshot:
     enabled: true
+    # cdp | extension
+    engine: cdp
     base_dir: ./screenshots
     chrome_path: ""
     # 浏览器代理，例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:7891
@@ -47,6 +49,14 @@ screenshot:
     window_width: 1365
     window_height: 768
     wait_time: 500
+    extension:
+        enabled: false
+        listen_addr: "127.0.0.1:19451"
+        pairing_required: true
+        token_ttl_seconds: 600
+        task_timeout_seconds: 30
+        max_concurrency: 5
+        fallback_to_cdp: true
     auto_capture:
         enabled: false
         capture_search_results: true

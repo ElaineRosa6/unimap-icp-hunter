@@ -67,6 +67,11 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("screenshot-batch-delete", "DELETE", "/api/screenshot/batches/delete", r.server.handleScreenshotBatchDelete, false)
 	r.addRoute("screenshot-file-delete", "DELETE", "/api/screenshot/file/delete", r.server.handleScreenshotFileDelete, false)
 	r.addRoute("screenshot-file", "GET", "/screenshots/", r.server.handleScreenshotFile, false)
+	r.addRoute("screenshot-bridge-health", "GET", "/api/screenshot/bridge/health", r.server.handleScreenshotBridgeHealth, false)
+	r.addRoute("screenshot-bridge-status", "GET", "/api/screenshot/bridge/status", r.server.handleScreenshotBridgeStatus, false)
+	r.addRoute("screenshot-bridge-pair", "POST", "/api/screenshot/bridge/pair", r.server.handleScreenshotBridgePair, false)
+	r.addRoute("screenshot-bridge-task-next", "GET", "/api/screenshot/bridge/tasks/next", r.server.handleScreenshotBridgeTaskNext, false)
+	r.addRoute("screenshot-bridge-mock-result", "POST", "/api/screenshot/bridge/mock/result", r.server.handleScreenshotBridgeMockResult, false)
 
 	// API 路由 - 导入（限流）
 	r.addRoute("import-urls", "POST", "/api/import/urls", r.server.handleImportURLs, true)

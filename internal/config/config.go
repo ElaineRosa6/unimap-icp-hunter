@@ -76,17 +76,27 @@ type Config struct {
 	// 截图配置
 	Screenshot struct {
 		Enabled              bool   `yaml:"enabled"`
+		Engine               string `yaml:"engine"`
 		BaseDir              string `yaml:"base_dir"`
 		ChromePath           string `yaml:"chrome_path"`
 		ProxyServer          string `yaml:"proxy_server"`
 		ChromeUserDataDir    string `yaml:"chrome_user_data_dir"`
 		ChromeProfileDir     string `yaml:"chrome_profile_dir"`
 		ChromeRemoteDebugURL string `yaml:"chrome_remote_debug_url"`
-		Headless             *bool  `yaml:"headless"`
-		Timeout              int    `yaml:"timeout"`
-		WindowWidth          int    `yaml:"window_width"`
-		WindowHeight         int    `yaml:"window_height"`
-		WaitTime             int    `yaml:"wait_time"`
+		Extension            struct {
+			Enabled            bool   `yaml:"enabled"`
+			ListenAddr         string `yaml:"listen_addr"`
+			PairingRequired    bool   `yaml:"pairing_required"`
+			TokenTTLSeconds    int    `yaml:"token_ttl_seconds"`
+			TaskTimeoutSeconds int    `yaml:"task_timeout_seconds"`
+			MaxConcurrency     int    `yaml:"max_concurrency"`
+			FallbackToCDP      bool   `yaml:"fallback_to_cdp"`
+		} `yaml:"extension"`
+		Headless     *bool `yaml:"headless"`
+		Timeout      int   `yaml:"timeout"`
+		WindowWidth  int   `yaml:"window_width"`
+		WindowHeight int   `yaml:"window_height"`
+		WaitTime     int   `yaml:"wait_time"`
 		// 自动截图配置
 		AutoCapture struct {
 			Enabled              bool `yaml:"enabled"`
@@ -120,10 +130,10 @@ type Config struct {
 	Cache struct {
 		Backend string `yaml:"backend"`
 		Redis   struct {
-			Addr            string `yaml:"addr"`
-			Password        string `yaml:"password"`
-			DB              int    `yaml:"db"`
-			Prefix          string `yaml:"prefix"`
+			Addr     string `yaml:"addr"`
+			Password string `yaml:"password"`
+			DB       int    `yaml:"db"`
+			Prefix   string `yaml:"prefix"`
 			// 连接池配置
 			PoolSize        int `yaml:"pool_size"`          // 连接池大小
 			MinIdleConns    int `yaml:"min_idle_conns"`     // 最小空闲连接数
@@ -143,8 +153,8 @@ type Config struct {
 
 // EngineCacheConfig 引擎级别的缓存配置
 type EngineCacheConfig struct {
-	Enabled bool `yaml:"enabled"` // 是否启用缓存
-	TTL     int  `yaml:"ttl"`     // 缓存时间（秒），0 表示使用全局默认
+	Enabled bool `yaml:"enabled"`  // 是否启用缓存
+	TTL     int  `yaml:"ttl"`      // 缓存时间（秒），0 表示使用全局默认
 	MaxSize int  `yaml:"max_size"` // 最大缓存条目数，0 表示使用全局默认
 }
 
@@ -244,6 +254,8 @@ func (m *Manager) resolveEnv(config *Config) {
 	config.Screenshot.ChromeUserDataDir = m.ResolveEnv(config.Screenshot.ChromeUserDataDir)
 	config.Screenshot.ChromeProfileDir = m.ResolveEnv(config.Screenshot.ChromeProfileDir)
 	config.Screenshot.ChromeRemoteDebugURL = m.ResolveEnv(config.Screenshot.ChromeRemoteDebugURL)
+	config.Screenshot.Engine = m.ResolveEnv(config.Screenshot.Engine)
+	config.Screenshot.Extension.ListenAddr = m.ResolveEnv(config.Screenshot.Extension.ListenAddr)
 
 	// 解析缓存配置
 	config.Cache.Backend = m.ResolveEnv(config.Cache.Backend)
@@ -370,6 +382,21 @@ func (m *Manager) applyDefaults(config *Config) {
 	// 默认截图配置
 	if config.Screenshot.BaseDir == "" {
 		config.Screenshot.BaseDir = "./screenshots"
+	}
+	if strings.TrimSpace(config.Screenshot.Engine) == "" {
+		config.Screenshot.Engine = "cdp"
+	}
+	if strings.TrimSpace(config.Screenshot.Extension.ListenAddr) == "" {
+		config.Screenshot.Extension.ListenAddr = "127.0.0.1:19451"
+	}
+	if config.Screenshot.Extension.TokenTTLSeconds == 0 {
+		config.Screenshot.Extension.TokenTTLSeconds = 600
+	}
+	if config.Screenshot.Extension.TaskTimeoutSeconds == 0 {
+		config.Screenshot.Extension.TaskTimeoutSeconds = 30
+	}
+	if config.Screenshot.Extension.MaxConcurrency == 0 {
+		config.Screenshot.Extension.MaxConcurrency = 5
 	}
 	if config.Screenshot.Timeout == 0 {
 		config.Screenshot.Timeout = 30
@@ -577,6 +604,20 @@ func (m *Manager) validate(config *Config) error {
 	}
 	if config.Web.RequestLimits.MaxMultipartMemory <= 0 {
 		return fmt.Errorf("web request_limits max_multipart_memory_bytes must be greater than 0")
+	}
+
+	engine := strings.ToLower(strings.TrimSpace(config.Screenshot.Engine))
+	if engine != "" && engine != "cdp" && engine != "extension" {
+		return fmt.Errorf("screenshot engine must be one of: cdp, extension")
+	}
+	if config.Screenshot.Extension.TokenTTLSeconds <= 0 {
+		return fmt.Errorf("screenshot extension token_ttl_seconds must be greater than 0")
+	}
+	if config.Screenshot.Extension.TaskTimeoutSeconds <= 0 {
+		return fmt.Errorf("screenshot extension task_timeout_seconds must be greater than 0")
+	}
+	if config.Screenshot.Extension.MaxConcurrency <= 0 {
+		return fmt.Errorf("screenshot extension max_concurrency must be greater than 0")
 	}
 
 	backend := strings.ToLower(strings.TrimSpace(config.Cache.Backend))
