@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,14 +17,55 @@ import (
 
 // ScreenshotAppService 封装截图相关应用层流程。
 type ScreenshotAppService struct {
-	baseDir string
+	baseDir       string
+	provider      screenshot.Provider
+	engine        string
+	bridgeService *screenshot.BridgeService
+	fallbackToCDP bool
 }
 
 func NewScreenshotAppService(baseDir string) *ScreenshotAppService {
+	return NewScreenshotAppServiceWithProvider(baseDir, nil)
+}
+
+func NewScreenshotAppServiceWithProvider(baseDir string, provider screenshot.Provider) *ScreenshotAppService {
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = "./screenshots"
 	}
-	return &ScreenshotAppService{baseDir: baseDir}
+	return &ScreenshotAppService{baseDir: baseDir, provider: provider, engine: "cdp"}
+}
+
+func (s *ScreenshotAppService) SetEngine(engine string) {
+	if s == nil {
+		return
+	}
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	if engine == "" {
+		engine = "cdp"
+	}
+	s.engine = engine
+}
+
+func (s *ScreenshotAppService) SetBridgeService(bridge *screenshot.BridgeService) {
+	if s == nil {
+		return
+	}
+	s.bridgeService = bridge
+}
+
+func (s *ScreenshotAppService) SetFallbackToCDP(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.fallbackToCDP = enabled
+}
+
+// IsCaptureAvailable reports whether screenshot capture can run with current dependencies.
+func (s *ScreenshotAppService) IsCaptureAvailable(mgr *screenshot.Manager) bool {
+	if s != nil && s.provider != nil {
+		return true
+	}
+	return mgr != nil
 }
 
 // GetBaseDir 获取截图基础目录
@@ -67,9 +110,6 @@ type BatchURLsResponse struct {
 }
 
 func (s *ScreenshotAppService) CaptureSearchEngineResult(ctx context.Context, mgr *screenshot.Manager, engine, query, queryID string) (string, string, string, string, error) {
-	if mgr == nil {
-		return "", "", "", "", fmt.Errorf("screenshot manager not initialized")
-	}
 	engine = strings.TrimSpace(engine)
 	query = strings.TrimSpace(query)
 	if engine == "" || query == "" {
@@ -78,7 +118,22 @@ func (s *ScreenshotAppService) CaptureSearchEngineResult(ctx context.Context, mg
 	if strings.TrimSpace(queryID) == "" {
 		queryID = fmt.Sprintf("%d", time.Now().UnixNano())
 	}
-	path, err := mgr.CaptureSearchEngineResult(ctx, engine, query, queryID)
+
+	if strings.EqualFold(s.engine, "extension") && s.bridgeService != nil {
+		path, bridgeErr := s.captureSearchEngineWithBridge(ctx, mgr, engine, query, queryID)
+		if bridgeErr == nil {
+			return path, engine, query, queryID, nil
+		}
+		if !s.fallbackToCDP {
+			return "", "", "", "", bridgeErr
+		}
+	}
+
+	provider, err := s.resolveProvider(mgr)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("screenshot manager not initialized")
+	}
+	path, err := provider.CaptureSearchEngineResult(ctx, engine, query, queryID)
 	if err != nil {
 		return "", "", "", "", err
 	}
@@ -86,9 +141,6 @@ func (s *ScreenshotAppService) CaptureSearchEngineResult(ctx context.Context, mg
 }
 
 func (s *ScreenshotAppService) CaptureTargetWebsite(ctx context.Context, mgr *screenshot.Manager, targetURL, ip, port, protocol, queryID string) (string, string, string, string, string, string, error) {
-	if mgr == nil {
-		return "", "", "", "", "", "", fmt.Errorf("screenshot manager not initialized")
-	}
 	targetURL = strings.TrimSpace(targetURL)
 	ip = strings.TrimSpace(ip)
 	port = strings.TrimSpace(port)
@@ -101,7 +153,22 @@ func (s *ScreenshotAppService) CaptureTargetWebsite(ctx context.Context, mgr *sc
 		queryID = fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 
-	path, err := mgr.CaptureTargetWebsite(ctx, targetURL, ip, port, protocol, queryID)
+	if strings.EqualFold(s.engine, "extension") && s.bridgeService != nil {
+		path, bridgeErr := s.captureTargetWithBridge(ctx, targetURL, ip, port, protocol, queryID)
+		if bridgeErr == nil {
+			return path, targetURL, ip, port, protocol, queryID, nil
+		}
+		if !s.fallbackToCDP {
+			return "", "", "", "", "", "", bridgeErr
+		}
+	}
+
+	provider, err := s.resolveProvider(mgr)
+	if err != nil {
+		return "", "", "", "", "", "", fmt.Errorf("screenshot manager not initialized")
+	}
+
+	path, err := provider.CaptureTargetWebsite(ctx, targetURL, ip, port, protocol, queryID)
 	if err != nil {
 		return "", "", "", "", "", "", err
 	}
@@ -109,7 +176,8 @@ func (s *ScreenshotAppService) CaptureTargetWebsite(ctx context.Context, mgr *sc
 }
 
 func (s *ScreenshotAppService) CaptureBatch(ctx context.Context, mgr *screenshot.Manager, req BatchScreenshotRequest) (*BatchScreenshotResponse, error) {
-	if mgr == nil {
+	provider, err := s.resolveProvider(mgr)
+	if err != nil {
 		return nil, fmt.Errorf("screenshot manager not initialized")
 	}
 	if strings.TrimSpace(req.QueryID) == "" {
@@ -130,7 +198,7 @@ func (s *ScreenshotAppService) CaptureBatch(ctx context.Context, mgr *screenshot
 		wg.Add(1)
 		go func(engineName, query string) {
 			defer wg.Done()
-			path, err := mgr.CaptureSearchEngineResult(ctx, engineName, query, req.QueryID)
+			path, err := provider.CaptureSearchEngineResult(ctx, engineName, query, req.QueryID)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -149,7 +217,7 @@ func (s *ScreenshotAppService) CaptureBatch(ctx context.Context, mgr *screenshot
 		wg.Add(1)
 		go func(url, ip, port, protocol string) {
 			defer wg.Done()
-			path, err := mgr.CaptureTargetWebsite(ctx, url, ip, port, protocol, req.QueryID)
+			path, err := provider.CaptureTargetWebsite(ctx, url, ip, port, protocol, req.QueryID)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -171,9 +239,6 @@ func (s *ScreenshotAppService) CaptureBatch(ctx context.Context, mgr *screenshot
 }
 
 func (s *ScreenshotAppService) CaptureBatchURLs(ctx context.Context, mgr *screenshot.Manager, req BatchURLsRequest) (*BatchURLsResponse, error) {
-	if mgr == nil {
-		return nil, fmt.Errorf("screenshot manager not initialized")
-	}
 	if len(req.URLs) == 0 {
 		return nil, fmt.Errorf("no URLs provided")
 	}
@@ -187,7 +252,22 @@ func (s *ScreenshotAppService) CaptureBatchURLs(ctx context.Context, mgr *screen
 		req.Concurrency = 5
 	}
 
-	results, err := mgr.CaptureBatchURLs(ctx, req.URLs, req.BatchID, req.Concurrency)
+	if strings.EqualFold(s.engine, "extension") && s.bridgeService != nil {
+		bridgeResp, bridgeErr := s.captureBatchURLsWithBridge(ctx, req)
+		if bridgeErr == nil {
+			return bridgeResp, nil
+		}
+		if !s.fallbackToCDP {
+			return nil, bridgeErr
+		}
+	}
+
+	provider, err := s.resolveProvider(mgr)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot manager not initialized")
+	}
+
+	results, err := provider.CaptureBatchURLs(ctx, req.URLs, req.BatchID, req.Concurrency)
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +288,229 @@ func (s *ScreenshotAppService) CaptureBatchURLs(ctx context.Context, mgr *screen
 		Success:       successCount,
 		Failed:        failCount,
 		Results:       results,
-		ScreenshotDir: mgr.GetScreenshotDirectory(),
+		ScreenshotDir: provider.GetScreenshotDirectory(),
 	}, nil
+}
+
+func (s *ScreenshotAppService) captureBatchURLsWithBridge(ctx context.Context, req BatchURLsRequest) (*BatchURLsResponse, error) {
+	if s.bridgeService == nil {
+		return nil, fmt.Errorf("bridge service not initialized")
+	}
+
+	results := make([]screenshot.BatchScreenshotResult, len(req.URLs))
+	sem := make(chan struct{}, req.Concurrency)
+	var wg sync.WaitGroup
+
+	for i, rawURL := range req.URLs {
+		wg.Add(1)
+		go func(idx int, inputURL string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			normalizedURL := normalizeBridgeTargetURL(inputURL)
+			result := screenshot.BatchScreenshotResult{URL: inputURL, Timestamp: time.Now().Unix()}
+			if normalizedURL == "" {
+				result.Success = false
+				result.Error = "invalid URL"
+				results[idx] = result
+				return
+			}
+
+			task := screenshot.BridgeTask{
+				RequestID:    fmt.Sprintf("bridge_%d_%d", time.Now().UnixNano(), idx),
+				URL:          normalizedURL,
+				BatchID:      req.BatchID,
+				WaitStrategy: "load",
+			}
+			bridgeResult, err := s.bridgeService.Submit(ctx, task)
+			if err != nil {
+				result.Success = false
+				result.Error = err.Error()
+				results[idx] = result
+				return
+			}
+
+			result.Success = bridgeResult.Success
+			result.FilePath = bridgeResult.ImagePath
+			if !bridgeResult.Success {
+				if strings.TrimSpace(bridgeResult.Error) != "" {
+					result.Error = bridgeResult.Error
+				} else {
+					result.Error = bridgeResult.ErrorCode
+				}
+			}
+			results[idx] = result
+		}(i, rawURL)
+	}
+
+	wg.Wait()
+
+	successCount := 0
+	failCount := 0
+	for _, item := range results {
+		if item.Success {
+			successCount++
+		} else {
+			failCount++
+		}
+	}
+
+	return &BatchURLsResponse{
+		BatchID:       req.BatchID,
+		Total:         len(req.URLs),
+		Success:       successCount,
+		Failed:        failCount,
+		Results:       results,
+		ScreenshotDir: s.baseDir,
+	}, nil
+}
+
+func normalizeBridgeTargetURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		trimmed = "http://" + trimmed
+	}
+	return trimmed
+}
+
+func buildSearchEngineResultURL(engine, query string) string {
+	b64Query := base64.StdEncoding.EncodeToString([]byte(query))
+	encodedB64 := url.QueryEscape(b64Query)
+	encodedQuery := url.QueryEscape(query)
+
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "fofa":
+		return fmt.Sprintf("https://fofa.info/result?qbase64=%s", encodedB64)
+	case "hunter":
+		return fmt.Sprintf("https://hunter.qianxin.com/list?search=%s", encodedB64)
+	case "quake":
+		return fmt.Sprintf("https://quake.360.net/quake/#/searchResult?search=%s", encodedQuery)
+	case "zoomeye":
+		return fmt.Sprintf("https://www.zoomeye.hk/searchResult?q=%s", encodedQuery)
+	default:
+		return ""
+	}
+}
+
+func (s *ScreenshotAppService) captureSearchEngineWithBridge(ctx context.Context, mgr *screenshot.Manager, engine, query, queryID string) (string, error) {
+	if s == nil || s.bridgeService == nil {
+		return "", fmt.Errorf("bridge service not initialized")
+	}
+
+	searchURL := ""
+	if mgr != nil {
+		searchURL = strings.TrimSpace(mgr.BuildSearchEngineURL(engine, query))
+	}
+	if searchURL == "" {
+		searchURL = buildSearchEngineResultURL(engine, query)
+	}
+	if searchURL == "" {
+		return "", fmt.Errorf("unsupported engine: %s", engine)
+	}
+
+	task := screenshot.BridgeTask{
+		RequestID:    fmt.Sprintf("bridge_search_%d", time.Now().UnixNano()),
+		URL:          searchURL,
+		BatchID:      queryID,
+		WaitStrategy: "load",
+	}
+	result, err := s.bridgeService.Submit(ctx, task)
+	if err != nil {
+		return "", err
+	}
+	if !result.Success {
+		if strings.TrimSpace(result.Error) != "" {
+			return "", fmt.Errorf("bridge capture failed: %s", strings.TrimSpace(result.Error))
+		}
+		if strings.TrimSpace(result.ErrorCode) != "" {
+			return "", fmt.Errorf("bridge capture failed: %s", strings.TrimSpace(result.ErrorCode))
+		}
+		return "", fmt.Errorf("bridge capture failed")
+	}
+	if strings.TrimSpace(result.ImagePath) == "" {
+		return "", fmt.Errorf("bridge capture missing image path")
+	}
+	return strings.TrimSpace(result.ImagePath), nil
+}
+
+func buildTargetCaptureURL(targetURL, ip, port, protocol string) (string, error) {
+	resolvedURL := strings.TrimSpace(targetURL)
+	resolvedIP := strings.TrimSpace(ip)
+	resolvedPort := strings.TrimSpace(port)
+	resolvedProto := strings.TrimSpace(protocol)
+
+	if resolvedURL == "" {
+		if resolvedIP == "" {
+			return "", fmt.Errorf("target URL or IP is required")
+		}
+		proto := "http"
+		if resolvedProto != "" {
+			proto = strings.ToLower(resolvedProto)
+		} else if resolvedPort == "443" {
+			proto = "https"
+		}
+
+		if resolvedPort != "" && resolvedPort != "80" && resolvedPort != "443" {
+			resolvedURL = fmt.Sprintf("%s://%s:%s", proto, resolvedIP, resolvedPort)
+		} else {
+			resolvedURL = fmt.Sprintf("%s://%s", proto, resolvedIP)
+		}
+	}
+
+	if !strings.HasPrefix(resolvedURL, "http://") && !strings.HasPrefix(resolvedURL, "https://") {
+		resolvedURL = "http://" + resolvedURL
+	}
+
+	return resolvedURL, nil
+}
+
+func (s *ScreenshotAppService) captureTargetWithBridge(ctx context.Context, targetURL, ip, port, protocol, queryID string) (string, error) {
+	if s == nil || s.bridgeService == nil {
+		return "", fmt.Errorf("bridge service not initialized")
+	}
+
+	resolvedURL, err := buildTargetCaptureURL(targetURL, ip, port, protocol)
+	if err != nil {
+		return "", err
+	}
+
+	task := screenshot.BridgeTask{
+		RequestID:    fmt.Sprintf("bridge_target_%d", time.Now().UnixNano()),
+		URL:          resolvedURL,
+		BatchID:      queryID,
+		WaitStrategy: "load",
+	}
+	result, err := s.bridgeService.Submit(ctx, task)
+	if err != nil {
+		return "", err
+	}
+	if !result.Success {
+		if strings.TrimSpace(result.Error) != "" {
+			return "", fmt.Errorf("bridge capture failed: %s", strings.TrimSpace(result.Error))
+		}
+		if strings.TrimSpace(result.ErrorCode) != "" {
+			return "", fmt.Errorf("bridge capture failed: %s", strings.TrimSpace(result.ErrorCode))
+		}
+		return "", fmt.Errorf("bridge capture failed")
+	}
+	if strings.TrimSpace(result.ImagePath) == "" {
+		return "", fmt.Errorf("bridge capture missing image path")
+	}
+	return strings.TrimSpace(result.ImagePath), nil
+}
+
+func (s *ScreenshotAppService) resolveProvider(mgr *screenshot.Manager) (screenshot.Provider, error) {
+	if s != nil && s.provider != nil {
+		return s.provider, nil
+	}
+	if mgr != nil {
+		return screenshot.NewCDPProvider(mgr), nil
+	}
+	return nil, fmt.Errorf("screenshot manager not initialized")
 }
 
 // BatchInfo 批次信息

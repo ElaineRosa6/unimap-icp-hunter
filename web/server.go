@@ -74,6 +74,9 @@ type Server struct {
 	configManager *config.Manager
 	chromeCmd     *os.Process
 	chromeCmdMu   sync.Mutex
+	bridgeService *screenshot.BridgeService
+	bridgeMock    *bridgeMockClient
+	bridgeTokens  map[string]int64
 }
 
 // NewServer 创建Web服务器
@@ -173,14 +176,25 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 		screenshotBaseDir = strings.TrimSpace(cfg.Screenshot.BaseDir)
 	}
 
-	return &Server{
+	var screenshotProvider screenshot.Provider
+	if screenshotMgr != nil {
+		screenshotProvider = screenshot.NewCDPProvider(screenshotMgr)
+	}
+
+	screenshotApp := service.NewScreenshotAppServiceWithProvider(screenshotBaseDir, screenshotProvider)
+	if cfg != nil {
+		screenshotApp.SetEngine(cfg.Screenshot.Engine)
+		screenshotApp.SetFallbackToCDP(cfg.Screenshot.Extension.FallbackToCDP)
+	}
+
+	srv := &Server{
 		port:          port,
 		templates:     templates,
 		service:       unifiedSvc,
 		queryApp:      service.NewQueryAppService(unifiedSvc, orchestrator),
 		monitorApp:    service.NewMonitorAppService(),
 		tamperApp:     service.NewTamperAppService("./hash_store"),
-		screenshotApp: service.NewScreenshotAppService(screenshotBaseDir),
+		screenshotApp: screenshotApp,
 		orchestrator:  orchestrator,
 		upgrader:      upgrader,
 		connManager:   &ConnectionManager{connections: make(map[string]*managedConn)},
@@ -190,7 +204,19 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 		screenshotMgr: screenshotMgr,
 		config:        cfg,
 		configManager: cfgManager,
-	}, nil
+		bridgeTokens:  make(map[string]int64),
+	}
+
+	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Screenshot.Engine), "extension") {
+		mockClient := newBridgeMockClient()
+		bridgeSvc := screenshot.NewBridgeService(mockClient, cfg.Screenshot.Extension.MaxConcurrency, time.Duration(cfg.Screenshot.Extension.TaskTimeoutSeconds)*time.Second)
+		bridgeSvc.Start(context.Background())
+		srv.bridgeMock = mockClient
+		srv.bridgeService = bridgeSvc
+		screenshotApp.SetBridgeService(bridgeSvc)
+	}
+
+	return srv, nil
 }
 
 // convertConfigCookies 转换配置Cookie到截图管理器Cookie
