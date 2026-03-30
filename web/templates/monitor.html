@@ -1437,13 +1437,17 @@
 					});
 
 				// 保存合并后的结果（包含不可达URL）供导出使用
-				currentTamperResults = merged.map(result => ({
-					url: result.url,
-					status: result.status || (result.Status && result.Status.startsWith('error') ? 'unreachable' : 'success'),
-					tampered: false,
-					timestamp: result.timestamp || Date.now() / 1000,
-					baseline_hash: result.full_hash ? { timestamp: result.timestamp } : null
-				}));
+				currentTamperResults = merged.map(result => {
+					const rawStatus = (result.status || result.Status || '').toString();
+					const normalizedStatus = rawStatus.toLowerCase();
+					return {
+						url: result.url,
+						status: result.status || (normalizedStatus.startsWith('error') ? 'unreachable' : 'success'),
+						tampered: false,
+						timestamp: result.timestamp || Date.now() / 1000,
+						baseline_hash: result.full_hash ? { timestamp: result.timestamp } : null,
+					};
+				});
 
 				if (merged.length === 0) {
 					tamperResults.innerHTML = '<div class="tamper-alert info"><strong>暂无结果</strong><br>请先输入 URL 并执行设置基线。</div>';
@@ -1464,8 +1468,13 @@
 					const card = document.createElement('div');
 					card.className = 'result-card';
 
-					const isSuccess = result.Status === 'success' || (result.status === undefined && !result.Status?.startsWith('error'));
-					const isUnreachable = result.status === 'unreachable' || result.status === 'invalid_format' || (result.Status || '').includes('failed to load');
+					const rawStatus = (result.status || result.Status || '').toString();
+					const normalizedStatus = rawStatus.toLowerCase();
+					const isSuccess = normalizedStatus === '' || normalizedStatus === 'success';
+					const isUnreachable =
+						normalizedStatus === 'unreachable' ||
+						normalizedStatus === 'invalid_format' ||
+						normalizedStatus.includes('failed to load');
 
 					let statusBadge = '';
 					let statusClass = '';
@@ -1485,7 +1494,7 @@
 					}
 
 					const probeStatus = isUnreachable ? 'unreachable' : 'reachable';
-					const probeReason = result.probe_reason || result.Status || '';
+					const probeReason = result.probe_reason || rawStatus || '';
 					const probeReasonType = result.probe_reason_type || '';
 
 					card.innerHTML = `
