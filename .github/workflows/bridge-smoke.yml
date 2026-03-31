@@ -1,0 +1,52 @@
+name: bridge-smoke
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - "internal/config/**"
+      - "tools/extension-screenshot/**"
+      - "scripts/bridge_e2e.ps1"
+      - ".github/workflows/bridge-smoke.yml"
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - "web/**"
+      - "internal/config/**"
+      - "tools/extension-screenshot/**"
+      - "scripts/bridge_e2e.ps1"
+      - ".github/workflows/bridge-smoke.yml"
+
+jobs:
+  bridge-handler-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run bridge-focused tests
+        run: go test ./web -run Bridge -count=1
+
+  extension-script-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Syntax check extension scripts
+        run: |
+          node --check tools/extension-screenshot/src/api.js
+          node --check tools/extension-screenshot/src/background.js
+          node --check tools/extension-screenshot/src/capture.js
+          node --check tools/extension-screenshot/src/pairing.js
+          node --check tools/extension-screenshot/src/storage.js

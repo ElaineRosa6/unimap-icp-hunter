@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unimap-icp-hunter/project/internal/proxypool"
 	"github.com/unimap-icp-hunter/project/internal/util/workerpool"
 )
 
@@ -19,6 +20,7 @@ import (
 type URLReachabilityResult struct {
 	Input      string `json:"input"`
 	URL        string `json:"url,omitempty"`
+	Proxy      string `json:"proxy,omitempty"`
 	Status     string `json:"status"`
 	ReasonType string `json:"reason_type,omitempty"`
 	Reachable  bool   `json:"reachable"`
@@ -42,10 +44,12 @@ type URLReachabilityResponse struct {
 }
 
 // MonitorAppService 封装监控相关业务流程。
-type MonitorAppService struct{}
+type MonitorAppService struct {
+	proxyPool *proxypool.Pool
+}
 
-func NewMonitorAppService() *MonitorAppService {
-	return &MonitorAppService{}
+func NewMonitorAppService(pool *proxypool.Pool) *MonitorAppService {
+	return &MonitorAppService{proxyPool: pool}
 }
 
 type reachabilityTaskPayload struct {
@@ -57,6 +61,7 @@ type reachabilityTask struct {
 	ctx        context.Context
 	index      int
 	input      string
+	proxyPool  *proxypool.Pool
 	resultChan chan<- reachabilityTaskPayload
 	wg         *sync.WaitGroup
 }
@@ -82,7 +87,7 @@ func (t *reachabilityTask) Execute() error {
 	probeCtx, cancel := context.WithTimeout(t.ctx, 10*time.Second)
 	defer cancel()
 
-	reachable, statusCode, reasonType, reason := probeURLReachabilityForService(probeCtx, normalizedURL)
+	reachable, statusCode, reasonType, reason, selectedProxy := probeURLReachabilityForService(probeCtx, normalizedURL, t.proxyPool)
 	status := "reachable"
 	if !reachable {
 		status = "unreachable"
@@ -93,6 +98,7 @@ func (t *reachabilityTask) Execute() error {
 		item: URLReachabilityResult{
 			Input:      t.input,
 			URL:        normalizedURL,
+			Proxy:      selectedProxy,
 			Status:     status,
 			ReasonType: reasonType,
 			Reachable:  reachable,
@@ -126,6 +132,7 @@ func (s *MonitorAppService) CheckURLReachability(ctx context.Context, urls []str
 			ctx:        ctx,
 			index:      i,
 			input:      rawURL,
+			proxyPool:  s.proxyPool,
 			resultChan: resultChan,
 			wg:         &wg,
 		})
@@ -217,21 +224,43 @@ func classifyReachabilityErrorForService(err error) (string, string) {
 	}
 }
 
-func probeURLReachabilityForService(ctx context.Context, targetURL string) (bool, int, string, string) {
-	client := &http.Client{Timeout: 8 * time.Second}
+func probeURLReachabilityForService(ctx context.Context, targetURL string, pool *proxypool.Pool) (bool, int, string, string, string) {
+	selectedProxy := ""
+	if pool != nil {
+		if proxyAddr, ok := pool.Select(); ok {
+			selectedProxy = proxyAddr
+		}
+	}
+
+	client, clientErr := buildReachabilityHTTPClient(selectedProxy)
+	if clientErr != nil {
+		if pool != nil && selectedProxy != "" {
+			pool.Report(selectedProxy, false)
+		}
+		return false, 0, "proxy", clientErr.Error(), selectedProxy
+	}
+
+	succeeded := false
+	defer func() {
+		if pool != nil && selectedProxy != "" {
+			pool.Report(selectedProxy, succeeded)
+		}
+	}()
+
 	var headErr error
 
 	headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, targetURL, nil)
 	if err != nil {
 		errType, reason := classifyReachabilityErrorForService(err)
-		return false, 0, errType, reason
+		return false, 0, errType, reason, selectedProxy
 	}
 
 	headResp, err := client.Do(headReq)
 	if err == nil {
 		defer headResp.Body.Close()
 		if headResp.StatusCode != http.StatusMethodNotAllowed {
-			return true, headResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", headResp.StatusCode)
+			succeeded = true
+			return true, headResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", headResp.StatusCode), selectedProxy
 		}
 	} else {
 		headErr = err
@@ -241,22 +270,43 @@ func probeURLReachabilityForService(ctx context.Context, targetURL string) (bool
 	if reqErr != nil {
 		if headErr != nil {
 			errType, reason := classifyReachabilityErrorForService(headErr)
-			return false, 0, errType, reason
+			return false, 0, errType, reason, selectedProxy
 		}
 		errType, reason := classifyReachabilityErrorForService(reqErr)
-		return false, 0, errType, reason
+		return false, 0, errType, reason, selectedProxy
 	}
 
 	getResp, getErr := client.Do(getReq)
 	if getErr != nil {
 		if headErr != nil {
 			errType, reason := classifyReachabilityErrorForService(headErr)
-			return false, 0, errType, reason
+			return false, 0, errType, reason, selectedProxy
 		}
 		errType, reason := classifyReachabilityErrorForService(getErr)
-		return false, 0, errType, reason
+		return false, 0, errType, reason, selectedProxy
 	}
 	defer getResp.Body.Close()
 
-	return true, getResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", getResp.StatusCode)
+	succeeded = true
+	return true, getResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", getResp.StatusCode), selectedProxy
+}
+
+func buildReachabilityHTTPClient(proxyAddr string) (*http.Client, error) {
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 6 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	if strings.TrimSpace(proxyAddr) != "" {
+		parsedProxy, err := url.Parse(proxyAddr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy address: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(parsedProxy)
+	}
+
+	return &http.Client{Timeout: 8 * time.Second, Transport: transport}, nil
 }

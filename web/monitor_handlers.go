@@ -118,6 +118,46 @@ func (s *Server) handleURLReachability(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleURLPortScan(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var req struct {
+		URLs        []string `json:"urls"`
+		Ports       []int    `json:"ports"`
+		Concurrency int      `json:"concurrency"`
+	}
+
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	if len(req.URLs) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
+		return
+	}
+
+	if s.monitorApp == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "monitor_service_unavailable", "monitor app service not initialized", nil)
+		return
+	}
+
+	response, err := s.monitorApp.ScanURLPorts(r.Context(), req.URLs, req.Ports, req.Concurrency)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "url_port_scan_failed", "url port scan failed", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"summary": response.Summary,
+		"ports":   response.Ports,
+		"results": response.Results,
+	})
+}
+
 // parseExcelFile 解析Excel文件
 func parseExcelFile(file io.Reader) ([]string, error) {
 	f, err := excelize.OpenReader(file)

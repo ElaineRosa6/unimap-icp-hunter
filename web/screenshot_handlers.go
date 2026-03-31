@@ -225,14 +225,17 @@ func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Req
 	}
 
 	startTime := time.Now()
-	screenshotPath, engine, query, queryID, err := s.screenshotApp.CaptureSearchEngineResult(r.Context(), s.screenshotMgr, engine, query, queryID)
+	proxy := s.selectRequestProxy()
+	screenshotPath, engine, query, queryID, err := s.screenshotApp.CaptureSearchEngineResultWithProxy(r.Context(), s.screenshotMgr, engine, query, queryID, proxy)
 	if err != nil {
+		s.reportRequestProxy(proxy, false)
 		logger.Errorf("Failed to capture search engine screenshot: %v", err)
 		metrics.IncScreenshotRequest("search_engine", "error")
 		metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
 		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
 		return
 	}
+	s.reportRequestProxy(proxy, true)
 
 	metrics.IncScreenshotRequest("search_engine", "success")
 	metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
@@ -273,7 +276,8 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 	}
 
 	startTime := time.Now()
-	screenshotPath, targetURL, ip, port, protocol, queryID, err := s.screenshotApp.CaptureTargetWebsite(
+	proxy := s.selectRequestProxy()
+	screenshotPath, targetURL, ip, port, protocol, queryID, err := s.screenshotApp.CaptureTargetWebsiteWithProxy(
 		r.Context(),
 		s.screenshotMgr,
 		req.URL,
@@ -281,8 +285,10 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		req.Port,
 		req.Protocol,
 		req.QueryID,
+		proxy,
 	)
 	if err != nil {
+		s.reportRequestProxy(proxy, false)
 		logger.Errorf("Failed to capture target screenshot: %v", err)
 		metrics.IncScreenshotRequest("target", "error")
 		metrics.ObserveScreenshotDuration("target", time.Since(startTime))
@@ -293,6 +299,7 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
 		return
 	}
+	s.reportRequestProxy(proxy, true)
 
 	metrics.IncScreenshotRequest("target", "success")
 	metrics.ObserveScreenshotDuration("target", time.Since(startTime))

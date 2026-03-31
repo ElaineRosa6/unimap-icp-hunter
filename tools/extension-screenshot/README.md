@@ -28,13 +28,18 @@ This is a Day 6 MVP browser extension scaffold for the screenshot bridge workflo
 - Day 7 is complete:
   - extension path now covers search-engine and target-site capture, not just batch URL flow
   - `fallback_to_cdp` is active for both single and batch capture paths
+- Day 16 hardening baseline is complete:
+  - extension callback now sends `X-Bridge-Timestamp` / `X-Bridge-Nonce` / `X-Bridge-Signature`
+  - extension proactively rotates bridge token before expiry via `/api/screenshot/bridge/token/rotate`
+  - backend can enforce callback signature and nonce replay checks via config
+  - CI smoke workflow added for bridge-focused tests and extension script syntax checks
 
 ## Recommended Next Steps
 
 1. Replace mock callback semantics with real extension callback contract (production-safe fields and signature).
-2. Add callback payload signing and stricter token/session rotation policy.
-3. Implement Day 8 query auto-capture migration to engine-aware availability checks.
-4. Add CI smoke checks for bridge APIs and extension script linting.
+2. Keep callback signing enabled in production and continue token/session governance (issue/rotation/expiry audit).
+3. Extend CI smoke from syntax checks to live bridge e2e in controlled environment.
+4. Add release-evidence linkage for Day15 acceptance and rollback drill records.
 
 ## Notes
 

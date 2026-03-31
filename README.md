@@ -94,6 +94,84 @@ go run ./cmd/unimap-web
 go run ./cmd/unimap-cli --help
 ```
 
+## 插件桥接运行说明
+
+### 插件安装
+
+1. 打开 Chrome/Edge 扩展管理页面。
+2. 开启开发者模式。
+3. 选择加载已解压扩展，目录为 tools/extension-screenshot。
+
+### 配对流程
+
+1. 启动 Web 服务后，调用配对接口：POST /api/screenshot/bridge/pair。
+2. 获取 token 后由扩展带 Authorization Bearer 拉取任务与回传结果。
+3. token 临近过期可调用轮换接口：POST /api/screenshot/bridge/token/rotate。
+4. 可通过以下接口检查状态：
+  - GET /api/screenshot/bridge/health
+  - GET /api/screenshot/bridge/status
+
+### 引擎切换
+
+截图引擎由 configs/config.yaml 的 screenshot.engine 控制：
+
+1. cdp：使用 chromedp 路径。
+2. extension：使用浏览器插件桥接路径。
+
+建议结合 screenshot.extension.fallback_to_cdp 使用：
+
+1. true：extension 失败自动回退 cdp。
+2. false：严格使用 extension，不自动回退。
+
+生产环境建议同时开启回调签名校验：
+
+1. `screenshot.extension.callback_signature_required=true`
+2. `screenshot.extension.callback_signature_skew_seconds=300`
+3. `screenshot.extension.callback_nonce_ttl_seconds=600`
+
+签名头说明（extension -> bridge callback）：
+
+1. `X-Bridge-Timestamp`
+2. `X-Bridge-Nonce`
+3. `X-Bridge-Signature`
+
+### 常见故障与排查
+
+1. bridge health ready=false：优先检查 extension.enabled、engine、服务重启状态。
+2. unauthorized_bridge：检查 pairing_required 与 Bearer token 是否过期。
+3. invalid callback signature：检查时间偏差、nonce 重放、签名头是否完整。
+4. pending_tasks 持续增长：检查扩展是否在线、是否可拉取 tasks/next。
+5. autoCaptureErrors 增多：检查当前引擎可用性与 fallback 配置。
+
+### 回退触发条件
+
+建议触发 extension -> cdp 回退的条件：
+
+1. bridge 不可用持续超过 5 分钟。
+2. bridge 超时或重试错误持续升高。
+3. 配对与鉴权错误持续且无法通过重新配对恢复。
+
+回退脚本：
+
+1. Windows: scripts/rollback_extension_to_cdp.ps1
+2. Linux/macOS: scripts/rollback_extension_to_cdp.sh
+
+bridge 冒烟脚本：
+
+1. 基础模式：`scripts/bridge_e2e.ps1`
+2. 严格签名 + 轮换验证：`scripts/bridge_e2e.ps1 -StrictSignature -RotateToken`
+
+## Day13-15 状态与计划
+
+Day13-15 的实施状态、验收结论和后续计划已统一收口在 `Update_Plan.md`，README 仅保留入口索引，避免状态口径分散。
+
+建议直接查看：
+
+1. `Update_Plan.md`（Day13/14/15 执行状态与最终状态表）
+2. `archive/RELEASE_CHECKLIST_2026-03-30.md`（发布门禁与最终裁决）
+3. `archive/DAY15_ACCEPTANCE_RECORD_2026-03-30.md`（Day15 验收证据）
+4. `archive/ROLLBACK_DRILL_2026-03-30.md`（回退演练证据）
+
 ## 技术栈
 
 - Go 1.24.0
@@ -111,6 +189,10 @@ go run ./cmd/unimap-cli --help
 - README_LIGHT.md：轻量/GUI 视角说明
 - PROJECT_SUMMARY.md：项目现状总结
 - PROJECT_FULL_REVIEW_2026-03-20.md：完整复核与优化建议
+- docs/OPS_SCREENSHOT_EXTENSION.md：插件桥接运维手册
+- archive/RELEASE_CHECKLIST_2026-03-30.md：发布检查清单
+- archive/DAY15_ACCEPTANCE_RECORD_2026-03-30.md：Day15 分布式节点验收记录
+- archive/ROLLBACK_DRILL_2026-03-30.md：回退演练记录
 
 ## 许可证
 

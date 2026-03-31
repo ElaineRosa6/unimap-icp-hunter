@@ -1,10 +1,18 @@
-import { apiGet, apiPost } from "./api.js";
+import { apiGet, apiPostBridgeSigned, bridgeRotateToken } from "./api.js";
 import { ensureTab, waitForPageReady, captureVisible, normalizeImagePayload } from "./capture.js";
-import { loadSessionToken, isTokenExpired, saveRuntimeState, saveLastError } from "./storage.js";
+import { loadSessionToken, isTokenExpired, saveSessionToken, saveRuntimeState, saveLastError } from "./storage.js";
 import { pairAndStore } from "./pairing.js";
 
 const POLL_INTERVAL_MS = 1000;
+const ROTATE_AHEAD_MS = 60 * 1000;
 let loopStarted = false;
+
+function shouldRotateSoon(expireAt) {
+  if (!expireAt) {
+    return false;
+  }
+  return Date.now() + ROTATE_AHEAD_MS >= expireAt;
+}
 
 async function pollTaskOnce(token) {
   const resp = await apiGet("/api/screenshot/bridge/tasks/next", token);
@@ -13,7 +21,7 @@ async function pollTaskOnce(token) {
 
 async function reportTaskResult(result, token) {
   // Day 5/6 local mock callback endpoint.
-  await apiPost("/api/screenshot/bridge/mock/result", result, token);
+  await apiPostBridgeSigned("/api/screenshot/bridge/mock/result", result, token);
 }
 
 async function handleTask(task, token) {
@@ -52,6 +60,19 @@ async function bridgeLoop() {
           await saveLastError(pairErr);
           await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
           continue;
+        }
+      } else if (shouldRotateSoon(session.expireAt)) {
+        try {
+          const rotated = await bridgeRotateToken(token);
+          const newToken = rotated?.token || "";
+          const expiresIn = Number(rotated?.expires_in || 600);
+          if (newToken) {
+            await saveSessionToken(newToken, expiresIn);
+            token = newToken;
+          }
+        } catch (rotateErr) {
+          // Rotation failure should not stop task polling; existing token may still be valid.
+          await saveLastError(rotateErr);
         }
       }
 

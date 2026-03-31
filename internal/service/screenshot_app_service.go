@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/screenshot"
 )
 
@@ -22,6 +23,14 @@ type ScreenshotAppService struct {
 	engine        string
 	bridgeService *screenshot.BridgeService
 	fallbackToCDP bool
+}
+
+type proxyAwareSearchProvider interface {
+	CaptureSearchEngineResultWithProxy(ctx context.Context, engine, query, queryID, proxy string) (string, error)
+}
+
+type proxyAwareTargetProvider interface {
+	CaptureTargetWebsiteWithProxy(ctx context.Context, targetURL, ip, port, protocol, queryID, proxy string) (string, error)
 }
 
 func NewScreenshotAppService(baseDir string) *ScreenshotAppService {
@@ -110,6 +119,10 @@ type BatchURLsResponse struct {
 }
 
 func (s *ScreenshotAppService) CaptureSearchEngineResult(ctx context.Context, mgr *screenshot.Manager, engine, query, queryID string) (string, string, string, string, error) {
+	return s.CaptureSearchEngineResultWithProxy(ctx, mgr, engine, query, queryID, "")
+}
+
+func (s *ScreenshotAppService) CaptureSearchEngineResultWithProxy(ctx context.Context, mgr *screenshot.Manager, engine, query, queryID, proxy string) (string, string, string, string, error) {
 	engine = strings.TrimSpace(engine)
 	query = strings.TrimSpace(query)
 	if engine == "" || query == "" {
@@ -127,13 +140,19 @@ func (s *ScreenshotAppService) CaptureSearchEngineResult(ctx context.Context, mg
 		if !s.fallbackToCDP {
 			return "", "", "", "", bridgeErr
 		}
+		metrics.IncBridgeFallback("extension_to_cdp")
 	}
 
 	provider, err := s.resolveProvider(mgr)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("screenshot manager not initialized")
 	}
-	path, err := provider.CaptureSearchEngineResult(ctx, engine, query, queryID)
+	path := ""
+	if withProxy, ok := provider.(proxyAwareSearchProvider); ok && strings.TrimSpace(proxy) != "" {
+		path, err = withProxy.CaptureSearchEngineResultWithProxy(ctx, engine, query, queryID, proxy)
+	} else {
+		path, err = provider.CaptureSearchEngineResult(ctx, engine, query, queryID)
+	}
 	if err != nil {
 		return "", "", "", "", err
 	}
@@ -141,6 +160,10 @@ func (s *ScreenshotAppService) CaptureSearchEngineResult(ctx context.Context, mg
 }
 
 func (s *ScreenshotAppService) CaptureTargetWebsite(ctx context.Context, mgr *screenshot.Manager, targetURL, ip, port, protocol, queryID string) (string, string, string, string, string, string, error) {
+	return s.CaptureTargetWebsiteWithProxy(ctx, mgr, targetURL, ip, port, protocol, queryID, "")
+}
+
+func (s *ScreenshotAppService) CaptureTargetWebsiteWithProxy(ctx context.Context, mgr *screenshot.Manager, targetURL, ip, port, protocol, queryID, proxy string) (string, string, string, string, string, string, error) {
 	targetURL = strings.TrimSpace(targetURL)
 	ip = strings.TrimSpace(ip)
 	port = strings.TrimSpace(port)
@@ -161,6 +184,7 @@ func (s *ScreenshotAppService) CaptureTargetWebsite(ctx context.Context, mgr *sc
 		if !s.fallbackToCDP {
 			return "", "", "", "", "", "", bridgeErr
 		}
+		metrics.IncBridgeFallback("extension_to_cdp")
 	}
 
 	provider, err := s.resolveProvider(mgr)
@@ -168,7 +192,12 @@ func (s *ScreenshotAppService) CaptureTargetWebsite(ctx context.Context, mgr *sc
 		return "", "", "", "", "", "", fmt.Errorf("screenshot manager not initialized")
 	}
 
-	path, err := provider.CaptureTargetWebsite(ctx, targetURL, ip, port, protocol, queryID)
+	path := ""
+	if withProxy, ok := provider.(proxyAwareTargetProvider); ok && strings.TrimSpace(proxy) != "" {
+		path, err = withProxy.CaptureTargetWebsiteWithProxy(ctx, targetURL, ip, port, protocol, queryID, proxy)
+	} else {
+		path, err = provider.CaptureTargetWebsite(ctx, targetURL, ip, port, protocol, queryID)
+	}
 	if err != nil {
 		return "", "", "", "", "", "", err
 	}
@@ -260,6 +289,7 @@ func (s *ScreenshotAppService) CaptureBatchURLs(ctx context.Context, mgr *screen
 		if !s.fallbackToCDP {
 			return nil, bridgeErr
 		}
+		metrics.IncBridgeFallback("extension_to_cdp")
 	}
 
 	provider, err := s.resolveProvider(mgr)
@@ -307,10 +337,13 @@ func (s *ScreenshotAppService) captureBatchURLsWithBridge(ctx context.Context, r
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			startedAt := time.Now()
 
 			normalizedURL := normalizeBridgeTargetURL(inputURL)
 			result := screenshot.BatchScreenshotResult{URL: inputURL, Timestamp: time.Now().Unix()}
 			if normalizedURL == "" {
+				metrics.IncBridgeRequest("extension", "invalid_url")
+				metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 				result.Success = false
 				result.Error = "invalid URL"
 				results[idx] = result
@@ -325,6 +358,8 @@ func (s *ScreenshotAppService) captureBatchURLsWithBridge(ctx context.Context, r
 			}
 			bridgeResult, err := s.bridgeService.Submit(ctx, task)
 			if err != nil {
+				metrics.IncBridgeRequest("extension", "submit_failed")
+				metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 				result.Success = false
 				result.Error = err.Error()
 				results[idx] = result
@@ -334,11 +369,16 @@ func (s *ScreenshotAppService) captureBatchURLsWithBridge(ctx context.Context, r
 			result.Success = bridgeResult.Success
 			result.FilePath = bridgeResult.ImagePath
 			if !bridgeResult.Success {
+				metrics.IncBridgeRequest("extension", "result_failed")
+				metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 				if strings.TrimSpace(bridgeResult.Error) != "" {
 					result.Error = bridgeResult.Error
 				} else {
 					result.Error = bridgeResult.ErrorCode
 				}
+			} else {
+				metrics.IncBridgeRequest("extension", "success")
+				metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 			}
 			results[idx] = result
 		}(i, rawURL)
@@ -398,8 +438,10 @@ func buildSearchEngineResultURL(engine, query string) string {
 
 func (s *ScreenshotAppService) captureSearchEngineWithBridge(ctx context.Context, mgr *screenshot.Manager, engine, query, queryID string) (string, error) {
 	if s == nil || s.bridgeService == nil {
+		metrics.IncBridgeRequest("extension", "service_unavailable")
 		return "", fmt.Errorf("bridge service not initialized")
 	}
+	startedAt := time.Now()
 
 	searchURL := ""
 	if mgr != nil {
@@ -409,6 +451,8 @@ func (s *ScreenshotAppService) captureSearchEngineWithBridge(ctx context.Context
 		searchURL = buildSearchEngineResultURL(engine, query)
 	}
 	if searchURL == "" {
+		metrics.IncBridgeRequest("extension", "unsupported_engine")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		return "", fmt.Errorf("unsupported engine: %s", engine)
 	}
 
@@ -420,9 +464,13 @@ func (s *ScreenshotAppService) captureSearchEngineWithBridge(ctx context.Context
 	}
 	result, err := s.bridgeService.Submit(ctx, task)
 	if err != nil {
+		metrics.IncBridgeRequest("extension", "submit_failed")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		return "", err
 	}
 	if !result.Success {
+		metrics.IncBridgeRequest("extension", "result_failed")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		if strings.TrimSpace(result.Error) != "" {
 			return "", fmt.Errorf("bridge capture failed: %s", strings.TrimSpace(result.Error))
 		}
@@ -432,8 +480,12 @@ func (s *ScreenshotAppService) captureSearchEngineWithBridge(ctx context.Context
 		return "", fmt.Errorf("bridge capture failed")
 	}
 	if strings.TrimSpace(result.ImagePath) == "" {
+		metrics.IncBridgeRequest("extension", "missing_image_path")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		return "", fmt.Errorf("bridge capture missing image path")
 	}
+	metrics.IncBridgeRequest("extension", "success")
+	metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 	return strings.TrimSpace(result.ImagePath), nil
 }
 
@@ -470,11 +522,15 @@ func buildTargetCaptureURL(targetURL, ip, port, protocol string) (string, error)
 
 func (s *ScreenshotAppService) captureTargetWithBridge(ctx context.Context, targetURL, ip, port, protocol, queryID string) (string, error) {
 	if s == nil || s.bridgeService == nil {
+		metrics.IncBridgeRequest("extension", "service_unavailable")
 		return "", fmt.Errorf("bridge service not initialized")
 	}
+	startedAt := time.Now()
 
 	resolvedURL, err := buildTargetCaptureURL(targetURL, ip, port, protocol)
 	if err != nil {
+		metrics.IncBridgeRequest("extension", "invalid_target")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		return "", err
 	}
 
@@ -486,9 +542,13 @@ func (s *ScreenshotAppService) captureTargetWithBridge(ctx context.Context, targ
 	}
 	result, err := s.bridgeService.Submit(ctx, task)
 	if err != nil {
+		metrics.IncBridgeRequest("extension", "submit_failed")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		return "", err
 	}
 	if !result.Success {
+		metrics.IncBridgeRequest("extension", "result_failed")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		if strings.TrimSpace(result.Error) != "" {
 			return "", fmt.Errorf("bridge capture failed: %s", strings.TrimSpace(result.Error))
 		}
@@ -498,8 +558,12 @@ func (s *ScreenshotAppService) captureTargetWithBridge(ctx context.Context, targ
 		return "", fmt.Errorf("bridge capture failed")
 	}
 	if strings.TrimSpace(result.ImagePath) == "" {
+		metrics.IncBridgeRequest("extension", "missing_image_path")
+		metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 		return "", fmt.Errorf("bridge capture missing image path")
 	}
+	metrics.IncBridgeRequest("extension", "success")
+	metrics.ObserveBridgeDuration("extension", time.Since(startedAt))
 	return strings.TrimSpace(result.ImagePath), nil
 }
 

@@ -2,18 +2,23 @@ package web
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,97 +32,19 @@ func (s *Server) handleScreenshotBridgeHealth(w http.ResponseWriter, r *http.Req
 	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-
-	engine := "cdp"
-	enabled := false
-	listenAddr := ""
-	if s.config != nil {
-		engine = strings.TrimSpace(s.config.Screenshot.Engine)
-		if engine == "" {
-			engine = "cdp"
-		}
-		enabled = s.config.Screenshot.Extension.Enabled
-		listenAddr = strings.TrimSpace(s.config.Screenshot.Extension.ListenAddr)
-	}
-
-	ready := engine == "cdp" || (engine == "extension" && enabled)
-	inFlight := 0
-	workers := 0
-	queueLen := 0
-	bridgeConnected := false
-	if s.bridgeService != nil {
-		inFlight = s.bridgeService.InFlight()
-		workers = s.bridgeService.WorkerCount()
-		queueLen = s.bridgeService.QueueLen()
-		bridgeConnected = true
-	}
-	pending, _ := 0, 0
-	if s.bridgeMock != nil {
-		pending, _ = s.bridgeMock.Stats()
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":           true,
-		"engine":            engine,
-		"extension_enabled": enabled,
-		"listen_addr":       listenAddr,
-		"ready":             ready,
-		"bridge_connected":  bridgeConnected,
-		"paired_clients":    0,
-		"pending_tasks":     pending,
-		"in_flight_tasks":   inFlight,
-		"queue_len":         queueLen,
-		"worker_count":      workers,
-		"message":           "bridge skeleton ready",
-	})
+	snap := s.buildBridgeDiagnosticSnapshot()
+	snap["success"] = true
+	snap["message"] = "bridge diagnostic ready"
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func (s *Server) handleScreenshotBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-
-	engine := "cdp"
-	enabled := false
-	pairingRequired := true
-	listenAddr := ""
-	if s.config != nil {
-		engine = strings.TrimSpace(s.config.Screenshot.Engine)
-		if engine == "" {
-			engine = "cdp"
-		}
-		enabled = s.config.Screenshot.Extension.Enabled
-		pairingRequired = s.config.Screenshot.Extension.PairingRequired
-		listenAddr = strings.TrimSpace(s.config.Screenshot.Extension.ListenAddr)
-	}
-
-	inFlight := 0
-	workers := 0
-	queueLen := 0
-	if s.bridgeService != nil {
-		inFlight = s.bridgeService.InFlight()
-		workers = s.bridgeService.WorkerCount()
-		queueLen = s.bridgeService.QueueLen()
-	}
-	pending, waiters := 0, 0
-	if s.bridgeMock != nil {
-		pending, waiters = s.bridgeMock.Stats()
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":           true,
-		"engine":            engine,
-		"extension_enabled": enabled,
-		"pairing_required":  pairingRequired,
-		"listen_addr":       listenAddr,
-		"paired_clients":    0,
-		"pending_tasks":     pending,
-		"awaiting_results":  waiters,
-		"in_flight_tasks":   inFlight,
-		"queue_len":         queueLen,
-		"worker_count":      workers,
-		"last_error":        "",
-		"last_error_at":     0,
-	})
+	snap := s.buildBridgeDiagnosticSnapshot()
+	snap["success"] = true
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func (s *Server) handleScreenshotBridgePair(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +53,7 @@ func (s *Server) handleScreenshotBridgePair(w http.ResponseWriter, r *http.Reque
 	}
 
 	if !isLoopbackRequest(r) {
+		s.setBridgeLastError("forbidden_origin: bridge pairing is restricted to loopback requests")
 		writeAPIError(w, http.StatusForbidden, "forbidden_origin", "bridge pairing is restricted to loopback requests", nil)
 		return
 	}
@@ -135,10 +63,12 @@ func (s *Server) handleScreenshotBridgePair(w http.ResponseWriter, r *http.Reque
 		PairCode string `json:"pair_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.setBridgeLastError("invalid_pair_request: invalid pair request")
 		writeAPIError(w, http.StatusBadRequest, "invalid_pair_request", "invalid pair request", nil)
 		return
 	}
 	if strings.TrimSpace(req.ClientID) == "" || strings.TrimSpace(req.PairCode) == "" {
+		s.setBridgeLastError("invalid_pair_request: client_id and pair_code are required")
 		writeAPIError(w, http.StatusBadRequest, "invalid_pair_request", "client_id and pair_code are required", nil)
 		return
 	}
@@ -149,9 +79,11 @@ func (s *Server) handleScreenshotBridgePair(w http.ResponseWriter, r *http.Reque
 	}
 	token, expireAt, err := s.issueBridgeToken(ttl)
 	if err != nil {
+		s.setBridgeLastError("bridge_internal_error: failed to issue bridge token")
 		writeAPIError(w, http.StatusInternalServerError, "bridge_internal_error", "failed to issue bridge token", err.Error())
 		return
 	}
+	s.clearBridgeLastError()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":    true,
@@ -161,19 +93,84 @@ func (s *Server) handleScreenshotBridgePair(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+func (s *Server) handleScreenshotBridgeRotateToken(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if !isLoopbackRequest(r) {
+		s.setBridgeLastError("forbidden_origin: bridge token rotate is restricted to loopback requests")
+		writeAPIError(w, http.StatusForbidden, "forbidden_origin", "bridge token rotate is restricted to loopback requests", nil)
+		return
+	}
+
+	oldToken, ok := s.validateBridgeAuthIfRequired(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		RevokeOld bool `json:"revoke_old"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		s.setBridgeLastError("invalid_rotate_request: invalid rotate request payload")
+		writeAPIError(w, http.StatusBadRequest, "invalid_rotate_request", "invalid rotate request payload", nil)
+		return
+	}
+
+	ttl := 600
+	if s.config != nil && s.config.Screenshot.Extension.TokenTTLSeconds > 0 {
+		ttl = s.config.Screenshot.Extension.TokenTTLSeconds
+	}
+	newToken, expireAt, err := s.issueBridgeToken(ttl)
+	if err != nil {
+		s.setBridgeLastError("bridge_internal_error: failed to rotate bridge token")
+		writeAPIError(w, http.StatusInternalServerError, "bridge_internal_error", "failed to rotate bridge token", err.Error())
+		return
+	}
+
+	revoked := false
+	if req.RevokeOld || strings.TrimSpace(oldToken) != "" {
+		revoked = s.revokeBridgeToken(oldToken)
+	}
+	s.clearBridgeLastError()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":           true,
+		"token":             newToken,
+		"expires_in":        ttl,
+		"expire_at":         expireAt,
+		"revoked_old_token": revoked,
+	})
+}
+
 func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if !isLoopbackRequest(r) {
+		s.setBridgeLastError("forbidden_origin: mock bridge callback is restricted to loopback requests")
 		writeAPIError(w, http.StatusForbidden, "forbidden_origin", "mock bridge callback is restricted to loopback requests", nil)
 		return
 	}
 	if s.bridgeMock == nil {
+		s.setBridgeLastError("bridge_unavailable: bridge mock client not initialized")
 		writeAPIError(w, http.StatusServiceUnavailable, "bridge_unavailable", "bridge mock client not initialized", nil)
 		return
 	}
-	if !s.validateBridgeAuthIfRequired(w, r) {
+	token, ok := s.validateBridgeAuthIfRequired(w, r)
+	if !ok {
+		return
+	}
+
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.setBridgeLastError("invalid_bridge_result: failed to read bridge result payload")
+		writeAPIError(w, http.StatusBadRequest, "invalid_bridge_result", "failed to read bridge result payload", nil)
+		return
+	}
+	if err := s.validateBridgeCallbackSignatureIfRequired(r, rawBody, token); err != nil {
+		s.setBridgeLastError("unauthorized_bridge: invalid callback signature")
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized_bridge", "invalid callback signature", err.Error())
 		return
 	}
 
@@ -187,11 +184,13 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		ErrorCode string `json:"error_code"`
 		Error     string `json:"error"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(rawBody)).Decode(&req); err != nil {
+		s.setBridgeLastError("invalid_bridge_result: invalid bridge result payload")
 		writeAPIError(w, http.StatusBadRequest, "invalid_bridge_result", "invalid bridge result payload", nil)
 		return
 	}
 	if strings.TrimSpace(req.RequestID) == "" {
+		s.setBridgeLastError("invalid_bridge_result: request_id is required")
 		writeAPIError(w, http.StatusBadRequest, "invalid_bridge_result", "request_id is required", nil)
 		return
 	}
@@ -209,6 +208,7 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		}
 		savedPath, saveErr := s.persistBridgeImageData(strings.TrimSpace(req.ImageData), strings.TrimSpace(req.RequestID), batchID, targetURL)
 		if saveErr != nil {
+			s.setBridgeLastError("invalid_bridge_result: failed to persist image_data")
 			writeAPIError(w, http.StatusBadRequest, "invalid_bridge_result", "failed to persist image_data", saveErr.Error())
 			return
 		}
@@ -223,6 +223,7 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		Error:      strings.TrimSpace(req.Error),
 		DurationMS: 1,
 	})
+	s.clearBridgeLastError()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":       true,
@@ -239,14 +240,16 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 		return
 	}
 	if !isLoopbackRequest(r) {
+		s.setBridgeLastError("forbidden_origin: bridge task pull is restricted to loopback requests")
 		writeAPIError(w, http.StatusForbidden, "forbidden_origin", "bridge task pull is restricted to loopback requests", nil)
 		return
 	}
 	if s.bridgeMock == nil {
+		s.setBridgeLastError("bridge_unavailable: bridge mock client not initialized")
 		writeAPIError(w, http.StatusServiceUnavailable, "bridge_unavailable", "bridge mock client not initialized", nil)
 		return
 	}
-	if !s.validateBridgeAuthIfRequired(w, r) {
+	if _, ok := s.validateBridgeAuthIfRequired(w, r); !ok {
 		return
 	}
 
@@ -276,26 +279,126 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 			"viewport_height": task.ViewportHeight,
 		},
 	})
+	s.clearBridgeLastError()
 }
 
-func (s *Server) validateBridgeAuthIfRequired(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) validateBridgeAuthIfRequired(w http.ResponseWriter, r *http.Request) (string, bool) {
 	required := true
 	if s.config != nil {
 		required = s.config.Screenshot.Extension.PairingRequired
 	}
 	if !required {
-		return true
+		return "", true
 	}
 	raw := strings.TrimSpace(r.Header.Get("Authorization"))
 	if raw == "" || !strings.HasPrefix(strings.ToLower(raw), "bearer ") {
+		s.setBridgeLastError("unauthorized_bridge: missing bridge bearer token")
 		writeAPIError(w, http.StatusUnauthorized, "unauthorized_bridge", "missing bridge bearer token", nil)
-		return false
+		return "", false
 	}
 	token := strings.TrimSpace(raw[7:])
 	if token == "" || !s.validateBridgeToken(token) {
+		s.setBridgeLastError("unauthorized_bridge: invalid or expired bridge token")
 		writeAPIError(w, http.StatusUnauthorized, "unauthorized_bridge", "invalid or expired bridge token", nil)
+		return "", false
+	}
+	return token, true
+}
+
+func (s *Server) validateBridgeCallbackSignatureIfRequired(r *http.Request, body []byte, token string) error {
+	required := false
+	skewSeconds := 300
+	nonceTTLSeconds := 600
+	if s.config != nil {
+		required = s.config.Screenshot.Extension.CallbackSignatureRequired
+		if s.config.Screenshot.Extension.CallbackSignatureSkewSeconds > 0 {
+			skewSeconds = s.config.Screenshot.Extension.CallbackSignatureSkewSeconds
+		}
+		if s.config.Screenshot.Extension.CallbackNonceTTLSeconds > 0 {
+			nonceTTLSeconds = s.config.Screenshot.Extension.CallbackNonceTTLSeconds
+		}
+	}
+	if !required {
+		return nil
+	}
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("bridge callback signature requires pairing token")
+	}
+
+	timestampRaw := strings.TrimSpace(r.Header.Get("X-Bridge-Timestamp"))
+	nonce := strings.TrimSpace(r.Header.Get("X-Bridge-Nonce"))
+	signature := strings.TrimSpace(r.Header.Get("X-Bridge-Signature"))
+	if timestampRaw == "" || nonce == "" || signature == "" {
+		return fmt.Errorf("missing bridge signature headers")
+	}
+
+	ts, err := strconv.ParseInt(timestampRaw, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid bridge timestamp")
+	}
+	now := time.Now().Unix()
+	if ts < now-int64(skewSeconds) || ts > now+int64(skewSeconds) {
+		return fmt.Errorf("bridge signature timestamp out of allowed skew")
+	}
+
+	if len(nonce) < 8 || len(nonce) > 128 {
+		return fmt.Errorf("invalid bridge nonce length")
+	}
+	for _, ch := range nonce {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' {
+			continue
+		}
+		return fmt.Errorf("invalid bridge nonce format")
+	}
+
+	lowerSig := strings.ToLower(signature)
+	if strings.HasPrefix(lowerSig, "sha256=") {
+		signature = strings.TrimSpace(signature[7:])
+	}
+	provided, err := hex.DecodeString(strings.TrimSpace(signature))
+	if err != nil {
+		return fmt.Errorf("invalid bridge signature encoding")
+	}
+
+	bodyHash := sha256.Sum256(body)
+	canonical := fmt.Sprintf("%d\n%s\n%s", ts, nonce, hex.EncodeToString(bodyHash[:]))
+	mac := hmac.New(sha256.New, []byte(token))
+	_, _ = mac.Write([]byte(canonical))
+	expected := mac.Sum(nil)
+	if !hmac.Equal(provided, expected) {
+		return fmt.Errorf("bridge signature mismatch")
+	}
+
+	if !s.consumeBridgeCallbackNonce(token, nonce, now+int64(nonceTTLSeconds)) {
+		return fmt.Errorf("bridge nonce replay detected")
+	}
+
+	return nil
+}
+
+func (s *Server) consumeBridgeCallbackNonce(token, nonce string, expireAt int64) bool {
+	if s == nil {
 		return false
 	}
+	now := time.Now().Unix()
+	key := token + ":" + nonce
+
+	s.configMutex.Lock()
+	if s.bridgeCallbackNonces == nil {
+		s.bridgeCallbackNonces = make(map[string]int64)
+	}
+	for k, exp := range s.bridgeCallbackNonces {
+		if exp <= now {
+			delete(s.bridgeCallbackNonces, k)
+		}
+	}
+	if _, exists := s.bridgeCallbackNonces[key]; exists {
+		s.configMutex.Unlock()
+		return false
+	}
+	s.bridgeCallbackNonces[key] = expireAt
+	s.configMutex.Unlock()
+
 	return true
 }
 
@@ -339,6 +442,34 @@ func (s *Server) validateBridgeToken(token string) bool {
 		delete(s.bridgeTokens, token)
 		return false
 	}
+	return true
+}
+
+func (s *Server) revokeBridgeToken(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+
+	s.configMutex.Lock()
+	defer s.configMutex.Unlock()
+	if s.bridgeTokens == nil {
+		return false
+	}
+	if _, ok := s.bridgeTokens[token]; !ok {
+		return false
+	}
+	delete(s.bridgeTokens, token)
+
+	if s.bridgeCallbackNonces != nil {
+		prefix := token + ":"
+		for k := range s.bridgeCallbackNonces {
+			if strings.HasPrefix(k, prefix) {
+				delete(s.bridgeCallbackNonces, k)
+			}
+		}
+	}
+
 	return true
 }
 
@@ -471,4 +602,97 @@ func isLoopbackRequest(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Server) setBridgeLastError(message string) {
+	if s == nil {
+		return
+	}
+	s.configMutex.Lock()
+	s.bridgeLastErr = strings.TrimSpace(message)
+	s.bridgeLastAt = time.Now().Unix()
+	s.configMutex.Unlock()
+}
+
+func (s *Server) clearBridgeLastError() {
+	if s == nil {
+		return
+	}
+	s.configMutex.Lock()
+	s.bridgeLastErr = ""
+	s.bridgeLastAt = 0
+	s.configMutex.Unlock()
+}
+
+func (s *Server) activeBridgeTokens() int {
+	if s == nil {
+		return 0
+	}
+	now := time.Now().Unix()
+	count := 0
+	s.configMutex.Lock()
+	for token, expireAt := range s.bridgeTokens {
+		if expireAt <= now {
+			delete(s.bridgeTokens, token)
+			continue
+		}
+		count++
+	}
+	s.configMutex.Unlock()
+	return count
+}
+
+func (s *Server) buildBridgeDiagnosticSnapshot() map[string]interface{} {
+	engine := "cdp"
+	enabled := false
+	pairingRequired := true
+	listenAddr := ""
+	if s.config != nil {
+		engine = strings.TrimSpace(s.config.Screenshot.Engine)
+		if engine == "" {
+			engine = "cdp"
+		}
+		enabled = s.config.Screenshot.Extension.Enabled
+		pairingRequired = s.config.Screenshot.Extension.PairingRequired
+		listenAddr = strings.TrimSpace(s.config.Screenshot.Extension.ListenAddr)
+	}
+
+	inFlight := 0
+	workers := 0
+	queueLen := 0
+	bridgeConnected := false
+	if s.bridgeService != nil {
+		inFlight = s.bridgeService.InFlight()
+		workers = s.bridgeService.WorkerCount()
+		queueLen = s.bridgeService.QueueLen()
+		bridgeConnected = true
+	}
+	pending, waiters := 0, 0
+	if s.bridgeMock != nil {
+		pending, waiters = s.bridgeMock.Stats()
+	}
+
+	ready := engine == "cdp" || (engine == "extension" && enabled && bridgeConnected)
+
+	s.configMutex.Lock()
+	lastErr := s.bridgeLastErr
+	lastAt := s.bridgeLastAt
+	s.configMutex.Unlock()
+
+	return map[string]interface{}{
+		"engine":            engine,
+		"extension_enabled": enabled,
+		"pairing_required":  pairingRequired,
+		"listen_addr":       listenAddr,
+		"ready":             ready,
+		"bridge_connected":  bridgeConnected,
+		"paired_clients":    s.activeBridgeTokens(),
+		"pending_tasks":     pending,
+		"awaiting_results":  waiters,
+		"in_flight_tasks":   inFlight,
+		"queue_len":         queueLen,
+		"worker_count":      workers,
+		"last_error":        lastErr,
+		"last_error_at":     lastAt,
+	}
 }

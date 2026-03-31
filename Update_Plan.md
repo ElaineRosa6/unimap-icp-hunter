@@ -69,6 +69,109 @@
 10. 当前代码健康度
   - 全量测试通过：`go test ./...`（2026-03-30）。
 
+11. Day 8 查询自动截图改造已完成（2026-03-30）
+  - 查询自动截图已切换为通过 `ScreenshotAppService` 执行，支持当前引擎策略。
+  - 移除了“CDP 在线性检查失败即中断浏览器联动”的强依赖。
+  - 在截图能力不可用时仅记录 `autoCaptureErrors`，不阻断主查询结果返回。
+  - 回归通过：`go test ./internal/service ./web`、`go test ./...`。
+
+12. Day 9 Cookie 语义分流已完成（2026-03-30）
+  - `handleSaveCookies` 在 extension 模式下改为兼容提示，不再执行 cookie 注入。
+  - `applyCookiesFromRequest` 已按引擎分流：cdp 保留 cookie/proxy 写入，extension 仅保留 proxy 更新。
+  - `handleVerifyCookies` 已分流：cdp 继续走 `ValidateSearchEngineResult`，extension 走 bridge 任务验证路径。
+  - `ValidateSearchEngineResult/loadPageContent` 已补充 CDP-only 作用域注释，避免后续误复用。
+  - 回归通过：`go test ./web ./internal/screenshot ./internal/service`、`go test ./...`。
+
+13. Day 10 可观测与诊断补齐已完成（2026-03-30）
+  - 已新增 bridge 指标：请求量、耗时、重试、超时、fallback 计数。
+  - 已在 bridge 执行路径接入指标打点（single / target / batch urls）。
+  - bridge status/health 已改为统一诊断快照输出，新增 `last_error`、`last_error_at`、`paired_clients` 等字段。
+  - 已在关键 bridge 错误路径记录最近错误，支持快速定位认证/回调/任务拉取故障。
+  - 回归通过：`go test ./internal/metrics ./internal/screenshot ./internal/service ./web`、`go test ./...`。
+
+14. Day 11 灰度与回退演练准备已完成（2026-03-30）
+  - 已在配置样例中补充三套 profile 模板：`cdp-only`、`extension-with-fallback`、`extension-only`。
+  - 已新增回退脚本：`scripts/rollback_extension_to_cdp.ps1`、`scripts/rollback_extension_to_cdp.sh`。
+  - 已新增演练记录模板：`archive/ROLLBACK_DRILL_2026-03-30.md`。
+  - 回退脚本支持将配置切换为 `engine=cdp`、`extension.enabled=false`、`fallback_to_cdp=true`，并给出服务重启与健康检查提示。
+
+15. Day 12 发布文档封板已完成（2026-03-30）
+  - README 已补充插件安装、配对流程、引擎切换、故障排查、回退触发条件。
+  - 已新增运维手册：`docs/OPS_SCREENSHOT_EXTENSION.md`。
+  - 已新增发布检查清单：`archive/RELEASE_CHECKLIST_2026-03-30.md`。
+  - Day 12 文档交付目标已完成，可进入新增 P0 需求实施阶段。
+
+16. Day 13 代理池能力已完成（2026-03-30）
+  - 已新增代理池组件：`internal/proxypool/pool.go`（轮询、失败阈值、冷却、可选直连回退）。
+  - 已新增配置：`network.proxy_pool`（`enabled/strategy/proxies/failure_threshold/cooldown_seconds/allow_direct_fallback`）。
+  - 已接入 monitor 探活链路：按任务选择代理并回报成功/失败，结果新增 `proxy` 字段。
+  - 已接入 screenshot/tamper 链路：通过请求级代理注入，避免全局切换造成并发串扰。
+  - 回归通过：`go test ./...`。
+
+17. Day 14 URL->IP 端口扫描 + CDN 排除已完成（2026-03-30）
+  - 已新增服务：`internal/service/monitor_port_scan_service.go`。
+  - 已实现流程：URL 规范化 -> IPv4 解析 -> CDN 多信号判定 -> 非 CDN 端口扫描。
+  - 已实现 CDN 排除策略：命中后返回 `cdn_excluded`，默认不对共享边缘节点执行端口扫描。
+  - 已新增 API：`POST /api/url/port-scan`，返回 summary/ports/results。
+  - 扫描结果状态覆盖：`invalid_format`、`resolve_failed`、`cdn_excluded`、`scan_failed`、`scanned`。
+  - 已新增服务层回归测试：`internal/service/monitor_port_scan_service_test.go`，覆盖端口规范化、CDN 判定、本地可控扫描与 CDN 排除路径。
+
+18. Day 16 文档状态同步 + 生产化加固（2026-03-31）
+  - 代码实证同步已完成（按实现文件核对文档状态）：
+    - bridge 鉴权与回调路径：`web/screenshot_bridge_handlers.go`
+    - bridge 服务初始化与状态缓存：`web/server.go`
+    - extension 回调发送路径：`tools/extension-screenshot/src/background.js`、`tools/extension-screenshot/src/api.js`
+    - 配置定义与默认/校验：`internal/config/config.go`、`configs/config.yaml.example`
+  - 生产化加固已落地：
+    - 新增回调签名校验（HMAC-SHA256）+ 时间戳窗口校验。
+    - 新增 nonce 防重放缓存校验。
+    - 新增 token 轮换接口：`POST /api/screenshot/bridge/token/rotate`（可撤销旧 token）。
+    - 新增配置项：`callback_signature_required`、`callback_signature_skew_seconds`、`callback_nonce_ttl_seconds`。
+    - extension 回调已默认携带签名头（`X-Bridge-Timestamp`、`X-Bridge-Nonce`、`X-Bridge-Signature`）。
+    - extension 已增加 token 临期主动轮换逻辑（失败不阻断任务拉取）。
+  - 测试与门禁：
+    - 新增回归测试：`web/screenshot_bridge_handlers_test.go`（签名缺失拒绝、签名通过、重放拒绝）。
+    - 新增回归测试：`web/screenshot_bridge_handlers_test.go`（token 轮换成功且旧 token 撤销）。
+    - 新增 CI 冒烟：`.github/workflows/bridge-smoke.yml`（bridge 测试 + extension 脚本语法检查）。
+    - `scripts/bridge_e2e.ps1` 已支持 `-StrictSignature` 与 `-RotateToken` 参数用于严格模式演练。
+  - 验证结果：`go test ./web ./internal/config` 通过。
+
+### Day 13/14/15 实施对齐核查（2026-03-30）
+
+核查口径：按“计划目标 -> 已实现代码 -> 文档状态 -> 结论”逐项核对。
+
+1. Day 13（代理池，P0）
+  - 计划目标：代理池配置、轮询/熔断、接入探活+截图+篡改。
+  - 已实现代码：
+    - `internal/proxypool/pool.go`
+    - `internal/config/config.go`（`network.proxy_pool`）
+    - `internal/service/monitor_app_service.go`（探活按任务选代理）
+    - `web/screenshot_handlers.go`、`web/tamper_handlers.go`（请求级代理注入）
+  - 文档状态：`Update_Plan.md`、`configs/config.yaml.example`、`docs/OPS_SCREENSHOT_EXTENSION.md` 已覆盖。
+  - 结论：已对齐（通过）。
+
+2. Day 14（端口扫描 + CDN 排除，P0）
+  - 计划目标：URL->IP、CDN 判定、非 CDN 端口扫描、API 暴露。
+  - 已实现代码：
+    - `internal/service/monitor_port_scan_service.go`
+    - `web/monitor_handlers.go`（`handleURLPortScan`）
+    - `web/router.go`（`POST /api/url/port-scan`）
+    - `internal/service/monitor_port_scan_service_test.go`（回归测试）
+  - 文档状态：`Update_Plan.md`、`docs/OPS_SCREENSHOT_EXTENSION.md` 已覆盖。
+  - 结论：已对齐（通过）。
+
+3. Day 15（分布式节点，P1 可选）
+  - 计划目标：节点注册/心跳、调度、任务分配回传、网络画像。
+  - 当前代码状态：D15-A/B/C/D/E/F 已完成（注册心跳、任务闭环、网络画像、节点/管理侧鉴权、E2E 演练）。
+  - 文档状态：`Update_Plan.md`、`README.md`、`archive/DAY15_ACCEPTANCE_RECORD_2026-03-30.md` 已同步。
+  - 结论：计划与实现已对齐（通过）。
+
+核查结论汇总：
+
+1. Day 13：代码与文档对齐。
+2. Day 14：代码与文档对齐。
+3. Day 15：代码与文档对齐，具备灰度发布条件。
+
 ### 当前状态结论
 
 1. 目前已形成“后端桥接 + 插件拉取 + 结果回传 + 文件落盘”的可运行闭环。
@@ -76,20 +179,19 @@
 3. 监控页面“基线全失败”误判已消除，前端结果展示与后端返回语义已对齐。
 4. 现阶段仍以 mock 回传协议为主，适合开发验证，不建议直接生产上线。
 
-### 下一步计划（一次性收口建议）
+### 下一步计划（发布收口）
 
-1. 收口 Day 8：查询自动截图改造
-  - 将自动截图从 CDP 强依赖改为引擎可用性检查。
-  - 保持 `autoCapturedPaths` 返回结构兼容。
+1. 发布门禁收口
+  - 完成发布清单 Final Decision（GO/NO-GO）、Owner、Timestamp、Notes 归档。
+  - 将 Day15 验收记录纳入发布证据链。
 
-2. 收口 Day 9：Cookie 语义按引擎分流
-  - extension 以浏览器登录态为主，减少后端 Cookie 注入依赖。
-  - cdp 继续保持原能力，避免回归。
+2. 文档一致性收口
+  - 统一 Day13-15 状态口径，移除历史“未开始”描述。
+  - 在本文件维护最终执行状态表（Done/In Progress/Todo）。
 
-3. 收口 Day 10-12：可观测、灰度、发布
-  - 指标/诊断接口补齐。
-  - 三套配置模板与回退演练文档落盘。
-  - 发布清单与运维手册完成封板。
+3. 生产化安全加固
+  - 将 bridge 回调从 mock 语义收口为生产契约（字段、签名、验签失败处理）。
+  - 增加 token/session 轮换策略与最小 CI 冒烟校验。
 
 ### 提交分组建议（按已完成工作拆分）
 
@@ -120,11 +222,241 @@
 
 ### 下一阶段立即执行清单（2026-03-30 更新）
 
-1. 完成 Day 8：查询自动截图改造为引擎可用性检查，去除 CDP 强绑定。
-2. 完成 Day 9：cookie 语义按引擎分流（extension 优先浏览器登录态）。
-3. 按 A-E 分组提交已完成改造，先收口当前未提交工作区改动。
-4. 补充 Day 10 指标与诊断字段，确保回退行为可观测。
-5. 落地 Day 11/12 发布前回退演练与发布清单文档。
+1. 完成发布清单最终裁决与责任人确认（GO for controlled gray rollout）。
+2. 将 Day15 验收记录与发布检查清单建立互相引用，作为发布证据。
+3. 启动 Day16 生产加固任务：回调签名、token/session 轮换、CI 冒烟。
+
+### 最终执行状态表（2026-03-31）
+
+| 范围 | 状态 | 结论 |
+| --- | --- | --- |
+| Day 2-7（双引擎与桥接闭环） | Done | 已完成并通过回归。 |
+| Day 8-12（查询自动截图、Cookie 分流、观测、灰度、发布文档） | Done | 已完成并通过回归。 |
+| Day 13（代理池，P0） | Done | 已落地并接入关键链路。 |
+| Day 14（URL->IP 端口扫描 + CDN 排除，P0） | Done | 已落地并开放 API。 |
+| Day 15（分布式节点，P1 可选） | Done | D15-A~F 完成，验收通过，可灰度。 |
+| 发布裁决（Release GO/NO-GO） | In Progress | 清单已补证据，待负责人最终签发。 |
+| 生产化安全加固（回调签名/轮换/CI 冒烟） | Done | 回调签名、重放防护、token 轮换与 CI 冒烟已完成；可进入下一轮生产契约细化。 |
+
+### 新增需求补充（2026-03-30）
+
+优先级定义：
+
+1. 必选 P0：代理池能力（用于受限网络环境）。
+2. 必选 P0：同 URL 对应 IP 的端口扫描能力（含 CDN 智能识别与排除）。
+3. 可选 P1：分布式节点与节点网络信息采集能力（与代理池并行设计，但不阻塞 P0 交付）。
+
+新增执行计划：
+
+1. Day 13（P0）：代理池能力落地
+  - 新增代理池配置（静态列表 + 健康检查 + 轮询/失败熔断）。
+  - 接入探活、基线、篡改、截图链路的统一出站策略。
+  - 输出代理可用率与失败原因统计。
+
+2. Day 14（P0）：端口扫描 + CDN 排除落地
+  - 对输入 URL 先解析域名与候选 IP，再执行 CDN 判定。
+  - CDN 场景默认不扫共享边缘节点，仅输出“CDN 命中+原因+建议源站排查”。
+  - 非 CDN 场景执行端口扫描（默认常见端口，可扩展自定义端口集）。
+
+3. Day 15（P1，可选）：分布式节点与网络信息采集
+  - 增加节点注册/心跳/能力上报。
+  - 调度侧支持按节点网络区域或出站质量分配任务。
+  - 汇总节点公网出口、延迟、成功率等网络画像信息。
+
+Day15 当前进展（2026-03-30 实施中）：
+
+1. D15-A 已落地：节点注册/心跳/状态查询首版完成。
+2. 已新增：`/api/nodes/register`、`/api/nodes/heartbeat`、`/api/nodes/status`。
+3. 已新增内存节点目录：`internal/distributed/registry.go`。
+4. 已新增首版 Web 回归测试：`web/node_handlers_test.go`。
+5. D15-B 已落地（基础任务闭环）：
+  - 已新增内存任务队列：`internal/distributed/task_queue.go`。
+  - 已新增任务 API：`/api/nodes/task/enqueue|claim|result|status`。
+  - 已新增回归测试：`internal/distributed/task_queue_test.go`、`web/node_task_handlers_test.go`。
+6. D15-C 已落地（网络画像与灰度开关）：
+  - 已新增配置：`distributed.enabled`、`distributed.heartbeat_timeout_seconds`、`distributed.max_reassign_attempts`、`distributed.scheduler.strategy`、`distributed.node_auth_tokens`。
+  - 已新增网络画像 API：`GET /api/nodes/network/profile`。
+  - 分布式节点与任务 API 已受开关控制：关闭时返回 `distributed_disabled`，支持一键回退单机。
+  - 已补充回归测试覆盖开关关闭与网络画像输出路径。
+7. D15-D 已落地（节点鉴权加固）：
+  - 已将 `distributed.node_auth_tokens` 接入节点侧接口鉴权。
+  - 已覆盖接口：`/api/nodes/register`、`/api/nodes/heartbeat`、`/api/nodes/task/claim`、`/api/nodes/task/result`。
+  - 鉴权规则：当 `node_auth_tokens` 非空时，要求 `Authorization: Bearer <token>`（兼容 `X-Node-Token`）且与 `node_id` 映射匹配。
+  - 已新增 Web 回归测试覆盖未鉴权拒绝（401）与鉴权通过路径。
+8. D15-E 已落地（端到端演练脚本）：
+  - 已新增一键演练脚本：`scripts/day15_distributed_e2e.ps1`、`scripts/day15_distributed_e2e.sh`。
+  - 覆盖流程：register -> heartbeat -> enqueue -> claim -> result -> task status -> network profile。
+  - 可用于灰度环境快速验收与问题复现。
+9. D15-F 已落地（管理侧接口鉴权）：
+  - 已新增配置：`distributed.admin_token`（可选）。
+  - 已覆盖接口：`/api/nodes/status`、`/api/nodes/network/profile`、`/api/nodes/task/enqueue`、`/api/nodes/task/status`。
+  - 当 `admin_token` 非空时，要求 `Authorization: Bearer <admin-token>`（兼容 `X-Admin-Token`）。
+  - 已新增 Web 回归测试覆盖未鉴权拒绝（401）与鉴权通过路径。
+
+Day13-15 发布证据链（2026-03-31 收口）：
+
+1. 发布检查清单：`archive/RELEASE_CHECKLIST_2026-03-30.md`。
+2. Day15 验收记录：`archive/DAY15_ACCEPTANCE_RECORD_2026-03-30.md`。
+3. 回退演练记录：`archive/ROLLBACK_DRILL_2026-03-30.md`。
+
+发布评审时需同时确认：
+
+1. 验收结论与发布裁决一致（GO/NO-GO）。
+2. 回退步骤可在目标窗口内执行。
+3. 风险备注与后续加固任务已登记。
+
+新增验收标准：
+
+1. 代理池（必选）：在受限网络下可切换可用代理继续任务，失败率显著下降且可观测。
+2. 端口扫描（必选）：扫描结果可区分 CDN 与非 CDN，默认不对 CDN 共享边缘 IP 误扫。
+3. 分布式（可选）：节点离线不影响单机主流程，启用后可获得节点网络信息与调度收益。
+
+### Day 15 详细实施规划（2026-03-30）
+
+目标定义：
+
+1. 在不影响当前单机主流程的前提下，引入“可选分布式节点”能力。
+2. 调度层支持按节点状态与网络画像分配任务，具备最小可用容错。
+3. 产出可观测与可回滚的交付件，便于灰度启停。
+
+范围边界（本期包含）：
+
+1. 节点注册、心跳、能力上报。
+2. 节点调度（基础轮询 + 健康过滤 + 简单负载优先）。
+3. 节点任务下发与结果回传协议（HTTP）。
+4. 节点网络画像采集与查询（公网出口、延迟、成功率）。
+
+范围边界（本期不包含）：
+
+1. 跨机房强一致队列。
+2. 多租户隔离与计费。
+3. 复杂流量编排（如按国家/ASN/策略路由）。
+
+总体架构：
+
+1. Controller（现有 Web 服务）：维护节点目录、任务分配、状态聚合。
+2. Worker Node（新增轻量节点进程或现有实例 agent 模式）：执行任务并回报结果。
+3. Node Registry（内存优先，预留持久化接口）：存储节点元数据与在线状态。
+4. Scheduler（内置模块）：按节点健康、并发占用、网络质量选择节点。
+
+数据结构规划：
+
+1. NodeDescriptor
+  - node_id, hostname, region, labels, capabilities。
+2. NodeHeartbeat
+  - node_id, timestamp, current_load, max_concurrency, version。
+3. NodeNetworkProfile
+  - egress_ip, avg_latency_ms, success_rate_5m, fail_reason_topn。
+4. DistributedTaskEnvelope
+  - task_id, task_type, payload, priority, timeout_seconds, trace_id。
+5. DistributedTaskResult
+  - task_id, node_id, status, duration_ms, output, error。
+
+API 规划（Controller 侧）：
+
+1. POST /api/nodes/register
+  - 作用：节点注册或刷新节点元数据。
+2. POST /api/nodes/heartbeat
+  - 作用：更新节点在线状态与负载。
+3. GET /api/nodes/status
+  - 作用：返回节点在线列表、负载与最近心跳。
+4. POST /api/nodes/task/claim
+  - 作用：节点主动拉取可执行任务。
+5. POST /api/nodes/task/result
+  - 作用：节点提交任务执行结果。
+6. GET /api/nodes/network/profile
+  - 作用：查询节点网络画像汇总。
+
+调度策略（Day15 首版）：
+
+1. 仅选择“心跳未超时 + 能力匹配 + 未达并发上限”的节点。
+2. 在候选集中按 `success_rate_5m` 降序、`current_load` 升序选择。
+3. 当无可用节点时自动回退本机执行（不阻断现有主流程）。
+4. 任务超时或节点失联后触发一次重分配，避免无限重试。
+
+安全与一致性：
+
+1. 节点鉴权：`node_id + token`（首版静态签发，后续可轮换）。
+2. 幂等约束：`task_id` 唯一，重复回传只采纳首个成功结果。
+3. 时间窗校验：心跳与结果时间戳允许固定漂移窗口。
+4. 最小审计：记录注册、心跳、任务分配、结果回传关键事件。
+
+可观测规划：
+
+1. 指标
+  - distributed_nodes_online
+  - distributed_task_dispatch_total{status}
+  - distributed_task_duration_seconds
+  - distributed_node_heartbeat_lag_seconds
+2. 诊断接口
+  - /api/nodes/status
+  - /api/nodes/network/profile
+3. 关键日志
+  - 节点上下线、分配失败、重分配、回退本机执行。
+
+实施拆分（可回滚提交）：
+
+1. D15-A：节点注册与心跳基建
+  - 文件建议：
+    - internal/distributed/registry.go
+    - internal/distributed/types.go
+    - web/node_handlers.go
+    - web/router.go
+  - 交付：register/heartbeat/status 可用，支持在线节点列表。
+  - 提交建议：`day15-a: add node registry register heartbeat status`
+
+2. D15-B：任务调度与节点拉取执行
+  - 文件建议：
+    - internal/distributed/scheduler.go
+    - internal/distributed/task_queue.go
+    - web/node_task_handlers.go
+    - internal/service/*（按现有任务入口接入调度）
+  - 交付：task/claim 与 task/result 闭环，超时后单次重分配。
+  - 提交建议：`day15-b: implement distributed task claim result and scheduler`
+
+3. D15-C：网络画像与灰度开关
+  - 文件建议：
+    - internal/distributed/network_profile.go
+    - internal/config/config.go（distributed 开关与阈值）
+    - configs/config.yaml.example
+    - docs/OPS_SCREENSHOT_EXTENSION.md（新增 Day15 运维段落）
+  - 交付：网络画像接口与配置开关，支持一键关闭分布式回退单机。
+  - 提交建议：`day15-c: add node network profile metrics and rollout controls`
+
+配置规划（新增块建议）：
+
+1. distributed.enabled: false（默认关闭）。
+2. distributed.heartbeat_timeout_seconds: 30。
+3. distributed.max_reassign_attempts: 1。
+4. distributed.node_auth_tokens: map[node_id]token。
+5. distributed.scheduler.strategy: health_load。
+
+测试计划：
+
+1. 单元测试
+  - registry 增删改查、心跳超时摘除。
+  - scheduler 候选过滤与排序正确性。
+  - task 幂等与重复结果处理。
+2. 集成测试
+  - 2 节点 + 1 控制器：注册、心跳、拉取、回传全流程。
+  - 节点失联场景：任务重分配与本机回退。
+3. 回归门禁
+  - `go test ./...`
+  - 分布式开关关闭时行为与当前版本一致。
+
+验收标准（Day15 交付判定）：
+
+1. 在 `distributed.enabled=true` 下，至少 2 节点可稳定注册并维持心跳。
+2. 任务可成功分配到节点执行并回传结果，成功率达到基线目标。
+3. 节点离线后，任务可在重分配后完成或回退本机，不出现任务丢失。
+4. 指标与诊断接口可用于定位节点与调度异常。
+5. 在 `distributed.enabled=false` 下，系统完全回退单机模式且通过全量回归。
+
+回滚策略：
+
+1. 配置回滚：`distributed.enabled=false` 并重启服务。
+2. 行为回滚：调度失败统一回退本机执行。
+3. 代码回滚：按 D15-A/B/C 提交粒度逐步回退。
 
 ## 三、按天可执行任务清单（文件/函数级别）
 
@@ -1726,6 +2058,9 @@ git commit -m "day12: release hardening docs runbook and final checklist"
 2. M2（Day 7 结束）：双引擎并存可切换。
 3. M3（Day 10 结束）：观测与诊断能力可用。
 4. M4（Day 12 结束）：可灰度发布、可快速回退。
+5. M5（Day 13 结束）：代理池能力上线（P0）。
+6. M6（Day 14 结束）：端口扫描 + CDN 排除能力上线（P0）。
+7. M7（Day 15 结束，可选）：分布式节点能力可用（P1）。
 
 ## 六、风险与对策
 
@@ -1737,6 +2072,12 @@ git commit -m "day12: release hardening docs runbook and final checklist"
    - 对策：启动时做能力检测并输出提示。
 4. 插件未安装/被禁用
    - 对策：桥接健康检查 + fallback_to_cdp。
+5. 代理源质量波动导致结果不稳定
+  - 对策：代理健康评分、失败熔断、按场景回退直连或更换代理。
+6. CDN 识别误判导致漏扫或误扫
+  - 对策：多信号判定（ASN/CNAME/响应头/IP段），支持人工覆写白名单。
+7. 分布式节点不稳定或数据不一致（可选模块）
+  - 对策：节点心跳超时摘除、任务幂等、结果签名与时间窗校验。
 
 ## 七、建议实施顺序（最小风险）
 
@@ -1744,3 +2085,5 @@ git commit -m "day12: release hardening docs runbook and final checklist"
 2. Day 4-5：再做桥接协议与服务端闭环。
 3. Day 6-7：接入插件并完成双引擎。
 4. Day 8-12：完成自动截图、观测、灰度、发布。
+5. Day 13-14（必选 P0）：先交付代理池与端口扫描（含 CDN 排除）。
+6. Day 15（可选 P1）：按资源投入推进分布式节点与网络信息采集。

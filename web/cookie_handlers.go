@@ -1,13 +1,16 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/screenshot"
 )
 
 // handleImportCookieJSON 导入浏览器导出的Cookie JSON
@@ -20,6 +23,15 @@ func (s *Server) handleImportCookieJSON(w http.ResponseWriter, r *http.Request) 
 	}
 	if s.config == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "config_not_loaded", "config not loaded", nil)
+		return
+	}
+	if s.currentScreenshotEngine() == "extension" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success":      true,
+			"cookieHeader": "",
+			"engine":       "extension",
+			"message":      "extension mode uses browser session; cookie import is optional",
+		})
 		return
 	}
 
@@ -78,11 +90,6 @@ func (s *Server) handleVerifyCookies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.screenshotMgr == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "screenshot_manager_unavailable", "screenshot manager not initialized", nil)
-		return
-	}
-
 	query := strings.TrimSpace(r.FormValue("query"))
 	if err := validateQueryInput(query); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_query", err.Error(), nil)
@@ -102,9 +109,9 @@ func (s *Server) handleVerifyCookies(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	results := make(map[string]interface{})
+	engineMode := s.currentScreenshotEngine()
 	for _, engine := range engines {
-		cookies := s.screenshotMgr.GetCookies(engine)
-		ok, title, hint, err := s.screenshotMgr.ValidateSearchEngineResult(ctx, engine, query, cookies)
+		ok, title, hint, err := s.verifyEngineSession(ctx, engineMode, engine, query)
 		payload := map[string]interface{}{
 			"ok":    ok,
 			"title": title,
@@ -133,10 +140,21 @@ func (s *Server) handleSaveCookies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.applyCookiesFromRequest(r)
+	engineMode := s.currentScreenshotEngine()
+	if engineMode == "extension" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"engine":  "extension",
+			"message": "extension mode uses browser session; cookie injection is skipped",
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+		"engine":  engineMode,
 	})
 }
 
@@ -148,6 +166,30 @@ func (s *Server) applyCookiesFromRequest(r *http.Request) {
 
 	s.configMutex.Lock()
 	defer s.configMutex.Unlock()
+
+	engineMode := s.currentScreenshotEngine()
+
+	if engineMode == "extension" {
+		changed := false
+		if _, present := r.Form["proxy_server"]; present {
+			proxy := strings.TrimSpace(r.FormValue("proxy_server"))
+			if s.config.Screenshot.ProxyServer != proxy {
+				s.config.Screenshot.ProxyServer = proxy
+				changed = true
+				if s.screenshotMgr != nil {
+					s.screenshotMgr.SetProxyServer(proxy)
+				}
+			}
+		}
+
+		if changed && s.configManager != nil {
+			if err := s.configManager.Save(); err != nil {
+				logger.Warnf("Failed to persist extension proxy config: %v", err)
+			}
+		}
+		logger.Infof("Cookie apply mode=extension_session: skipped cookie injection, proxy update only")
+		return
+	}
 
 	changed := false
 	clear := strings.EqualFold(strings.TrimSpace(r.FormValue("clear_cookies")), "true")
@@ -218,6 +260,61 @@ func (s *Server) applyCookiesFromRequest(r *http.Request) {
 			logger.Warnf("Failed to persist cookies: %v", err)
 		}
 	}
+	logger.Infof("Cookie apply mode=cdp_cookie_injection: cookie/proxy updates applied")
+}
+
+func (s *Server) currentScreenshotEngine() string {
+	if s == nil || s.config == nil {
+		return "cdp"
+	}
+	engine := strings.ToLower(strings.TrimSpace(s.config.Screenshot.Engine))
+	if engine == "extension" {
+		return "extension"
+	}
+	return "cdp"
+}
+
+func (s *Server) verifyEngineSession(ctx context.Context, engineMode, engine, query string) (bool, string, string, error) {
+	if engineMode == "extension" {
+		if s.bridgeService == nil {
+			return false, "", "extension_not_paired", fmt.Errorf("bridge_unavailable")
+		}
+		if s.screenshotMgr == nil {
+			return false, "", "extension_session_required", fmt.Errorf("screenshot manager not initialized")
+		}
+
+		searchURL := strings.TrimSpace(s.screenshotMgr.BuildSearchEngineURL(engine, query))
+		if searchURL == "" {
+			return false, "", "unsupported engine", fmt.Errorf("unsupported engine: %s", engine)
+		}
+
+		result, err := s.bridgeService.Submit(ctx, screenshot.BridgeTask{
+			RequestID:    fmt.Sprintf("verify_%s_%d", strings.ToLower(strings.TrimSpace(engine)), time.Now().UnixNano()),
+			URL:          searchURL,
+			BatchID:      "cookie_verify",
+			WaitStrategy: "load",
+		})
+		if err != nil {
+			return false, "", "extension_session_required", err
+		}
+		if !result.Success {
+			if strings.TrimSpace(result.Error) != "" {
+				return false, "", "extension_session_required", fmt.Errorf("%s", result.Error)
+			}
+			if strings.TrimSpace(result.ErrorCode) != "" {
+				return false, "", "extension_session_required", fmt.Errorf("%s", result.ErrorCode)
+			}
+			return false, "", "extension_session_required", fmt.Errorf("extension verification failed")
+		}
+
+		return true, "extension_session_ok", "ok", nil
+	}
+
+	if s.screenshotMgr == nil {
+		return false, "", "cdp_cookie_missing", fmt.Errorf("screenshot manager not initialized")
+	}
+	cookies := s.screenshotMgr.GetCookies(engine)
+	return s.screenshotMgr.ValidateSearchEngineResult(ctx, engine, query, cookies)
 }
 
 func cookiesToHeader(cookies []config.Cookie) string {

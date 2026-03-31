@@ -21,11 +21,25 @@ func (p *CDPProvider) CaptureSearchEngineResult(ctx context.Context, engine, que
 	return p.mgr.CaptureSearchEngineResult(ctx, engine, query, queryID)
 }
 
+func (p *CDPProvider) CaptureSearchEngineResultWithProxy(ctx context.Context, engine, query, queryID, proxy string) (string, error) {
+	if p == nil || p.mgr == nil {
+		return "", fmt.Errorf("screenshot manager not initialized")
+	}
+	return p.mgr.CaptureSearchEngineResultWithProxy(ctx, engine, query, queryID, proxy)
+}
+
 func (p *CDPProvider) CaptureTargetWebsite(ctx context.Context, targetURL, ip, port, protocol, queryID string) (string, error) {
 	if p == nil || p.mgr == nil {
 		return "", fmt.Errorf("screenshot manager not initialized")
 	}
 	return p.mgr.CaptureTargetWebsite(ctx, targetURL, ip, port, protocol, queryID)
+}
+
+func (p *CDPProvider) CaptureTargetWebsiteWithProxy(ctx context.Context, targetURL, ip, port, protocol, queryID, proxy string) (string, error) {
+	if p == nil || p.mgr == nil {
+		return "", fmt.Errorf("screenshot manager not initialized")
+	}
+	return p.mgr.CaptureTargetWebsiteWithProxy(ctx, targetURL, ip, port, protocol, queryID, proxy)
 }
 
 func (p *CDPProvider) CaptureBatchURLs(ctx context.Context, urls []string, batchID string, concurrency int) ([]BatchScreenshotResult, error) {

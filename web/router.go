@@ -70,12 +70,24 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("screenshot-bridge-health", "GET", "/api/screenshot/bridge/health", r.server.handleScreenshotBridgeHealth, false)
 	r.addRoute("screenshot-bridge-status", "GET", "/api/screenshot/bridge/status", r.server.handleScreenshotBridgeStatus, false)
 	r.addRoute("screenshot-bridge-pair", "POST", "/api/screenshot/bridge/pair", r.server.handleScreenshotBridgePair, false)
+	r.addRoute("screenshot-bridge-token-rotate", "POST", "/api/screenshot/bridge/token/rotate", r.server.handleScreenshotBridgeRotateToken, false)
 	r.addRoute("screenshot-bridge-task-next", "GET", "/api/screenshot/bridge/tasks/next", r.server.handleScreenshotBridgeTaskNext, false)
 	r.addRoute("screenshot-bridge-mock-result", "POST", "/api/screenshot/bridge/mock/result", r.server.handleScreenshotBridgeMockResult, false)
 
 	// API 路由 - 导入（限流）
 	r.addRoute("import-urls", "POST", "/api/import/urls", r.server.handleImportURLs, true)
 	r.addRoute("url-reachability", "POST", "/api/url/reachability", r.server.handleURLReachability, true)
+	r.addRoute("url-port-scan", "POST", "/api/url/port-scan", r.server.handleURLPortScan, true)
+
+	// API 路由 - Day15 分布式节点（首版）
+	r.addRoute("node-register", "POST", "/api/nodes/register", r.server.handleNodeRegister, false)
+	r.addRoute("node-heartbeat", "POST", "/api/nodes/heartbeat", r.server.handleNodeHeartbeat, false)
+	r.addRoute("node-status", "GET", "/api/nodes/status", r.server.handleNodeStatus, false)
+	r.addRoute("node-network-profile", "GET", "/api/nodes/network/profile", r.server.handleNodeNetworkProfile, false)
+	r.addRoute("node-task-enqueue", "POST", "/api/nodes/task/enqueue", r.server.handleNodeTaskEnqueue, false)
+	r.addRoute("node-task-claim", "POST", "/api/nodes/task/claim", r.server.handleNodeTaskClaim, false)
+	r.addRoute("node-task-result", "POST", "/api/nodes/task/result", r.server.handleNodeTaskResult, false)
+	r.addRoute("node-task-status", "GET", "/api/nodes/task/status", r.server.handleNodeTaskStatus, false)
 
 	// API 路由 - 篡改检测（限流）
 	r.addRoute("tamper-check", "POST", "/api/tamper/check", r.server.handleTamperCheck, true)

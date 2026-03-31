@@ -33,11 +33,14 @@ func (s *Server) newTamperDetector(ctx context.Context, mode string) (*tamper.De
 	return detector, cleanup, nil
 }
 
-func (s *Server) tamperAllocatorFactory() service.TamperAllocatorFactory {
+func (s *Server) tamperAllocatorFactory(proxy string) service.TamperAllocatorFactory {
 	if s.screenshotMgr == nil {
 		return nil
 	}
 	return func(ctx context.Context) (context.Context, context.CancelFunc, error) {
+		if strings.TrimSpace(proxy) != "" {
+			return s.screenshotMgr.NewAllocatorWithProxy(ctx, proxy)
+		}
 		return s.screenshotMgr.NewAllocator(ctx)
 	}
 }
@@ -58,12 +61,14 @@ func (s *Server) handleTamperCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	proxy := s.selectRequestProxy()
 	resp, err := s.tamperApp.Check(r.Context(), service.TamperCheckRequest{
 		URLs:        req.URLs,
 		Concurrency: req.Concurrency,
 		Mode:        req.Mode,
-	}, s.tamperAllocatorFactory())
+	}, s.tamperAllocatorFactory(proxy))
 	if err != nil {
+		s.reportRequestProxy(proxy, false)
 		if strings.Contains(strings.ToLower(err.Error()), "no urls") {
 			writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
 			return
@@ -71,6 +76,7 @@ func (s *Server) handleTamperCheck(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "tamper_check_failed", "tamper check failed", err.Error())
 		return
 	}
+	s.reportRequestProxy(proxy, true)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -96,11 +102,13 @@ func (s *Server) handleTamperBaseline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	proxy := s.selectRequestProxy()
 	resp, err := s.tamperApp.SetBaseline(r.Context(), service.TamperBaselineRequest{
 		URLs:        req.URLs,
 		Concurrency: req.Concurrency,
-	}, s.tamperAllocatorFactory())
+	}, s.tamperAllocatorFactory(proxy))
 	if err != nil {
+		s.reportRequestProxy(proxy, false)
 		if strings.Contains(strings.ToLower(err.Error()), "no urls") {
 			writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
 			return
@@ -108,6 +116,7 @@ func (s *Server) handleTamperBaseline(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "set_baseline_failed", "set baseline failed", err.Error())
 		return
 	}
+	s.reportRequestProxy(proxy, true)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

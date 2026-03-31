@@ -84,13 +84,16 @@ type Config struct {
 		ChromeProfileDir     string `yaml:"chrome_profile_dir"`
 		ChromeRemoteDebugURL string `yaml:"chrome_remote_debug_url"`
 		Extension            struct {
-			Enabled            bool   `yaml:"enabled"`
-			ListenAddr         string `yaml:"listen_addr"`
-			PairingRequired    bool   `yaml:"pairing_required"`
-			TokenTTLSeconds    int    `yaml:"token_ttl_seconds"`
-			TaskTimeoutSeconds int    `yaml:"task_timeout_seconds"`
-			MaxConcurrency     int    `yaml:"max_concurrency"`
-			FallbackToCDP      bool   `yaml:"fallback_to_cdp"`
+			Enabled                      bool   `yaml:"enabled"`
+			ListenAddr                   string `yaml:"listen_addr"`
+			PairingRequired              bool   `yaml:"pairing_required"`
+			TokenTTLSeconds              int    `yaml:"token_ttl_seconds"`
+			TaskTimeoutSeconds           int    `yaml:"task_timeout_seconds"`
+			MaxConcurrency               int    `yaml:"max_concurrency"`
+			CallbackSignatureRequired    bool   `yaml:"callback_signature_required"`
+			CallbackSignatureSkewSeconds int    `yaml:"callback_signature_skew_seconds"`
+			CallbackNonceTTLSeconds      int    `yaml:"callback_nonce_ttl_seconds"`
+			FallbackToCDP                bool   `yaml:"fallback_to_cdp"`
 		} `yaml:"extension"`
 		Headless     *bool `yaml:"headless"`
 		Timeout      int   `yaml:"timeout"`
@@ -125,6 +128,30 @@ type Config struct {
 			MaxMultipartMemory int64 `yaml:"max_multipart_memory_bytes"`
 		} `yaml:"request_limits"`
 	} `yaml:"web"`
+
+	// Network 配置
+	Network struct {
+		ProxyPool struct {
+			Enabled             bool     `yaml:"enabled"`
+			Strategy            string   `yaml:"strategy"`
+			Proxies             []string `yaml:"proxies"`
+			FailureThreshold    int      `yaml:"failure_threshold"`
+			CooldownSeconds     int      `yaml:"cooldown_seconds"`
+			AllowDirectFallback bool     `yaml:"allow_direct_fallback"`
+		} `yaml:"proxy_pool"`
+	} `yaml:"network"`
+
+	// Distributed 配置
+	Distributed struct {
+		Enabled                 bool              `yaml:"enabled"`
+		HeartbeatTimeoutSeconds int               `yaml:"heartbeat_timeout_seconds"`
+		MaxReassignAttempts     int               `yaml:"max_reassign_attempts"`
+		AdminToken              string            `yaml:"admin_token"`
+		NodeAuthTokens          map[string]string `yaml:"node_auth_tokens"`
+		Scheduler               struct {
+			Strategy string `yaml:"strategy"`
+		} `yaml:"scheduler"`
+	} `yaml:"distributed"`
 
 	// 缓存配置
 	Cache struct {
@@ -256,6 +283,10 @@ func (m *Manager) resolveEnv(config *Config) {
 	config.Screenshot.ChromeRemoteDebugURL = m.ResolveEnv(config.Screenshot.ChromeRemoteDebugURL)
 	config.Screenshot.Engine = m.ResolveEnv(config.Screenshot.Engine)
 	config.Screenshot.Extension.ListenAddr = m.ResolveEnv(config.Screenshot.Extension.ListenAddr)
+	for i := range config.Network.ProxyPool.Proxies {
+		config.Network.ProxyPool.Proxies[i] = m.ResolveEnv(config.Network.ProxyPool.Proxies[i])
+	}
+	config.Distributed.AdminToken = m.ResolveEnv(config.Distributed.AdminToken)
 
 	// 解析缓存配置
 	config.Cache.Backend = m.ResolveEnv(config.Cache.Backend)
@@ -398,6 +429,12 @@ func (m *Manager) applyDefaults(config *Config) {
 	if config.Screenshot.Extension.MaxConcurrency == 0 {
 		config.Screenshot.Extension.MaxConcurrency = 5
 	}
+	if config.Screenshot.Extension.CallbackSignatureSkewSeconds == 0 {
+		config.Screenshot.Extension.CallbackSignatureSkewSeconds = 300
+	}
+	if config.Screenshot.Extension.CallbackNonceTTLSeconds == 0 {
+		config.Screenshot.Extension.CallbackNonceTTLSeconds = 600
+	}
 	if config.Screenshot.Timeout == 0 {
 		config.Screenshot.Timeout = 30
 	}
@@ -409,6 +446,30 @@ func (m *Manager) applyDefaults(config *Config) {
 	}
 	if config.Screenshot.WaitTime == 0 {
 		config.Screenshot.WaitTime = 500
+	}
+
+	if strings.TrimSpace(config.Network.ProxyPool.Strategy) == "" {
+		config.Network.ProxyPool.Strategy = "round_robin"
+	}
+	if config.Network.ProxyPool.FailureThreshold == 0 {
+		config.Network.ProxyPool.FailureThreshold = 2
+	}
+	if config.Network.ProxyPool.CooldownSeconds == 0 {
+		config.Network.ProxyPool.CooldownSeconds = 60
+	}
+	config.Network.ProxyPool.Proxies = normalizeProxyList(config.Network.ProxyPool.Proxies)
+
+	if config.Distributed.HeartbeatTimeoutSeconds == 0 {
+		config.Distributed.HeartbeatTimeoutSeconds = 30
+	}
+	if config.Distributed.MaxReassignAttempts == 0 {
+		config.Distributed.MaxReassignAttempts = 1
+	}
+	if strings.TrimSpace(config.Distributed.Scheduler.Strategy) == "" {
+		config.Distributed.Scheduler.Strategy = "health_load"
+	}
+	if config.Distributed.NodeAuthTokens == nil {
+		config.Distributed.NodeAuthTokens = make(map[string]string)
 	}
 
 	// 默认 Web 配置
@@ -619,6 +680,45 @@ func (m *Manager) validate(config *Config) error {
 	if config.Screenshot.Extension.MaxConcurrency <= 0 {
 		return fmt.Errorf("screenshot extension max_concurrency must be greater than 0")
 	}
+	if config.Screenshot.Extension.CallbackSignatureSkewSeconds <= 0 {
+		return fmt.Errorf("screenshot extension callback_signature_skew_seconds must be greater than 0")
+	}
+	if config.Screenshot.Extension.CallbackNonceTTLSeconds <= 0 {
+		return fmt.Errorf("screenshot extension callback_nonce_ttl_seconds must be greater than 0")
+	}
+	if config.Screenshot.Extension.CallbackNonceTTLSeconds < config.Screenshot.Extension.CallbackSignatureSkewSeconds {
+		return fmt.Errorf("screenshot extension callback_nonce_ttl_seconds must be greater than or equal to callback_signature_skew_seconds")
+	}
+
+	if config.Network.ProxyPool.Enabled {
+		strategy := strings.ToLower(strings.TrimSpace(config.Network.ProxyPool.Strategy))
+		if strategy != "round_robin" {
+			return fmt.Errorf("network proxy_pool strategy must be: round_robin")
+		}
+		if len(config.Network.ProxyPool.Proxies) == 0 {
+			return fmt.Errorf("network proxy_pool enabled but proxies are not set")
+		}
+		if config.Network.ProxyPool.FailureThreshold <= 0 {
+			return fmt.Errorf("network proxy_pool failure_threshold must be greater than 0")
+		}
+		if config.Network.ProxyPool.CooldownSeconds <= 0 {
+			return fmt.Errorf("network proxy_pool cooldown_seconds must be greater than 0")
+		}
+	}
+
+	if config.Distributed.HeartbeatTimeoutSeconds <= 0 {
+		return fmt.Errorf("distributed heartbeat_timeout_seconds must be greater than 0")
+	}
+	if config.Distributed.MaxReassignAttempts < 0 {
+		return fmt.Errorf("distributed max_reassign_attempts must be greater than or equal to 0")
+	}
+	if config.Distributed.MaxReassignAttempts > 10 {
+		return fmt.Errorf("distributed max_reassign_attempts must be less than or equal to 10")
+	}
+	strategy := strings.ToLower(strings.TrimSpace(config.Distributed.Scheduler.Strategy))
+	if strategy != "health_load" {
+		return fmt.Errorf("distributed scheduler strategy must be: health_load")
+	}
 
 	backend := strings.ToLower(strings.TrimSpace(config.Cache.Backend))
 	if backend != "memory" && backend != "redis" {
@@ -708,6 +808,31 @@ func (m *Manager) GetAllEngineCacheConfigs() map[string]EngineCacheConfig {
 func (m *Manager) IsCacheEnabledForEngine(engineName string) bool {
 	cfg := m.GetEngineCacheConfig(engineName)
 	return cfg.Enabled
+}
+
+func normalizeProxyList(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		parts := strings.FieldsFunc(item, func(r rune) bool {
+			return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t'
+		})
+		if len(parts) == 0 {
+			parts = []string{item}
+		}
+		for _, part := range parts {
+			proxy := strings.TrimSpace(part)
+			if proxy == "" {
+				continue
+			}
+			if _, exists := seen[proxy]; exists {
+				continue
+			}
+			seen[proxy] = struct{}{}
+			out = append(out, proxy)
+		}
+	}
+	return out
 }
 
 // GetCacheTTLForEngine 获取指定引擎的缓存 TTL（秒）

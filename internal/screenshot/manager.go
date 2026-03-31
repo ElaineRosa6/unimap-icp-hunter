@@ -163,10 +163,14 @@ func (m *Manager) CreateBatchUploadDirectory(batchID string) (string, error) {
 
 // CaptureScreenshot 截图指定URL
 func (m *Manager) CaptureScreenshot(ctx context.Context, targetURL string, cookies []Cookie) ([]byte, error) {
+	return m.CaptureScreenshotWithProxy(ctx, targetURL, cookies, "")
+}
+
+func (m *Manager) CaptureScreenshotWithProxy(ctx context.Context, targetURL string, cookies []Cookie, proxy string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 
-	allocCtx, allocCancel, err := m.newAllocator(ctx)
+	allocCtx, allocCancel, err := m.newAllocatorWithProxy(ctx, proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +288,8 @@ func (m *Manager) OpenSearchEngineResult(ctx context.Context, engine, query stri
 	return searchURL, nil
 }
 
-// ValidateSearchEngineResult 验证Cookie是否能访问搜索结果页
+// ValidateSearchEngineResult validates cookie/session behavior for CDP mode only.
+// Extension mode should use bridge-side session verification paths.
 func (m *Manager) ValidateSearchEngineResult(ctx context.Context, engine, query string, cookies []Cookie) (bool, string, string, error) {
 	if strings.TrimSpace(query) == "" {
 		return false, "", "empty query", fmt.Errorf("query cannot be empty")
@@ -325,6 +330,7 @@ func (m *Manager) isCDPMode() bool {
 	return m.remoteDebugURL != ""
 }
 
+// loadPageContent is a CDP-only helper used by cookie/session validation.
 func (m *Manager) loadPageContent(ctx context.Context, targetURL string, cookies []Cookie, title *string, html *string) error {
 	allocCtx, allocCancel, err := m.newAllocator(ctx)
 	if err != nil {
@@ -375,7 +381,7 @@ func (m *Manager) loadPageContent(ctx context.Context, targetURL string, cookies
 	return chromedp.Run(ctx, actions...)
 }
 
-func (m *Manager) buildExecAllocatorOptions() []chromedp.ExecAllocatorOption {
+func (m *Manager) buildExecAllocatorOptions(proxyOverride string) []chromedp.ExecAllocatorOption {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", m.headless),
 		chromedp.Flag("disable-gpu", true),
@@ -392,7 +398,10 @@ func (m *Manager) buildExecAllocatorOptions() []chromedp.ExecAllocatorOption {
 		opts = append(opts, chromedp.Flag("profile-directory", m.profileDir))
 	}
 
-	proxyServer := strings.TrimSpace(m.proxyServer)
+	proxyServer := strings.TrimSpace(proxyOverride)
+	if proxyServer == "" {
+		proxyServer = strings.TrimSpace(m.proxyServer)
+	}
 	if proxyServer == "" {
 		proxyServer = strings.TrimSpace(os.Getenv("UNIMAP_CHROME_PROXY_SERVER"))
 	}
@@ -471,6 +480,10 @@ func findChromePath() string {
 }
 
 func (m *Manager) newAllocator(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	return m.newAllocatorWithProxy(ctx, "")
+}
+
+func (m *Manager) newAllocatorWithProxy(ctx context.Context, proxyOverride string) (context.Context, context.CancelFunc, error) {
 	// 检查是否配置了远程调试URL
 	remoteURL := strings.TrimSpace(m.remoteDebugURL)
 	if remoteURL == "" {
@@ -489,7 +502,7 @@ func (m *Manager) newAllocator(ctx context.Context) (context.Context, context.Ca
 	}
 
 	// 使用本地Chrome启动allocator
-	opts := m.buildExecAllocatorOptions()
+	opts := m.buildExecAllocatorOptions(proxyOverride)
 
 	// 确保有可用的Chrome路径
 	chromePath := findChromePath()
@@ -508,6 +521,11 @@ func (m *Manager) NewAllocator(ctx context.Context) (context.Context, context.Ca
 	return m.newAllocator(ctx)
 }
 
+// NewAllocatorWithProxy creates a browser allocator with request-level proxy override.
+func (m *Manager) NewAllocatorWithProxy(ctx context.Context, proxy string) (context.Context, context.CancelFunc, error) {
+	return m.newAllocatorWithProxy(ctx, proxy)
+}
+
 // isRemoteDebuggerAvailable 检查远程调试端口是否可用
 func isRemoteDebuggerAvailable(remoteURL string) bool {
 	client := &http.Client{
@@ -523,6 +541,10 @@ func isRemoteDebuggerAvailable(remoteURL string) bool {
 
 // CaptureSearchEngineResult 截图搜索引擎结果页面
 func (m *Manager) CaptureSearchEngineResult(ctx context.Context, engine, query string, queryID string) (string, error) {
+	return m.CaptureSearchEngineResultWithProxy(ctx, engine, query, queryID, "")
+}
+
+func (m *Manager) CaptureSearchEngineResultWithProxy(ctx context.Context, engine, query string, queryID string, proxy string) (string, error) {
 	// 构建搜索引擎结果页面URL
 	searchURL := m.BuildSearchEngineURL(engine, query)
 	if searchURL == "" {
@@ -543,7 +565,7 @@ func (m *Manager) CaptureSearchEngineResult(ctx context.Context, engine, query s
 	cookies := m.GetCookies(engine)
 
 	// 截图
-	buf, err := m.CaptureScreenshot(ctx, searchURL, cookies)
+	buf, err := m.CaptureScreenshotWithProxy(ctx, searchURL, cookies, proxy)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture %s result page: %w", engine, err)
 	}
@@ -559,6 +581,10 @@ func (m *Manager) CaptureSearchEngineResult(ctx context.Context, engine, query s
 
 // CaptureTargetWebsite 截图目标网站
 func (m *Manager) CaptureTargetWebsite(ctx context.Context, targetURL, ip, port, protocol, queryID string) (string, error) {
+	return m.CaptureTargetWebsiteWithProxy(ctx, targetURL, ip, port, protocol, queryID, "")
+}
+
+func (m *Manager) CaptureTargetWebsiteWithProxy(ctx context.Context, targetURL, ip, port, protocol, queryID, proxy string) (string, error) {
 	// 构建目标URL
 	if targetURL == "" {
 		if ip == "" {
@@ -593,7 +619,7 @@ func (m *Manager) CaptureTargetWebsite(ctx context.Context, targetURL, ip, port,
 	filepath := filepath.Join(targetWebsiteDir, filename)
 
 	// 截图（目标网站不需要Cookie）
-	buf, err := m.CaptureScreenshot(ctx, targetURL, nil)
+	buf, err := m.CaptureScreenshotWithProxy(ctx, targetURL, nil, proxy)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture target website: %w", err)
 	}

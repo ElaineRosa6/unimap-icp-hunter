@@ -225,6 +225,46 @@ var (
 		},
 		[]string{"type"},
 	)
+
+	// Bridge 可观测指标
+	bridgeRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unimap_screenshot_bridge_requests_total",
+			Help: "Total number of bridge screenshot requests by engine and status.",
+		},
+		[]string{"engine", "status"},
+	)
+
+	bridgeDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "unimap_screenshot_bridge_duration_seconds",
+			Help:    "Bridge screenshot request duration.",
+			Buckets: screenshotDurationBuckets,
+		},
+		[]string{"engine"},
+	)
+
+	bridgeRetriesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "unimap_screenshot_bridge_retries_total",
+			Help: "Total number of bridge retry attempts.",
+		},
+	)
+
+	bridgeTimeoutsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "unimap_screenshot_bridge_timeouts_total",
+			Help: "Total number of bridge timeout events.",
+		},
+	)
+
+	bridgeFallbackTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unimap_screenshot_bridge_fallback_total",
+			Help: "Total number of extension-to-cdp fallback events by reason.",
+		},
+		[]string{"reason"},
+	)
 )
 
 func init() {
@@ -271,6 +311,13 @@ func init() {
 	// 批量操作指标
 	prometheus.MustRegister(batchOperationsTotal)
 	prometheus.MustRegister(batchOperationSize)
+
+	// Bridge 指标
+	prometheus.MustRegister(bridgeRequestsTotal)
+	prometheus.MustRegister(bridgeDuration)
+	prometheus.MustRegister(bridgeRetriesTotal)
+	prometheus.MustRegister(bridgeTimeoutsTotal)
+	prometheus.MustRegister(bridgeFallbackTotal)
 }
 
 // HTTP 指标函数
@@ -410,4 +457,37 @@ func IncBatchOperation(opType string) {
 
 func ObserveBatchOperationSize(opType string, size int) {
 	batchOperationSize.WithLabelValues(opType).Observe(float64(size))
+}
+
+// Bridge 指标函数
+func IncBridgeRequest(engine, status string) {
+	if engine == "" {
+		engine = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	bridgeRequestsTotal.WithLabelValues(engine, status).Inc()
+}
+
+func ObserveBridgeDuration(engine string, duration time.Duration) {
+	if engine == "" {
+		engine = "unknown"
+	}
+	bridgeDuration.WithLabelValues(engine).Observe(duration.Seconds())
+}
+
+func IncBridgeRetry() {
+	bridgeRetriesTotal.Inc()
+}
+
+func IncBridgeTimeout() {
+	bridgeTimeoutsTotal.Inc()
+}
+
+func IncBridgeFallback(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	bridgeFallbackTotal.WithLabelValues(reason).Inc()
 }

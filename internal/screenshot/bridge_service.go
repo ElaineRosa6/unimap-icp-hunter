@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 )
 
 type bridgeJob struct {
@@ -190,6 +192,7 @@ func (s *BridgeService) executeWithRetry(ctx context.Context, task BridgeTask) (
 		if !isRetryableBridgeError(err) || i == attempts-1 {
 			break
 		}
+		metrics.IncBridgeRetry()
 		time.Sleep(200 * time.Millisecond)
 	}
 
@@ -202,6 +205,7 @@ func (s *BridgeService) executeWithRetry(ctx context.Context, task BridgeTask) (
 func (s *BridgeService) executeOnce(ctx context.Context, task BridgeTask) (BridgeResult, error) {
 	if err := s.client.SubmitTask(ctx, task); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
+			metrics.IncBridgeTimeout()
 			return BridgeResult{}, fmt.Errorf("%w: submit timeout", ErrBridgeTimeout)
 		}
 		if errors.Is(err, context.Canceled) {
@@ -213,6 +217,7 @@ func (s *BridgeService) executeOnce(ctx context.Context, task BridgeTask) (Bridg
 	result, err := s.client.AwaitResult(ctx, task.RequestID)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
+			metrics.IncBridgeTimeout()
 			return BridgeResult{}, fmt.Errorf("%w: await timeout", ErrBridgeTimeout)
 		}
 		if errors.Is(err, context.Canceled) {

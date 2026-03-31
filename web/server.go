@@ -17,8 +17,10 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/adapter"
 	"github.com/unimap-icp-hunter/project/internal/appversion"
 	"github.com/unimap-icp-hunter/project/internal/config"
+	"github.com/unimap-icp-hunter/project/internal/distributed"
 	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
+	"github.com/unimap-icp-hunter/project/internal/proxypool"
 	"github.com/unimap-icp-hunter/project/internal/requestid"
 	"github.com/unimap-icp-hunter/project/internal/screenshot"
 	"github.com/unimap-icp-hunter/project/internal/service"
@@ -53,30 +55,37 @@ type ConnectionManager struct {
 
 // Server Web服务器
 type Server struct {
-	port          int
-	httpServer    *http.Server
-	templates     *template.Template
-	service       *service.UnifiedService
-	queryApp      *service.QueryAppService
-	monitorApp    *service.MonitorAppService
-	tamperApp     *service.TamperAppService
-	screenshotApp *service.ScreenshotAppService
-	orchestrator  *adapter.EngineOrchestrator
-	upgrader      websocket.Upgrader
-	connManager   *ConnectionManager
-	queryStatus   map[string]*QueryStatus
-	queryMutex    sync.RWMutex
-	configMutex   sync.Mutex
-	webRoot       string
-	staticVersion string
-	screenshotMgr *screenshot.Manager
-	config        *config.Config
-	configManager *config.Manager
-	chromeCmd     *os.Process
-	chromeCmdMu   sync.Mutex
-	bridgeService *screenshot.BridgeService
-	bridgeMock    *bridgeMockClient
-	bridgeTokens  map[string]int64
+	port                 int
+	httpServer           *http.Server
+	templates            *template.Template
+	service              *service.UnifiedService
+	queryApp             *service.QueryAppService
+	monitorApp           *service.MonitorAppService
+	tamperApp            *service.TamperAppService
+	screenshotApp        *service.ScreenshotAppService
+	orchestrator         *adapter.EngineOrchestrator
+	upgrader             websocket.Upgrader
+	connManager          *ConnectionManager
+	queryStatus          map[string]*QueryStatus
+	queryMutex           sync.RWMutex
+	configMutex          sync.Mutex
+	webRoot              string
+	staticVersion        string
+	screenshotMgr        *screenshot.Manager
+	config               *config.Config
+	configManager        *config.Manager
+	chromeCmd            *os.Process
+	chromeCmdMu          sync.Mutex
+	bridgeService        *screenshot.BridgeService
+	bridgeMock           *bridgeMockClient
+	bridgeTokens         map[string]int64
+	bridgeCallbackNonces map[string]int64
+	bridgeLastErr        string
+	bridgeLastAt         int64
+	proxyPool            *proxypool.Pool
+	nodeRegistry         *distributed.Registry
+	nodeTaskQueue        *distributed.TaskQueue
+	distributedEnabled   bool
 }
 
 // NewServer 创建Web服务器
@@ -187,24 +196,59 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 		screenshotApp.SetFallbackToCDP(cfg.Screenshot.Extension.FallbackToCDP)
 	}
 
+	var proxyPool *proxypool.Pool
+	if cfg != nil {
+		proxyPool = proxypool.NewPool(proxypool.Config{
+			Enabled:             cfg.Network.ProxyPool.Enabled,
+			Proxies:             cfg.Network.ProxyPool.Proxies,
+			FailureThreshold:    cfg.Network.ProxyPool.FailureThreshold,
+			Cooldown:            time.Duration(cfg.Network.ProxyPool.CooldownSeconds) * time.Second,
+			AllowDirectFallback: cfg.Network.ProxyPool.AllowDirectFallback,
+		})
+		if proxyPool.Enabled() {
+			logger.Infof("Proxy pool enabled: %d proxies, strategy=%s", len(proxyPool.Proxies()), cfg.Network.ProxyPool.Strategy)
+		}
+	}
+
+	heartbeatTimeout := 30 * time.Second
+	maxReassign := 1
+	distributedEnabled := false
+	if cfg != nil {
+		heartbeatTimeout = time.Duration(cfg.Distributed.HeartbeatTimeoutSeconds) * time.Second
+		if heartbeatTimeout <= 0 {
+			heartbeatTimeout = 30 * time.Second
+		}
+		maxReassign = cfg.Distributed.MaxReassignAttempts
+		distributedEnabled = cfg.Distributed.Enabled
+	}
+
+	nodeRegistry := distributed.NewRegistry(heartbeatTimeout)
+	nodeTaskQueue := distributed.NewTaskQueue()
+	nodeTaskQueue.SetDefaultMaxReassign(maxReassign)
+
 	srv := &Server{
-		port:          port,
-		templates:     templates,
-		service:       unifiedSvc,
-		queryApp:      service.NewQueryAppService(unifiedSvc, orchestrator),
-		monitorApp:    service.NewMonitorAppService(),
-		tamperApp:     service.NewTamperAppService("./hash_store"),
-		screenshotApp: screenshotApp,
-		orchestrator:  orchestrator,
-		upgrader:      upgrader,
-		connManager:   &ConnectionManager{connections: make(map[string]*managedConn)},
-		queryStatus:   make(map[string]*QueryStatus),
-		webRoot:       webRoot,
-		staticVersion: strconv.FormatInt(time.Now().Unix(), 10),
-		screenshotMgr: screenshotMgr,
-		config:        cfg,
-		configManager: cfgManager,
-		bridgeTokens:  make(map[string]int64),
+		port:                 port,
+		templates:            templates,
+		service:              unifiedSvc,
+		queryApp:             service.NewQueryAppService(unifiedSvc, orchestrator),
+		monitorApp:           service.NewMonitorAppService(proxyPool),
+		tamperApp:            service.NewTamperAppService("./hash_store"),
+		screenshotApp:        screenshotApp,
+		orchestrator:         orchestrator,
+		upgrader:             upgrader,
+		connManager:          &ConnectionManager{connections: make(map[string]*managedConn)},
+		queryStatus:          make(map[string]*QueryStatus),
+		webRoot:              webRoot,
+		staticVersion:        strconv.FormatInt(time.Now().Unix(), 10),
+		screenshotMgr:        screenshotMgr,
+		config:               cfg,
+		configManager:        cfgManager,
+		bridgeTokens:         make(map[string]int64),
+		bridgeCallbackNonces: make(map[string]int64),
+		proxyPool:            proxyPool,
+		nodeRegistry:         nodeRegistry,
+		nodeTaskQueue:        nodeTaskQueue,
+		distributedEnabled:   distributedEnabled,
 	}
 
 	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Screenshot.Engine), "extension") {

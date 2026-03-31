@@ -72,8 +72,8 @@ func (s *QueryAppService) RunBrowserQueryAsync(
 	enabled bool,
 	queryID string,
 	autoCaptureEnabled bool,
+	screenshotApp *ScreenshotAppService,
 	screenshotMgr *screenshot.Manager,
-	cdpBaseURL string,
 	previewURLBuilder func(string) string,
 ) <-chan BrowserQueryOutcome {
 	if !enabled {
@@ -94,31 +94,22 @@ func (s *QueryAppService) RunBrowserQueryAsync(
 			outcome.AutoCapturedPaths = make(map[string]string)
 		}
 
-		if screenshotMgr == nil {
-			outcome.Errors = []string{"browser query mode unavailable: screenshot manager not initialized"}
-			resultCh <- outcome
-			return
-		}
-
-		online, _, err := checkCDPStatus(ctx, cdpBaseURL)
-		if !online {
-			if err == nil {
-				err = fmt.Errorf("cdp not connected")
-			}
-			outcome.Errors = []string{fmt.Sprintf("browser query mode requires a live CDP browser: %v", err)}
-			resultCh <- outcome
-			return
+		captureAvailable := screenshotApp != nil && screenshotApp.IsCaptureAvailable(screenshotMgr)
+		if outcome.AutoCaptureEnabled && !captureAvailable {
+			outcome.AutoCaptureErrors = append(outcome.AutoCaptureErrors, "auto capture unavailable: screenshot engine not initialized")
 		}
 
 		for _, engine := range engines {
-			if _, err := screenshotMgr.OpenSearchEngineResult(ctx, engine, query); err != nil {
+			if screenshotMgr == nil {
+				outcome.Errors = append(outcome.Errors, fmt.Sprintf("browser query open skipped for %s: screenshot manager not initialized", engine))
+			} else if _, err := screenshotMgr.OpenSearchEngineResult(ctx, engine, query); err != nil {
 				outcome.Errors = append(outcome.Errors, fmt.Sprintf("browser query open failed for %s: %v", engine, err))
-				continue
+			} else {
+				outcome.OpenedEngines = append(outcome.OpenedEngines, engine)
 			}
-			outcome.OpenedEngines = append(outcome.OpenedEngines, engine)
 
-			if outcome.AutoCaptureEnabled {
-				path, err := screenshotMgr.CaptureSearchEngineResult(ctx, engine, query, outcome.AutoCaptureQueryID)
+			if outcome.AutoCaptureEnabled && captureAvailable {
+				path, _, _, _, err := screenshotApp.CaptureSearchEngineResult(ctx, screenshotMgr, engine, query, outcome.AutoCaptureQueryID)
 				if err != nil {
 					outcome.AutoCaptureErrors = append(outcome.AutoCaptureErrors, fmt.Sprintf("auto capture failed for %s: %v", engine, err))
 					continue
