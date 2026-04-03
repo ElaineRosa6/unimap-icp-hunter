@@ -12,16 +12,72 @@ import (
 type Registry struct {
 	nodes            map[string]*NodeRecord
 	heartbeatTimeout time.Duration
+	cleanupInterval  time.Duration
 	mu               sync.RWMutex
+	stopChan         chan struct{}
+	stopped          bool
+	taskQueue        *TaskQueue // Optional: for releasing tasks when node goes offline
 }
 
 func NewRegistry(heartbeatTimeout time.Duration) *Registry {
 	if heartbeatTimeout <= 0 {
 		heartbeatTimeout = 30 * time.Second
 	}
-	return &Registry{
+	r := &Registry{
 		nodes:            make(map[string]*NodeRecord),
 		heartbeatTimeout: heartbeatTimeout,
+		cleanupInterval:  heartbeatTimeout * 2,
+		stopChan:         make(chan struct{}),
+	}
+	go r.startBackgroundCleanup()
+	return r
+}
+
+// SetTaskQueue sets the task queue for releasing tasks when nodes go offline
+func (r *Registry) SetTaskQueue(q *TaskQueue) {
+	r.mu.Lock()
+	r.taskQueue = q
+	r.mu.Unlock()
+}
+
+// Stop stops the background cleanup goroutine
+func (r *Registry) Stop() {
+	r.mu.Lock()
+	if !r.stopped {
+		r.stopped = true
+		close(r.stopChan)
+	}
+	r.mu.Unlock()
+}
+
+// startBackgroundCleanup periodically removes stale nodes
+func (r *Registry) startBackgroundCleanup() {
+	ticker := time.NewTicker(r.cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.stopChan:
+			return
+		case <-ticker.C:
+			r.cleanupStaleNodes()
+		}
+	}
+}
+
+// cleanupStaleNodes removes nodes that have been offline for too long
+func (r *Registry) cleanupStaleNodes() {
+	now := time.Now()
+	// Remove nodes that have been offline for 10x heartbeat timeout
+	cutoff := r.heartbeatTimeout * 10
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for nodeID, record := range r.nodes {
+		if !record.Online && now.Sub(record.LastHeartbeatAt) > cutoff {
+			delete(r.nodes, nodeID)
+		}
 	}
 }
 
@@ -136,6 +192,80 @@ func (r *Registry) Snapshot() NodeStatusSnapshot {
 		Offline: offline,
 		Nodes:   nodes,
 	}
+}
+
+// Get retrieves a single node by ID
+func (r *Registry) Get(nodeID string) (*NodeRecord, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil, fmt.Errorf("node_id is required")
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	record, exists := r.nodes[nodeID]
+	if !exists {
+		return nil, nil
+	}
+
+	copyRec := *record
+	// Check if online based on heartbeat
+	if time.Since(copyRec.LastHeartbeatAt) > r.heartbeatTimeout {
+		copyRec.Online = false
+	}
+	return &copyRec, nil
+}
+
+// MarkOffline marks a node as offline and optionally releases its tasks
+func (r *Registry) MarkOffline(nodeID string) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return fmt.Errorf("node_id is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	record, exists := r.nodes[nodeID]
+	if !exists {
+		return fmt.Errorf("node not found")
+	}
+
+	wasOnline := record.Online
+	record.Online = false
+
+	// Release tasks if node was online and we have a task queue
+	if wasOnline && r.taskQueue != nil {
+		r.taskQueue.ReleaseNodeTasks(nodeID)
+	}
+
+	return nil
+}
+
+// Deregister removes a node from the registry
+func (r *Registry) Deregister(nodeID string) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return fmt.Errorf("node_id is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	record, exists := r.nodes[nodeID]
+	if !exists {
+		return fmt.Errorf("node not found")
+	}
+
+	// Release tasks before removing
+	if r.taskQueue != nil {
+		r.taskQueue.ReleaseNodeTasks(nodeID)
+	}
+
+	delete(r.nodes, nodeID)
+	_ = record // suppress unused variable warning
+	return nil
 }
 
 func cloneLabels(in map[string]string) map[string]string {

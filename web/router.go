@@ -83,11 +83,15 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("node-register", "POST", "/api/nodes/register", r.server.handleNodeRegister, false)
 	r.addRoute("node-heartbeat", "POST", "/api/nodes/heartbeat", r.server.handleNodeHeartbeat, false)
 	r.addRoute("node-status", "GET", "/api/nodes/status", r.server.handleNodeStatus, false)
+	r.addRoute("node-get", "GET", "/api/nodes/{node_id}", r.server.handleNodeGet, false)
+	r.addRoute("node-deregister", "DELETE", "/api/nodes/{node_id}", r.server.handleNodeDeregister, false)
 	r.addRoute("node-network-profile", "GET", "/api/nodes/network/profile", r.server.handleNodeNetworkProfile, false)
 	r.addRoute("node-task-enqueue", "POST", "/api/nodes/task/enqueue", r.server.handleNodeTaskEnqueue, false)
 	r.addRoute("node-task-claim", "POST", "/api/nodes/task/claim", r.server.handleNodeTaskClaim, false)
 	r.addRoute("node-task-result", "POST", "/api/nodes/task/result", r.server.handleNodeTaskResult, false)
 	r.addRoute("node-task-status", "GET", "/api/nodes/task/status", r.server.handleNodeTaskStatus, false)
+	r.addRoute("node-task-get", "GET", "/api/nodes/task/{task_id}", r.server.handleNodeTaskGet, false)
+	r.addRoute("node-task-delete", "DELETE", "/api/nodes/task/{task_id}", r.server.handleNodeTaskDelete, false)
 
 	// API 路由 - 篡改检测（限流）
 	r.addRoute("tamper-check", "POST", "/api/tamper/check", r.server.handleTamperCheck, true)

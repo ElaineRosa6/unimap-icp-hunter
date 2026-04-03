@@ -64,10 +64,47 @@ type TaskQueue struct {
 	leaseJitter        time.Duration
 	defaultMaxReassign int
 	mu                 sync.Mutex
+	stopChan           chan struct{}
+	stopped            bool
 }
 
 func NewTaskQueue() *TaskQueue {
-	return &TaskQueue{tasks: make(map[string]*TaskRecord), pending: make([]string, 0), leaseJitter: 2 * time.Second, defaultMaxReassign: 1}
+	q := &TaskQueue{
+		tasks:              make(map[string]*TaskRecord),
+		pending:            make([]string, 0),
+		leaseJitter:        2 * time.Second,
+		defaultMaxReassign: 1,
+		stopChan:           make(chan struct{}),
+	}
+	go q.startBackgroundRecycle()
+	return q
+}
+
+// Stop stops the background recycle goroutine
+func (q *TaskQueue) Stop() {
+	q.mu.Lock()
+	if !q.stopped {
+		q.stopped = true
+		close(q.stopChan)
+	}
+	q.mu.Unlock()
+}
+
+// startBackgroundRecycle periodically recycles expired tasks
+func (q *TaskQueue) startBackgroundRecycle() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-q.stopChan:
+			return
+		case <-ticker.C:
+			q.mu.Lock()
+			q.recycleExpiredLocked()
+			q.mu.Unlock()
+		}
+	}
 }
 
 func (q *TaskQueue) SetDefaultMaxReassign(v int) {
@@ -211,6 +248,93 @@ func (q *TaskQueue) Snapshot() []TaskRecord {
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out
+}
+
+// Get retrieves a single task by ID
+func (q *TaskQueue) Get(taskID string) (*TaskRecord, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, fmt.Errorf("task_id is required")
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	rec, exists := q.tasks[taskID]
+	if !exists {
+		return nil, nil
+	}
+	copyRec := *rec
+	return &copyRec, nil
+}
+
+// Delete removes a task from the queue
+func (q *TaskQueue) Delete(taskID string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return fmt.Errorf("task_id is required")
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	rec, exists := q.tasks[taskID]
+	if !exists {
+		return fmt.Errorf("task not found")
+	}
+
+	// Remove from pending list if present
+	for i, id := range q.pending {
+		if id == taskID {
+			q.pending = append(q.pending[:i], q.pending[i+1:]...)
+			break
+		}
+	}
+
+	delete(q.tasks, taskID)
+	_ = rec // suppress unused variable warning
+	return nil
+}
+
+// ReleaseNodeTasks releases all claimed tasks for a specific node (used when node goes offline)
+func (q *TaskQueue) ReleaseNodeTasks(nodeID string) int {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return 0
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	released := 0
+	now := time.Now()
+	for _, rec := range q.tasks {
+		if rec.Status != TaskStatusClaimed {
+			continue
+		}
+		if rec.AssignedNode != nodeID {
+			continue
+		}
+
+		// Re-queue the task
+		if rec.Attempt <= rec.MaxReassign+1 {
+			rec.Status = TaskStatusPending
+			rec.AssignedNode = ""
+			rec.LeaseUntil = time.Time{}
+			rec.UpdatedAt = now
+			q.pending = append(q.pending, rec.TaskID)
+			released++
+		} else {
+			// Max reassign exceeded, mark as failed
+			rec.Status = TaskStatusFailed
+			rec.LastError = "node offline and max reassign exceeded"
+			rec.UpdatedAt = now
+		}
+	}
+	if released > 0 {
+		q.sortPendingLocked()
+	}
+	return released
 }
 
 func (q *TaskQueue) recycleExpiredLocked() {

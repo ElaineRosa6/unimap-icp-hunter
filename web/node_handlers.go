@@ -183,3 +183,73 @@ func (s *Server) handleNodeNetworkProfile(w http.ResponseWriter, r *http.Request
 		"profiles":       profiles,
 	})
 }
+
+// handleNodeDeregister handles DELETE /api/nodes/:node_id - deregister a node
+func (s *Server) handleNodeDeregister(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodDelete) {
+		return
+	}
+	if !s.requireDistributedEnabled(w) {
+		return
+	}
+	if s.nodeRegistry == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
+		return
+	}
+
+	nodeID := r.PathValue("node_id")
+	if strings.TrimSpace(nodeID) == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_node_id", "node_id is required", nil)
+		return
+	}
+
+	// Require node token for this node or admin token
+	if !s.requireNodeToken(w, r, nodeID) {
+		return
+	}
+
+	if err := s.nodeRegistry.Deregister(nodeID); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "node_deregister_failed", "node deregister failed", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"node_id": nodeID,
+	})
+}
+
+// handleNodeGet handles GET /api/nodes/:node_id - retrieve a single node
+func (s *Server) handleNodeGet(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if !s.requireDistributedEnabled(w) {
+		return
+	}
+	if s.nodeRegistry == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
+		return
+	}
+
+	nodeID := r.PathValue("node_id")
+	if strings.TrimSpace(nodeID) == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_node_id", "node_id is required", nil)
+		return
+	}
+
+	rec, err := s.nodeRegistry.Get(nodeID)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "node_get_failed", "failed to get node", err.Error())
+		return
+	}
+	if rec == nil {
+		writeAPIError(w, http.StatusNotFound, "node_not_found", "node not found", nil)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"node":    rec,
+	})
+}

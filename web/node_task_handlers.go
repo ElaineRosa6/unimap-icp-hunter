@@ -127,3 +127,74 @@ func (s *Server) handleNodeTaskStatus(w http.ResponseWriter, r *http.Request) {
 		"tasks":   tasks,
 	})
 }
+
+// handleNodeTaskGet handles GET /api/nodes/task/:task_id - retrieve a single task
+func (s *Server) handleNodeTaskGet(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if !s.requireDistributedEnabled(w) {
+		return
+	}
+	if !s.requireDistributedAdminToken(w, r) {
+		return
+	}
+	if s.nodeTaskQueue == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
+		return
+	}
+
+	taskID := r.PathValue("task_id")
+	if strings.TrimSpace(taskID) == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_task_id", "task_id is required", nil)
+		return
+	}
+
+	rec, err := s.nodeTaskQueue.Get(taskID)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "task_get_failed", "failed to get task", err.Error())
+		return
+	}
+	if rec == nil {
+		writeAPIError(w, http.StatusNotFound, "task_not_found", "task not found", nil)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"task":    rec,
+	})
+}
+
+// handleNodeTaskDelete handles DELETE /api/nodes/task/:task_id - delete a task
+func (s *Server) handleNodeTaskDelete(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodDelete) {
+		return
+	}
+	if !s.requireDistributedEnabled(w) {
+		return
+	}
+	if !s.requireDistributedAdminToken(w, r) {
+		return
+	}
+	if s.nodeTaskQueue == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
+		return
+	}
+
+	taskID := r.PathValue("task_id")
+	if strings.TrimSpace(taskID) == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_task_id", "task_id is required", nil)
+		return
+	}
+
+	if err := s.nodeTaskQueue.Delete(taskID); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "task_delete_failed", "failed to delete task", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"task_id": taskID,
+	})
+}
