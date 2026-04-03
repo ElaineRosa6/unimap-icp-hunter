@@ -22,7 +22,7 @@ function Assert-Success($resp, $step) {
 $headers = @{ Authorization = "Bearer $NodeToken" }
 $admin = $AdminToken
 if ([string]::IsNullOrWhiteSpace($admin)) {
-    $admin = $NodeToken
+    throw "AdminToken is required when distributed.admin_token is enabled. Re-run with -AdminToken <admin-token>."
 }
 $adminHeaders = @{ Authorization = "Bearer $admin" }
 

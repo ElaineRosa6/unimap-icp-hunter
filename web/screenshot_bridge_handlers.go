@@ -596,12 +596,36 @@ func (s *Server) persistBridgeImageData(dataURL, requestID, batchID, targetURL s
 }
 
 func isLoopbackRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+
+	// Reject forwarded requests for bridge-only local endpoints.
+	if strings.TrimSpace(r.Header.Get("X-Forwarded-For")) != "" || strings.TrimSpace(r.Header.Get("X-Real-IP")) != "" {
+		return false
+	}
+
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err != nil {
 		host = strings.TrimSpace(r.RemoteAddr)
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+
+	requestHost := strings.TrimSpace(r.Host)
+	if requestHost == "" {
+		return false
+	}
+	if h, _, splitErr := net.SplitHostPort(requestHost); splitErr == nil {
+		requestHost = strings.TrimSpace(h)
+	}
+	if strings.EqualFold(requestHost, "localhost") {
+		return true
+	}
+	hostIP := net.ParseIP(requestHost)
+	return hostIP != nil && hostIP.IsLoopback()
 }
 
 func (s *Server) setBridgeLastError(message string) {

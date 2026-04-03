@@ -897,8 +897,12 @@ func validatePath(baseDir, targetPath string) error {
 		return fmt.Errorf("failed to get absolute target path: %w", err)
 	}
 
-	// 检查目标路径是否在基础目录内
-	if !strings.HasPrefix(absTarget, absBase) {
+	// 检查目标路径是否在基础目录内（避免 C:\base 与 C:\base2 的前缀误判）
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return fmt.Errorf("failed to compute relative path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal detected: target path is outside base directory")
 	}
 
