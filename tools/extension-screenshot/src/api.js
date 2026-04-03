@@ -1,5 +1,7 @@
-function baseURL() {
-  return "http://127.0.0.1:8448";
+import { loadAPIBaseURL } from "./storage.js";
+
+async function baseURL() {
+  return await loadAPIBaseURL();
 }
 
 function toHex(bytes) {
@@ -58,7 +60,7 @@ async function parseResponse(resp) {
 }
 
 export async function apiGet(path, token) {
-  const resp = await fetch(baseURL() + path, {
+  const resp = await fetch((await baseURL()) + path, {
     method: "GET",
     headers: buildHeaders(token)
   });
@@ -66,7 +68,7 @@ export async function apiGet(path, token) {
 }
 
 export async function apiPost(path, body, token) {
-  const resp = await fetch(baseURL() + path, {
+  const resp = await fetch((await baseURL()) + path, {
     method: "POST",
     headers: buildHeaders(token),
     body: JSON.stringify(body || {})
@@ -87,7 +89,7 @@ export async function apiPostBridgeSigned(path, body, token) {
     headers["X-Bridge-Nonce"] = nonce;
     headers["X-Bridge-Signature"] = signature;
   }
-  const resp = await fetch(baseURL() + path, {
+  const resp = await fetch((await baseURL()) + path, {
     method: "POST",
     headers,
     body: payload

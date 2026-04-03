@@ -75,6 +75,7 @@ function initQueryForm() {
 
 	initCookieStatus();
 	initCDPControls();
+	initBridgeStatusControls();
 	
 	// 表单提交事件
 	form.addEventListener('submit', function(e) {
@@ -156,6 +157,88 @@ function initCDPControls() {
 			saveProxy(saveProxyBtn, statusInfo);
 		});
 	}
+}
+
+function initBridgeStatusControls() {
+	const statusBadge = document.getElementById('bridge-status');
+	const statusInfo = document.getElementById('bridge-status-info');
+	const refreshBtn = document.getElementById('btn-refresh-bridge-status');
+
+	if (!statusBadge && !statusInfo && !refreshBtn) {
+		return;
+	}
+
+	const refresh = function() {
+		refreshBridgeStatus(statusBadge, statusInfo);
+	};
+
+	refresh();
+	setInterval(refresh, 5000);
+
+	if (refreshBtn) {
+		refreshBtn.addEventListener('click', refresh);
+	}
+}
+
+function refreshBridgeStatus(statusBadge, statusInfo) {
+	fetch('/api/screenshot/bridge/status')
+		.then(resp => resp.json())
+		.then(data => {
+			const engine = data && data.engine ? String(data.engine) : 'cdp';
+			const extensionEnabled = !!(data && data.extension_enabled);
+			const bridgeConnected = !!(data && data.bridge_connected);
+			const pairedClients = Number((data && data.paired_clients) || 0);
+			const liveClients = Number((data && data.live_clients) || 0);
+			const pendingTasks = Number((data && data.pending_tasks) || 0);
+			const isConnected = engine === 'extension' && extensionEnabled && liveClients > 0;
+
+			updateBridgeBadge(statusBadge, isConnected);
+			if (!statusInfo) {
+				return;
+			}
+
+			if (engine !== 'extension') {
+				statusInfo.textContent = `当前截图引擎为 ${engine}，扩展桥接未启用`;
+				return;
+			}
+			if (!extensionEnabled) {
+				statusInfo.textContent = '扩展桥接已禁用，请检查 screenshot.extension.enabled 配置';
+				return;
+			}
+			if (liveClients > 0) {
+				statusInfo.textContent = `扩展在线（在线 ${liveClients} / 已配对 ${pairedClients}）`;
+				return;
+			}
+			if (pairedClients > 0) {
+				statusInfo.textContent = `扩展已配对但离线（已配对 ${pairedClients}）`;
+				return;
+			}
+			if (bridgeConnected && pendingTasks > 0) {
+				statusInfo.textContent = `扩展未配对（待处理任务 ${pendingTasks}）`;
+				return;
+			}
+			if (bridgeConnected) {
+				statusInfo.textContent = '桥接已就绪，请在扩展中完成配对';
+				return;
+			}
+			statusInfo.textContent = '桥接服务未就绪';
+		})
+		.catch(err => {
+			console.error('Bridge status error:', err);
+			updateBridgeBadge(statusBadge, false);
+			if (statusInfo) {
+				statusInfo.textContent = '扩展状态检测失败';
+			}
+		});
+}
+
+function updateBridgeBadge(badge, connected) {
+	if (!badge) {
+		return;
+	}
+	badge.textContent = connected ? '扩展在线' : '扩展离线';
+	badge.classList.toggle('cookie-status--on', connected);
+	badge.classList.toggle('cookie-status--off', !connected);
 }
 
 function saveProxy(button, statusInfo) {
@@ -2155,7 +2238,7 @@ function captureAllScreenshots() {
 		return;
 	}
 
-	const { assets, queryID } = window.currentQueryData;
+	const { assets, queryID, engines } = window.currentQueryData;
 	if (!assets || assets.length === 0) {
 		showMessage('没有可截图的目标', 'warning');
 		return;
@@ -2173,44 +2256,75 @@ function captureAllScreenshots() {
 	statusEl.textContent = '正在批量截图目标网站...';
 	progressEl.style.display = 'block';
 
-	// 准备批量截图请求
-	const targets = assets.map(asset => ({
-		url: asset.url || asset.URL || '',
-		ip: asset.ip || asset.IP || '',
-		port: String(asset.port || asset.Port || ''),
-		protocol: asset.protocol || asset.Protocol || 'http'
-	})).filter(t => t.ip); // 只保留有IP的目标
+	// 准备URL列表
+	const urls = assets.map(asset => {
+		const ip = asset.ip || asset.IP || '';
+		const port = String(asset.port || asset.Port || '');
+		const protocol = asset.protocol || asset.Protocol || 'http';
+		const url = asset.url || asset.URL || '';
 
-	// 分批处理，每批5个
-	const batchSize = 5;
-	let completed = 0;
-	const total = targets.length;
+		if (url) return url;
+		if (!ip) return null;
 
-	function processBatch(startIndex) {
-		if (startIndex >= total) {
-			statusEl.textContent = '所有截图完成!';
-			showMessage(`批量截图完成! 共 ${total} 个目标`, 'success');
+		let proto = 'http';
+		if (protocol) proto = protocol.toLowerCase();
+		else if (port === '443') proto = 'https';
+
+		if (port && port !== '80' && port !== '443') {
+			return `${proto}://${ip}:${port}`;
+		}
+		return `${proto}://${ip}`;
+	}).filter(u => u);
+
+	if (urls.length === 0) {
+		statusEl.textContent = '没有有效的URL可截图';
+		return;
+	}
+
+	// 使用批量URL截图API，控制并发为3以减少内存占用
+	const batchID = queryID || `batch_${Date.now()}`;
+
+	fetch('/api/screenshot/batch-urls', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			urls: urls,
+			batch_id: batchID,
+			concurrency: 3  // 降低并发以减少内存占用
+		})
+	})
+	.then(response => response.json())
+	.then(data => {
+		if (data.error) {
+			statusEl.textContent = `截图失败: ${data.error}`;
+			showMessage(data.error, 'error');
 			return;
 		}
 
-		const batch = targets.slice(startIndex, startIndex + batchSize);
-		const promises = batch.map(target => 
-			fetch(`/api/screenshot/target?url=${encodeURIComponent(target.url)}&ip=${encodeURIComponent(target.ip)}&port=${encodeURIComponent(target.port)}&protocol=${encodeURIComponent(target.protocol)}&query_id=${queryID}`)
-				.then(response => response.json())
-				.catch(err => ({ error: err.message }))
-		);
+		// 显示进度
+		const total = data.total || urls.length;
+		const success = data.success || 0;
+		const failed = data.failed || 0;
+		const percent = 100;
+		progressBar.style.width = percent + '%';
+		progressText.textContent = `完成: ${success} 成功, ${failed} 失败`;
 
-		Promise.all(promises).then(results => {
-			completed += batch.length;
-			const percent = (completed / total) * 100;
-			progressBar.style.width = percent + '%';
-			progressText.textContent = `已截图目标: ${completed}/${total}`;
+		statusEl.textContent = '所有截图完成!';
+		showMessage(`批量截图完成! 成功 ${success}/${total}`, success > 0 ? 'success' : 'warning');
 
-			// 继续下一批
-			setTimeout(() => processBatch(startIndex + batchSize), 1000);
-		});
-	}
+		// 显示结果详情
+		if (data.results && data.results.length > 0) {
+			const errors = data.results.filter(r => !r.success).map(r => `${r.url}: ${r.error}`);
+			if (errors.length > 0) {
+				console.warn('部分截图失败:', errors);
+			}
+		}
+	})
+	.catch(err => {
+		statusEl.textContent = `截图请求失败: ${err.message}`;
+		showMessage(err.message, 'error');
+	});
 
 	// 等待搜索引擎截图完成后再开始目标截图
-	setTimeout(() => processBatch(0), engines.length * 2000 + 1000);
+	// 批量API会在后端排队处理
 }

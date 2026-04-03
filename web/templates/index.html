@@ -84,11 +84,14 @@
 						<button type="button" class="btn btn-secondary" id="btn-save-proxy">保存代理</button>
 						<span class="cookie-status cookie-status--off" id="cdp-status">检测中</span>
 						<button type="button" class="btn btn-secondary" id="btn-connect-cdp">连接 CDP</button>
+						<span class="cookie-status cookie-status--off" id="bridge-status">扩展检测中</span>
+						<button type="button" class="btn btn-secondary" id="btn-refresh-bridge-status">刷新扩展</button>
 						<label class="option-label">
 							<input type="checkbox" id="browser-query-mode" name="browser_query" value="true">
 							查询时同步在浏览器打开结果页
 						</label>
 						<span class="form-text" id="cdp-status-info"></span>
+						<span class="form-text" id="bridge-status-info"></span>
 					</div>
 					<small class="form-text">默认检测 127.0.0.1:9222。开启后会保留现有 API 查询，同时通过已连接的 CDP 浏览器打开所选引擎结果页</small>
 				</div>

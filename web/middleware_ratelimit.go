@@ -12,10 +12,12 @@ import (
 
 // RateLimiter 限流器
 type RateLimiter struct {
-	requests map[string]*clientInfo
-	mu       sync.RWMutex
-	rate     int           // 每分钟最大请求数
-	window   time.Duration // 时间窗口
+	requests   map[string]*clientInfo
+	mu         sync.RWMutex
+	rate       int           // 每分钟最大请求数
+	window     time.Duration // 时间窗口
+	stopChan   chan struct{} // 停止信号
+	stopped    bool
 }
 
 type clientInfo struct {
@@ -29,12 +31,23 @@ func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
 		requests: make(map[string]*clientInfo),
 		rate:     rate,
 		window:   window,
+		stopChan: make(chan struct{}),
 	}
 
 	// 启动后台清理任务
 	go limiter.cleanup()
 
 	return limiter
+}
+
+// Stop 停止限流器的清理goroutine
+func (r *RateLimiter) Stop() {
+	r.mu.Lock()
+	if !r.stopped {
+		r.stopped = true
+		close(r.stopChan)
+	}
+	r.mu.Unlock()
 }
 
 // Allow 检查是否允许请求
@@ -64,15 +77,22 @@ func (r *RateLimiter) Allow(clientID string) bool {
 // cleanup 定期清理过期的客户端记录
 func (r *RateLimiter) cleanup() {
 	ticker := time.NewTicker(time.Minute)
-	for range ticker.C {
-		r.mu.Lock()
-		now := time.Now()
-		for clientID, info := range r.requests {
-			if now.Sub(info.lastReset) > r.window*2 {
-				delete(r.requests, clientID)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.stopChan:
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			now := time.Now()
+			for clientID, info := range r.requests {
+				if now.Sub(info.lastReset) > r.window*2 {
+					delete(r.requests, clientID)
+				}
 			}
+			r.mu.Unlock()
 		}
-		r.mu.Unlock()
 	}
 }
 
@@ -149,6 +169,10 @@ func SetRateLimitConfig(rate int, window time.Duration) {
 	}
 	if window <= 0 {
 		window = time.Minute
+	}
+	// 停止旧的限流器
+	if globalLimiter != nil {
+		globalLimiter.Stop()
 	}
 	globalLimiter = NewRateLimiter(rate, window)
 }

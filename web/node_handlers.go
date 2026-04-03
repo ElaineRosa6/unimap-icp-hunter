@@ -13,7 +13,8 @@ func (s *Server) isDistributedEnabled() bool {
 		return false
 	}
 	if s.config == nil {
-		return true
+		// Default to disabled when config is nil for safety
+		return false
 	}
 	return s.config.Distributed.Enabled
 }
@@ -158,8 +159,16 @@ func (s *Server) handleNodeNetworkProfile(w http.ResponseWriter, r *http.Request
 		egressSummary = append(egressSummary, map[string]interface{}{"egress_ip": egress, "nodes": count})
 	}
 	sort.Slice(egressSummary, func(i, j int) bool {
-		a := strings.TrimSpace(egressSummary[i]["egress_ip"].(string))
-		b := strings.TrimSpace(egressSummary[j]["egress_ip"].(string))
+		a, aOk := egressSummary[i]["egress_ip"].(string)
+		b, bOk := egressSummary[j]["egress_ip"].(string)
+		if !aOk {
+			a = ""
+		}
+		if !bOk {
+			b = ""
+		}
+		a = strings.TrimSpace(a)
+		b = strings.TrimSpace(b)
 		return a < b
 	})
 

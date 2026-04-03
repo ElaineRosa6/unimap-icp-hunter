@@ -107,6 +107,7 @@ func (s *Server) handleScreenshotBridgeRotateToken(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
+	s.touchBridgeToken(oldToken)
 
 	var req struct {
 		RevokeOld bool `json:"revoke_old"`
@@ -173,6 +174,7 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		writeAPIError(w, http.StatusUnauthorized, "unauthorized_bridge", "invalid callback signature", err.Error())
 		return
 	}
+	s.touchBridgeToken(token)
 
 	var req struct {
 		RequestID string `json:"request_id"`
@@ -251,6 +253,10 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 	}
 	if _, ok := s.validateBridgeAuthIfRequired(w, r); !ok {
 		return
+	}
+	token := strings.TrimSpace(extractBearerToken(r.Header.Get("Authorization")))
+	if token != "" {
+		s.touchBridgeToken(token)
 	}
 
 	task, ok := s.bridgeMock.NextTask()
@@ -417,10 +423,15 @@ func (s *Server) issueBridgeToken(ttlSeconds int) (string, int64, error) {
 	if s.bridgeTokens == nil {
 		s.bridgeTokens = make(map[string]int64)
 	}
+	if s.bridgeTokenLastSeen == nil {
+		s.bridgeTokenLastSeen = make(map[string]int64)
+	}
 	s.bridgeTokens[token] = expireAt
+	s.bridgeTokenLastSeen[token] = time.Now().Unix()
 	for tk, exp := range s.bridgeTokens {
 		if exp <= time.Now().Unix() {
 			delete(s.bridgeTokens, tk)
+			delete(s.bridgeTokenLastSeen, tk)
 		}
 	}
 	s.configMutex.Unlock()
@@ -440,9 +451,25 @@ func (s *Server) validateBridgeToken(token string) bool {
 	}
 	if expireAt <= time.Now().Unix() {
 		delete(s.bridgeTokens, token)
+		delete(s.bridgeTokenLastSeen, token)
 		return false
 	}
 	return true
+}
+
+func (s *Server) touchBridgeToken(token string) {
+	token = strings.TrimSpace(token)
+	if token == "" || s == nil {
+		return
+	}
+	s.configMutex.Lock()
+	if s.bridgeTokenLastSeen == nil {
+		s.bridgeTokenLastSeen = make(map[string]int64)
+	}
+	if _, ok := s.bridgeTokens[token]; ok {
+		s.bridgeTokenLastSeen[token] = time.Now().Unix()
+	}
+	s.configMutex.Unlock()
 }
 
 func (s *Server) revokeBridgeToken(token string) bool {
@@ -460,6 +487,7 @@ func (s *Server) revokeBridgeToken(token string) bool {
 		return false
 	}
 	delete(s.bridgeTokens, token)
+	delete(s.bridgeTokenLastSeen, token)
 
 	if s.bridgeCallbackNonces != nil {
 		prefix := token + ":"
@@ -658,6 +686,31 @@ func (s *Server) activeBridgeTokens() int {
 	for token, expireAt := range s.bridgeTokens {
 		if expireAt <= now {
 			delete(s.bridgeTokens, token)
+			delete(s.bridgeTokenLastSeen, token)
+			continue
+		}
+		count++
+	}
+	s.configMutex.Unlock()
+	return count
+}
+
+func (s *Server) activeBridgeLiveTokens() int {
+	if s == nil {
+		return 0
+	}
+	now := time.Now().Unix()
+	const liveWindowSeconds = 15
+	count := 0
+	s.configMutex.Lock()
+	for token, expireAt := range s.bridgeTokens {
+		if expireAt <= now {
+			delete(s.bridgeTokens, token)
+			delete(s.bridgeTokenLastSeen, token)
+			continue
+		}
+		lastSeen := s.bridgeTokenLastSeen[token]
+		if lastSeen <= 0 || now-lastSeen > liveWindowSeconds {
 			continue
 		}
 		count++
@@ -711,6 +764,7 @@ func (s *Server) buildBridgeDiagnosticSnapshot() map[string]interface{} {
 		"ready":             ready,
 		"bridge_connected":  bridgeConnected,
 		"paired_clients":    s.activeBridgeTokens(),
+		"live_clients":      s.activeBridgeLiveTokens(),
 		"pending_tasks":     pending,
 		"awaiting_results":  waiters,
 		"in_flight_tasks":   inFlight,

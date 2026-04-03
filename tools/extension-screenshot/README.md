@@ -8,6 +8,20 @@ This is a Day 6 MVP browser extension scaffold for the screenshot bridge workflo
 2. Enable developer mode.
 3. Load unpacked folder: tools/extension-screenshot.
 
+## Configuration
+
+### API Base URL
+默认连接 `http://127.0.0.1:8448`。如需修改，在扩展控制台执行：
+
+```javascript
+chrome.storage.local.set({ apiBaseURL: "http://your-server:port" })
+```
+
+### Memory Settings
+内存相关参数（在 `src/capture.js` 中修改）：
+- `MAX_TAB_POOL_SIZE`: Tab池大小（默认3）
+- `TAB_REUSE_TIMEOUT_MS`: Tab复用超时（默认30秒）
+
 ## Current MVP Scope
 
 - MV3 service worker skeleton
@@ -19,8 +33,10 @@ This is a Day 6 MVP browser extension scaffold for the screenshot bridge workflo
 - Mock callback integration with:
   - POST /api/screenshot/bridge/mock/result
 
-## Current Status (2026-03-27)
+## Current Status (2026-04-03)
 
+- **Tab Pool Management**: 截图完成后Tab被释放或复用，避免内存泄漏
+- **Configurable API URL**: API地址可通过storage配置
 - End-to-end flow has been validated:
   - pair -> enqueue batch screenshot -> pull bridge task -> capture -> callback -> backend persists file
 - Bridge token auth is enabled when `screenshot.extension.pairing_required=true`.
@@ -33,6 +49,12 @@ This is a Day 6 MVP browser extension scaffold for the screenshot bridge workflo
   - extension proactively rotates bridge token before expiry via `/api/screenshot/bridge/token/rotate`
   - backend can enforce callback signature and nonce replay checks via config
   - CI smoke workflow added for bridge-focused tests and extension script syntax checks
+
+## Known Issues Fixed (2026-04-03)
+
+1. **Permission Error**: 修复 `captureVisibleTab` 权限错误，添加 `<all_urls>` 权限
+2. **Memory Leak**: 实现Tab池管理，批量截图不再耗尽内存
+3. **Hardcoded URL**: API地址现可配置
 
 ## Recommended Next Steps
 

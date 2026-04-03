@@ -27,3 +27,15 @@ export async function saveLastError(err) {
     last_error_at: Date.now()
   });
 }
+
+// API Base URL storage
+const DEFAULT_API_BASE_URL = "http://127.0.0.1:8448";
+
+export async function saveAPIBaseURL(url) {
+  await chrome.storage.local.set({ apiBaseURL: url });
+}
+
+export async function loadAPIBaseURL() {
+  const data = await chrome.storage.local.get(["apiBaseURL"]);
+  return data.apiBaseURL || DEFAULT_API_BASE_URL;
+}

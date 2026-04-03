@@ -7,7 +7,12 @@ import (
 )
 
 func (s *Server) isNodeAuthRequired() bool {
-	if s == nil || s.config == nil {
+	if s == nil {
+		return false
+	}
+	if s.config == nil {
+		// Default to requiring auth when config is nil for safety
+		// But since no tokens are configured, node endpoints should be disabled
 		return false
 	}
 	for _, token := range s.config.Distributed.NodeAuthTokens {

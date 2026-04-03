@@ -82,10 +82,13 @@ type Server struct {
 	bridgeCallbackNonces map[string]int64
 	bridgeLastErr        string
 	bridgeLastAt         int64
+	bridgeTokenLastSeen  map[string]int64
 	proxyPool            *proxypool.Pool
 	nodeRegistry         *distributed.Registry
 	nodeTaskQueue        *distributed.TaskQueue
 	distributedEnabled   bool
+	shutdownCtx          context.Context
+	shutdownCancel       context.CancelFunc
 }
 
 // NewServer 创建Web服务器
@@ -226,6 +229,8 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 	nodeTaskQueue := distributed.NewTaskQueue()
 	nodeTaskQueue.SetDefaultMaxReassign(maxReassign)
 
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+
 	srv := &Server{
 		port:                 port,
 		templates:            templates,
@@ -244,11 +249,14 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 		config:               cfg,
 		configManager:        cfgManager,
 		bridgeTokens:         make(map[string]int64),
+		bridgeTokenLastSeen:  make(map[string]int64),
 		bridgeCallbackNonces: make(map[string]int64),
 		proxyPool:            proxyPool,
 		nodeRegistry:         nodeRegistry,
 		nodeTaskQueue:        nodeTaskQueue,
 		distributedEnabled:   distributedEnabled,
+		shutdownCtx:          shutdownCtx,
+		shutdownCancel:       shutdownCancel,
 	}
 
 	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Screenshot.Engine), "extension") {
@@ -430,6 +438,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	logger.Info("Shutting down web server...")
+
+	// 取消所有后台goroutine
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
+
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("web server shutdown error: %w", err)
 	}

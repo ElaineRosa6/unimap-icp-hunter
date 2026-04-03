@@ -263,10 +263,17 @@ func (s *Server) handleWebSocketQuery(ctx context.Context, message map[string]in
 
 		// 延迟清理查询状态，允许客户端在一段时间内查询已完成任务的状态
 		go func() {
-			time.Sleep(5 * time.Minute)
-			s.queryMutex.Lock()
-			delete(s.queryStatus, queryID)
-			s.queryMutex.Unlock()
+			select {
+			case <-time.After(5 * time.Minute):
+				s.queryMutex.Lock()
+				delete(s.queryStatus, queryID)
+				s.queryMutex.Unlock()
+			case <-s.shutdownCtx.Done():
+				// Server is shutting down, cleanup immediately
+				s.queryMutex.Lock()
+				delete(s.queryStatus, queryID)
+				s.queryMutex.Unlock()
+			}
 		}()
 
 		// 发送查询完成消息（发副本，避免边编码边被修改）
