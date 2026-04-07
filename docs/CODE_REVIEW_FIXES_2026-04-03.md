@@ -2,6 +2,10 @@
 
 **日期**: 2026-04-03
 **检查范围**: 全项目代码审查
+**修复状态**: 8项已修复，2项待处理
+**Git提交**:
+- `8ddba48` fix: resolve extension screenshot permission error, memory leak, and goroutine leaks
+- `5bc3982` feat(distributed): implement snapshot persistence, scheduler, and node cleanup
 
 ## 一、已修复的问题
 
@@ -203,55 +207,75 @@ fetch('/api/screenshot/batch-urls', {
 
 ---
 
-## 二、剩余建议性问题
+## 二、剩余未修复问题
 
-### 1. 模板渲染错误未处理 (低优先级)
+### 1. 模板渲染错误未处理 (低优先级) ⏳ 待修复
 
-**位置**: 多个handler文件
-**问题**: `ExecuteTemplate` 调用忽略错误返回值
-**建议**: 检查错误并记录日志
+**位置**: `web/page_handlers.go` 等handler文件
+**问题**: `ExecuteTemplate` 调用忽略错误返回值，模板渲染失败时用户可能看到空白页面而无日志记录
+**影响**: 问题排查困难，用户体验受损
+**建议修复**: 检查错误并记录日志
 
 ```go
+// 当前代码（问题）
+s.templates.ExecuteTemplate(w, "index.html", data)  // 错误被忽略
+
+// 建议修复
 if err := s.templates.ExecuteTemplate(w, "index.html", data); err != nil {
     logger.Errorf("Template rendering failed: %v", err)
+    http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 }
 ```
 
 ---
 
-### 2. 分布式任务队列无持久化 (中优先级)
-
-**位置**: `internal/distributed/task_queue.go`
-**问题**: 任务仅存储在内存，服务重启后丢失
-**建议**: 添加持久化存储（如SQLite或文件）
-
----
-
-### 3. Node Registry无清理机制 (低优先级)
-
-**位置**: `internal/distributed/registry.go`
-**问题**: 离线节点永不移除，map无限增长
-**建议**: 定期清理超时的离线节点
-
----
-
-### 4. SSRF风险 (中优先级)
+### 2. SSRF风险 (中优先级) ⏳ 待修复
 
 **位置**: `web/screenshot_handlers.go`
-**问题**: 截图端点接受任意URL，无白名单验证
-**建议**: 添加URL白名单或禁止内网地址
+**问题**: 截图端点接受任意URL进行截图，无白名单验证，可被用于探测内网服务
+**影响**: 安全风险，可被利用进行内网端口扫描、访问内部服务
+**建议修复**: 添加URL验证，禁止内网地址
 
 ```go
+// 建议添加URL验证函数
 func isURLAllowed(targetURL string) bool {
-    // 禁止内网地址
-    parsed, _ := url.Parse(targetURL)
-    host := parsed.Hostname()
-    if net.ParseIP(host).IsPrivate() {
+    parsed, err := url.Parse(targetURL)
+    if err != nil {
         return false
     }
+
+    // 仅允许http/https
+    if parsed.Scheme != "http" && parsed.Scheme != "https" {
+        return false
+    }
+
+    host := parsed.Hostname()
+
+    // 检查是否为IP地址
+    ip := net.ParseIP(host)
+    if ip != nil {
+        // 禁止私有IP、回环地址、链路本地地址
+        if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+            return false
+        }
+    }
+
+    // 可添加域名白名单检查
+    // allowedDomains := []string{"example.com", "trusted.org"}
+    // ...
+
     return true
 }
 ```
+
+---
+
+### 已移至分布式文档（已在DISTRIBUTED_REVIEW中修复）
+
+以下问题原列于此，但已在分布式专项修复中解决：
+
+- ❌ 分布式任务队列无持久化 → ✅ 已通过 `snapshot.go` 实现
+- ❌ Node Registry无清理机制 → ✅ 已添加后台清理goroutine
 
 ---
 

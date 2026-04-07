@@ -57,7 +57,9 @@ func (s *Server) requireNodeToken(w http.ResponseWriter, r *http.Request, nodeID
 
 func (s *Server) requireDistributedAdminToken(w http.ResponseWriter, r *http.Request) bool {
 	if s == nil || s.config == nil {
-		return true
+		// Reject when config is nil for safety - no admin token to validate against
+		writeAPIError(w, http.StatusServiceUnavailable, "admin_auth_failed", "admin auth failed", "server configuration not available")
+		return false
 	}
 	expected := strings.TrimSpace(s.config.Distributed.AdminToken)
 	if expected == "" {

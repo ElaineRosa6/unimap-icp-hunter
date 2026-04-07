@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/unimap-icp-hunter/project/internal/requestid"
@@ -15,6 +16,8 @@ var (
 	Log *zap.Logger
 	// Sugar 全局SugarLogger实例（用于更方便的日志记录）
 	Sugar *zap.SugaredLogger
+	// fileHandle 日志文件句柄，用于关闭
+	fileHandle *os.File
 )
 
 // Level 日志级别
@@ -51,10 +54,33 @@ func Init(cfg Config) {
 	// 创建Logger
 	Log = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 	Sugar = Log.Sugar()
+}
 
-	// 延迟同步
-	defer Log.Sync()
-	defer Sugar.Sync()
+// Sync 同步日志缓冲，应在应用退出前调用
+func Sync() error {
+	var errs []error
+	if Log != nil {
+		if err := Log.Sync(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if Sugar != nil {
+		if err := Sugar.Sync(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// Close 关闭日志文件句柄，应在应用退出前调用
+func Close() error {
+	if fileHandle != nil {
+		return fileHandle.Close()
+	}
+	return nil
 }
 
 // newCore 创建zap.Core
@@ -86,18 +112,20 @@ func newCore(level zapcore.Level, encoding string, file string) zapcore.Core {
 	// 创建输出
 	var writeSyncer zapcore.WriteSyncer
 	if file != "" {
-		// 确保目录存在
-		fileDir := file[:strings.LastIndex(file, "/")]
-		if fileDir != "" {
+		// 确保目录存在（使用 filepath.Dir 兼容 Windows）
+		fileDir := filepath.Dir(file)
+		if fileDir != "" && fileDir != "." {
 			os.MkdirAll(fileDir, 0755)
 		}
 
-		// 创建文件
-		f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// 创建文件（权限 0600，包含敏感信息）
+		f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			// 文件创建失败，使用标准输出
 			writeSyncer = zapcore.AddSync(os.Stdout)
 		} else {
+			// 保存文件句柄以便关闭
+			fileHandle = f
 			// 同时输出到文件和标准输出
 			writeSyncer = zapcore.NewMultiWriteSyncer(
 				zapcore.AddSync(f),

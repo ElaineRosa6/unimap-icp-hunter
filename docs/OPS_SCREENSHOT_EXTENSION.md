@@ -15,6 +15,7 @@ This runbook focuses on screenshot extension bridge operations.
 1. Service health:
    - Check Web service is reachable.
    - Check bridge health/status endpoints.
+   - **重要提示**：服务启动后，浏览器扩展需要等待大约 1-2 分钟才能正常连接。这是因为服务需要初始化截图管理器、桥接服务等组件，确保所有 API 端点就绪后扩展才能成功配对和通信。
 2. Bridge diagnostics:
    - ready, bridge_connected
    - queue_len, in_flight_tasks, pending_tasks

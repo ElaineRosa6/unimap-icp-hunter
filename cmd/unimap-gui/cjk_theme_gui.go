@@ -16,6 +16,7 @@ import (
 type cjkTheme struct {
 	base    fyne.Theme
 	regular fyne.Resource
+	mono    fyne.Resource
 }
 
 func (t *cjkTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
@@ -27,7 +28,10 @@ func (t *cjkTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 }
 
 func (t *cjkTheme) Font(style fyne.TextStyle) fyne.Resource {
-	if t.regular != nil {
+	if style.Monospace && t.mono != nil {
+		return t.mono
+	}
+	if !style.Monospace && t.regular != nil {
 		return t.regular
 	}
 	return t.base.Font(style)
@@ -37,25 +41,54 @@ func (t *cjkTheme) Size(name fyne.ThemeSizeName) float32 {
 	return t.base.Size(name)
 }
 
-// newCJKTheme tries to load a Windows-available CJK font and returns a fyne.Theme
-// that uses it as the regular font. If no font can be loaded, it returns nil.
 func newCJKTheme() fyne.Theme {
+	var regular, mono fyne.Resource
+
 	fontPath := os.Getenv("UNIMAP_GUI_FONT")
 	if fontPath != "" {
 		if res := loadFontResource(fontPath); res != nil {
 			log.Printf("[unimap-gui] using font from UNIMAP_GUI_FONT: %s", fontPath)
-			return &cjkTheme{base: theme.DefaultTheme(), regular: res}
+			regular = res
 		}
 	}
 
-	for _, p := range candidateFontPaths() {
-		if res := loadFontResource(p); res != nil {
-			log.Printf("[unimap-gui] using font: %s", p)
-			return &cjkTheme{base: theme.DefaultTheme(), regular: res}
+	if regular == nil {
+		for _, p := range candidateFontPaths() {
+			if res := loadFontResource(p); res != nil {
+				log.Printf("[unimap-gui] using font: %s", p)
+				regular = res
+				break
+			}
 		}
 	}
 
-	return nil
+	monoPath := os.Getenv("UNIMAP_GUI_MONO_FONT")
+	if monoPath != "" {
+		if res := loadFontResource(monoPath); res != nil {
+			log.Printf("[unimap-gui] using mono font from UNIMAP_GUI_MONO_FONT: %s", monoPath)
+			mono = res
+		}
+	}
+
+	if mono == nil {
+		for _, p := range candidateMonoFontPaths() {
+			if res := loadFontResource(p); res != nil {
+				log.Printf("[unimap-gui] using mono font: %s", p)
+				mono = res
+				break
+			}
+		}
+	}
+
+	if regular == nil && mono == nil {
+		return nil
+	}
+
+	if mono == nil {
+		mono = regular
+	}
+
+	return &cjkTheme{base: theme.DefaultTheme(), regular: regular, mono: mono}
 }
 
 func loadFontResource(path string) fyne.Resource {

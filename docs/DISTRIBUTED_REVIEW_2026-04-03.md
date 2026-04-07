@@ -2,7 +2,8 @@
 
 **日期**: 2026-04-03
 **审查范围**: `internal/distributed/`, `web/node_*_handlers.go`
-**修复状态**: ✅ 已完成
+**修复状态**: ✅ 全部完成
+**修复提交**: 已提交至 release/major-upgrade-vNEXT 分支
 
 ---
 

@@ -6,3 +6,7 @@ package main
 func candidateFontPaths() []string {
 	return nil
 }
+
+func candidateMonoFontPaths() []string {
+	return nil
+}

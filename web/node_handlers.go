@@ -184,7 +184,7 @@ func (s *Server) handleNodeNetworkProfile(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleNodeDeregister handles DELETE /api/nodes/:node_id - deregister a node
+// handleNodeDeregister handles DELETE /api/nodes/deregister - deregister a node
 func (s *Server) handleNodeDeregister(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodDelete) {
 		return
@@ -197,7 +197,7 @@ func (s *Server) handleNodeDeregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodeID := r.PathValue("node_id")
+	nodeID := r.URL.Query().Get("node_id")
 	if strings.TrimSpace(nodeID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "missing_node_id", "node_id is required", nil)
 		return
@@ -219,7 +219,7 @@ func (s *Server) handleNodeDeregister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleNodeGet handles GET /api/nodes/:node_id - retrieve a single node
+// handleNodeGet handles GET /api/nodes/get - retrieve a single node
 func (s *Server) handleNodeGet(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -232,7 +232,7 @@ func (s *Server) handleNodeGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodeID := r.PathValue("node_id")
+	nodeID := r.URL.Query().Get("node_id")
 	if strings.TrimSpace(nodeID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "missing_node_id", "node_id is required", nil)
 		return

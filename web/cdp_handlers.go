@@ -39,7 +39,9 @@ func (s *Server) handleCDPStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Debugf("failed to encode CDP status response: %v", err)
+	}
 }
 
 // handleCDPConnect 启动Chrome并连接CDP
@@ -59,24 +61,28 @@ func (s *Server) handleCDPConnect(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if ok, info, _ := s.checkCDPStatus(ctx, baseURL); ok {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"online":  true,
 			"url":     baseURL,
 			"version": info,
 			"message": "CDP already online",
-		})
+		}); err != nil {
+			logger.Debugf("failed to encode CDP connect response: %v", err)
+		}
 		return
 	}
 
 	if err := s.startCDPChrome(baseURL); err != nil {
 		_, checked := s.resolveChromePathWithDiagnostics()
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":             false,
 			"error":               err.Error(),
 			"chrome_path_checked": checked,
-		})
+		}); err != nil {
+			logger.Debugf("failed to encode CDP connect error response: %v", err)
+		}
 		return
 	}
 
@@ -87,13 +93,15 @@ func (s *Server) handleCDPConnect(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if online {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"online":  true,
 			"url":     baseURL,
 			"version": info,
 			"message": "CDP connected",
-		})
+		}); err != nil {
+			logger.Debugf("failed to encode CDP connect success response: %v", err)
+		}
 		return
 	}
 
@@ -101,12 +109,14 @@ func (s *Server) handleCDPConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		msg = err.Error()
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": false,
 		"online":  false,
 		"url":     baseURL,
 		"error":   msg,
-	})
+	}); err != nil {
+		logger.Debugf("failed to encode CDP not available response: %v", err)
+	}
 }
 
 func (s *Server) resolveCDPURL() string {
@@ -283,6 +293,13 @@ func (s *Server) startCDPChrome(baseURL string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+
+	// Start a goroutine to wait for the process to prevent zombie processes
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			logger.Debugf("Chrome process exited: %v", err)
+		}
+	}()
 
 	s.chromeCmd = cmd.Process
 	return nil

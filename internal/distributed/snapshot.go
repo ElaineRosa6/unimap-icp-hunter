@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/unimap-icp-hunter/project/internal/logger"
 )
 
 // SnapshotData represents the complete state for persistence
@@ -78,10 +80,14 @@ func (s *SnapshotManager) startPeriodicSave() {
 		select {
 		case <-s.stopChan:
 			// Save final snapshot before stopping
-			_ = s.Save()
+			if err := s.Save(); err != nil {
+				logger.Warnf("failed to save final snapshot: %v", err)
+			}
 			return
 		case <-ticker.C:
-			_ = s.Save()
+			if err := s.Save(); err != nil {
+				logger.Warnf("failed to save periodic snapshot: %v", err)
+			}
 		}
 	}
 }
@@ -110,16 +116,16 @@ func (s *SnapshotManager) Save() error {
 		return fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	// Write to temp file first, then rename for atomicity
-	tempPath := s.filePath + ".tmp"
-	if err := os.WriteFile(tempPath, jsonData, 0644); err != nil {
-		return fmt.Errorf("failed to write temp snapshot: %w", err)
-	}
-
-	// Ensure directory exists
+	// Ensure directory exists before writing
 	dir := filepath.Dir(s.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create snapshot directory: %w", err)
+	}
+
+	// Write to temp file first, then rename for atomicity
+	tempPath := s.filePath + ".tmp"
+	if err := os.WriteFile(tempPath, jsonData, 0600); err != nil {
+		return fmt.Errorf("failed to write temp snapshot: %w", err)
 	}
 
 	// Atomic rename

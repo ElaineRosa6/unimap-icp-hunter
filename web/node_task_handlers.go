@@ -128,7 +128,7 @@ func (s *Server) handleNodeTaskStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleNodeTaskGet handles GET /api/nodes/task/:task_id - retrieve a single task
+// handleNodeTaskGet handles GET /api/nodes/task/get - retrieve a single task
 func (s *Server) handleNodeTaskGet(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -144,7 +144,7 @@ func (s *Server) handleNodeTaskGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID := r.PathValue("task_id")
+	taskID := r.URL.Query().Get("task_id")
 	if strings.TrimSpace(taskID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "missing_task_id", "task_id is required", nil)
 		return
@@ -166,7 +166,7 @@ func (s *Server) handleNodeTaskGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleNodeTaskDelete handles DELETE /api/nodes/task/:task_id - delete a task
+// handleNodeTaskDelete handles DELETE /api/nodes/task/delete - delete a task
 func (s *Server) handleNodeTaskDelete(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodDelete) {
 		return
@@ -182,7 +182,7 @@ func (s *Server) handleNodeTaskDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID := r.PathValue("task_id")
+	taskID := r.URL.Query().Get("task_id")
 	if strings.TrimSpace(taskID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "missing_task_id", "task_id is required", nil)
 		return

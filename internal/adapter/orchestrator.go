@@ -122,6 +122,8 @@ func (o *EngineOrchestrator) SetDefaultCacheTTL(ttl time.Duration) {
 
 // SetConcurrency 设置并发数
 func (o *EngineOrchestrator) SetConcurrency(concurrency int) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
 	}
@@ -133,6 +135,8 @@ func (o *EngineOrchestrator) SetConcurrency(concurrency int) {
 
 // GetConcurrency 获取当前并发设置。
 func (o *EngineOrchestrator) GetConcurrency() int {
+	o.mutex.RLock()
+	defer o.mutex.RUnlock()
 	return o.concurrency
 }
 
@@ -362,8 +366,8 @@ func (o *EngineOrchestrator) SearchEnginesWithContext(ctx context.Context, queri
 		return nil, fmt.Errorf("no queries provided")
 	}
 
-	// 限制并发数
-	concurrency := o.concurrency
+	// 限制并发数（使用 mutex 保护读取）
+	concurrency := o.GetConcurrency()
 	if len(queries) < concurrency {
 		concurrency = len(queries)
 	}
@@ -559,8 +563,8 @@ func (o *EngineOrchestrator) SearchEnginesWithPaginationAndContext(ctx context.C
 		return nil, fmt.Errorf("no queries provided")
 	}
 
-	// 限制并发数
-	concurrency := o.concurrency
+	// 限制并发数（使用 mutex 保护读取）
+	concurrency := o.GetConcurrency()
 	if len(queries) < concurrency {
 		concurrency = len(queries)
 	}

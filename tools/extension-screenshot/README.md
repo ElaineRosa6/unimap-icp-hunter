@@ -8,6 +8,8 @@ This is a Day 6 MVP browser extension scaffold for the screenshot bridge workflo
 2. Enable developer mode.
 3. Load unpacked folder: tools/extension-screenshot.
 
+**重要提示**：服务启动后，浏览器扩展需要等待大约 1-2 分钟才能正常连接。这是因为服务需要初始化截图管理器、桥接服务等组件，确保所有 API 端点就绪后扩展才能成功配对和通信。
+
 ## Configuration
 
 ### API Base URL

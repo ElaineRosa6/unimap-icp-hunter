@@ -400,10 +400,28 @@ func (s *Server) Start() error {
 	handler = corsMiddleware(allowedOrigins, allowedMethods, allowedHeaders, exposedHeaders, allowCredentials, maxAge)(handler)
 	handler = metricsMiddleware(handler)
 
+	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isWebSocket := strings.Contains(r.Header.Get("Connection"), "Upgrade") &&
+			strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+		
+		if isWebSocket && r.URL.Path == "/api/ws" {
+			s.handleWebSocket(w, r)
+			return
+		}
+		
+		isBridgeAPI := strings.HasPrefix(r.URL.Path, "/api/screenshot/bridge/")
+		if isBridgeAPI {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		
+		handler.ServeHTTP(w, r)
+	})
+
 	addr := fmt.Sprintf(":%d", s.port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: rootHandler,
 	}
 
 	logger.Infof("Web server started at http://localhost%s", addr)

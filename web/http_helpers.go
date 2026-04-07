@@ -153,13 +153,18 @@ func requestSizeLimitMiddleware(maxBodyBytes int64) func(http.Handler) http.Hand
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.Method {
-			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-				if r.ContentLength > maxBodyBytes {
-					writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds configured limit", map[string]string{"max_body_bytes": strconv.FormatInt(maxBodyBytes, 10)})
-					return
+			isWebSocket := strings.Contains(r.Header.Get("Connection"), "Upgrade") &&
+				strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+			
+			if !isWebSocket {
+				switch r.Method {
+				case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+					if r.ContentLength > maxBodyBytes {
+						writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds configured limit", map[string]string{"max_body_bytes": strconv.FormatInt(maxBodyBytes, 10)})
+						return
+					}
+					r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 				}
-				r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 			}
 			next.ServeHTTP(w, r)
 		})
