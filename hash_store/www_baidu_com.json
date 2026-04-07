@@ -1,0 +1,52 @@
+{
+  "url": "https://www.baidu.com",
+  "title": "百度一下，你就知道",
+  "full_hash": "8e54a024d136c16cfe23aaeed7e27410a9b04c05a13ce66dd48d138727733d0f",
+  "segment_hashes": [
+    {
+      "name": "js_files",
+      "hash": "6a6766c9e0cb239a781a3851383c15babd0c84aff8aa487a78cafa8fc7fa216c",
+      "length": 2509,
+      "elements": 28
+    },
+    {
+      "name": "article",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "main",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "length": 0,
+      "elements": 0
+    },
+    {
+      "name": "forms",
+      "hash": "e1087f7982d17d481dc58cfeeec8e33290d44ab85cb988d0db96ebecdce6fbfe",
+      "length": 302,
+      "elements": 18
+    },
+    {
+      "name": "links",
+      "hash": "2f422c664b870bc848eb15b516075c90c4dd48d96f81e1f703d1c3acfb7ba447",
+      "length": 7540,
+      "elements": 68
+    },
+    {
+      "name": "scripts",
+      "hash": "7a9df53bb514cbc252481e6b9dc0ffb908bde315e32b89f5906ef55307b73e63",
+      "length": 97848,
+      "elements": 49
+    },
+    {
+      "name": "body",
+      "hash": "87635b7708d2fd99ffd65e680080d404e06f0dce5ed92d01f2a382c31ae5aa8c",
+      "length": 281681,
+      "elements": 1
+    }
+  ],
+  "timestamp": 1775543539,
+  "html_length": 724249,
+  "status": "success"
+}

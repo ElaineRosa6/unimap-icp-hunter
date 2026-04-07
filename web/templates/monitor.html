@@ -1,0 +1,1713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>网页监控 - UniMap</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.staticVersion}}">
+	<style>
+		.nav-links {
+			margin-bottom: 20px;
+		}
+		.nav-links a {
+			margin-right: 15px;
+			text-decoration: none;
+			color: #007bff;
+		}
+		.nav-links a:hover {
+			text-decoration: underline;
+		}
+		.url-list-container {
+			display: flex;
+			gap: 20px;
+			margin-bottom: 20px;
+		}
+		.url-input-area {
+			flex: 1;
+		}
+		.url-input-area textarea {
+			width: 100%;
+			min-height: 250px;
+			font-family: monospace;
+			font-size: 14px;
+			padding: 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			resize: vertical;
+		}
+		.url-stats {
+			width: 200px;
+			padding: 15px;
+			background: #f8f9fa;
+			border-radius: 4px;
+		}
+		.url-stats h4 {
+			margin-top: 0;
+			margin-bottom: 15px;
+		}
+		.url-stats .stat-item {
+			display: flex;
+			justify-content: space-between;
+			margin-bottom: 10px;
+		}
+		.url-stats .stat-value {
+			font-weight: bold;
+			color: #007bff;
+		}
+		.options-group {
+			display: flex;
+			gap: 20px;
+			margin-bottom: 20px;
+		}
+		.options-group .form-group {
+			flex: 1;
+		}
+		.options-group .form-group select {
+			width: 100%;
+			padding: 8px 12px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+		}
+		.action-buttons {
+			display: flex;
+			gap: 10px;
+			margin-bottom: 20px;
+			flex-wrap: wrap;
+		}
+		.action-buttons .btn {
+			min-width: 120px;
+		}
+		.progress-container {
+			margin: 20px 0;
+			padding: 15px;
+			background: #f8f9fa;
+			border-radius: 4px;
+			display: none;
+		}
+		.progress-container.active {
+			display: block;
+		}
+		.progress-bar {
+			width: 100%;
+			height: 20px;
+			background: #e9ecef;
+			border-radius: 10px;
+			overflow: hidden;
+		}
+		.progress-bar-fill {
+			height: 100%;
+			background: #007bff;
+			transition: width 0.3s;
+		}
+		.progress-text {
+			text-align: center;
+			margin-top: 10px;
+		}
+		.results-section {
+			margin-top: 30px;
+		}
+		.results-section h3 {
+			margin-bottom: 15px;
+			padding-bottom: 10px;
+			border-bottom: 2px solid #007bff;
+		}
+		.result-card {
+			border: 1px solid #ddd;
+			border-radius: 8px;
+			margin-bottom: 15px;
+			overflow: hidden;
+		}
+		.result-card-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 12px 15px;
+			background: #f8f9fa;
+			border-bottom: 1px solid #ddd;
+		}
+		.result-card-header .url {
+			font-weight: bold;
+			word-break: break-all;
+			flex: 1;
+		}
+		.result-card-header .status-badge {
+			padding: 4px 12px;
+			border-radius: 20px;
+			font-size: 12px;
+			font-weight: bold;
+			margin-left: 10px;
+		}
+		.status-badge.success { background: #d4edda; color: #155724; }
+		.status-badge.warning { background: #fff3cd; color: #856404; }
+		.status-badge.danger { background: #f8d7da; color: #721c24; }
+		.status-badge.info { background: #d1ecf1; color: #0c5460; }
+		.result-card-body {
+			padding: 15px;
+		}
+		.hash-info {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+			gap: 10px;
+		}
+		.hash-item {
+			display: flex;
+			justify-content: space-between;
+			padding: 8px 12px;
+			background: #f8f9fa;
+			border-radius: 4px;
+			font-size: 13px;
+		}
+		.hash-item.tampered {
+			background: #f8d7da;
+			border: 1px solid #f5c6cb;
+		}
+		.hash-item .segment-name {
+			font-weight: bold;
+			color: #333;
+		}
+		.hash-item .segment-hash {
+			font-family: monospace;
+			color: #666;
+			max-width: 200px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.tamper-alert {
+			padding: 15px;
+			margin-bottom: 15px;
+			border-radius: 4px;
+		}
+		.tamper-alert.danger {
+			background: #f8d7da;
+			border: 1px solid #f5c6cb;
+			color: #721c24;
+		}
+		.tamper-alert.success {
+			background: #d4edda;
+			border: 1px solid #c3e6cb;
+			color: #155724;
+		}
+		.tamper-alert.info {
+			background: #d1ecf1;
+			border: 1px solid #bee5eb;
+			color: #0c5460;
+		}
+		.status-blocks {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+			gap: 10px;
+			margin-bottom: 12px;
+		}
+		.status-block {
+			padding: 10px 12px;
+			border-radius: 6px;
+			border: 1px solid #dfe4ea;
+			background: #f8f9fa;
+		}
+		.status-block .label {
+			font-size: 12px;
+			color: #6c757d;
+		}
+		.status-block .value {
+			font-size: 14px;
+			font-weight: 700;
+			margin-top: 3px;
+		}
+		.status-block.success { border-color: #b7e4c7; background: #f1fff6; }
+		.status-block.warning { border-color: #ffe08a; background: #fff9e6; }
+		.status-block.danger { border-color: #f5c2c7; background: #fff5f6; }
+		.status-block.info { border-color: #b6effb; background: #effcff; }
+		.result-actions {
+			margin-top: 12px;
+			display: flex;
+			gap: 8px;
+		}
+		.btn-retry-probe {
+			padding: 6px 10px;
+			font-size: 12px;
+			border: 1px solid #007bff;
+			background: #fff;
+			color: #007bff;
+			border-radius: 4px;
+			cursor: pointer;
+		}
+		.btn-retry-probe:hover {
+			background: #007bff;
+			color: #fff;
+		}
+		.changes-list {
+			margin-top: 10px;
+		}
+		.change-item {
+			padding: 8px 12px;
+			margin-bottom: 5px;
+			background: #fff;
+			border-left: 3px solid #dc3545;
+			font-size: 13px;
+		}
+		.change-item.added { border-left-color: #28a745; }
+		.change-item.removed { border-left-color: #6c757d; }
+		.screenshot-result {
+			display: flex;
+			align-items: center;
+			padding: 10px 15px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			margin-bottom: 10px;
+		}
+		.screenshot-result.success { border-left: 4px solid #28a745; }
+		.screenshot-result.failed { border-left: 4px solid #dc3545; }
+		.screenshot-result .status { width: 60px; font-weight: bold; }
+		.screenshot-result .status.success { color: #28a745; }
+		.screenshot-result .status.failed { color: #dc3545; }
+		.screenshot-result .url { flex: 1; word-break: break-all; padding: 0 15px; }
+		.screenshot-result .path { font-size: 12px; color: #666; }
+		.screenshot-result .error { font-size: 12px; color: #dc3545; }
+		.tabs {
+			display: flex;
+			border-bottom: 2px solid #ddd;
+			margin-bottom: 20px;
+		}
+		.tab {
+			padding: 10px 20px;
+			cursor: pointer;
+			border: none;
+			background: none;
+			font-size: 14px;
+			color: #666;
+			border-bottom: 2px solid transparent;
+			margin-bottom: -2px;
+		}
+		.tab:hover { color: #007bff; }
+		.tab.active {
+			color: #007bff;
+			border-bottom-color: #007bff;
+		}
+		.tab-content { display: none; }
+		.tab-content.active { display: block; }
+		.summary-cards {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+			gap: 15px;
+			margin-bottom: 20px;
+		}
+		.summary-card {
+			padding: 15px;
+			background: #f8f9fa;
+			border-radius: 8px;
+			text-align: center;
+		}
+		.summary-card .value {
+			font-size: 28px;
+			font-weight: bold;
+			color: #007bff;
+		}
+		.summary-card .label {
+			font-size: 14px;
+			color: #666;
+			margin-top: 5px;
+		}
+		.summary-card.danger .value { color: #dc3545; }
+		.summary-card.success .value { color: #28a745; }
+		.summary-card.warning .value { color: #ffc107; }
+		.summary-card.info .value { color: #17a2b8; }
+		
+		.history-controls {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			margin-bottom: 15px;
+		    align-items: center;
+		}
+		
+		.history-controls select {
+		    padding: 8px 12px;
+		    border: 1px solid #ddd;
+		    border-radius: 4px;
+		    min-width: 150px;
+		}
+
+		.history-controls input[type="text"] {
+			padding: 8px 12px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			min-width: 220px;
+		}
+
+		.history-controls input[type="datetime-local"] {
+			padding: 6px 10px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			min-width: 180px;
+			font-size: 14px;
+		}
+
+		.history-controls .btn {
+			padding: 8px 16px;
+			font-size: 14px;
+			border: 1px solid #007bff;
+			background: #007bff;
+			color: white;
+			border-radius: 4px;
+			cursor: pointer;
+		}
+
+		.history-controls .btn:hover {
+			background: #0069d9;
+			border-color: #0062cc;
+		}
+        
+        .history-item {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            overflow: hidden;
+        }
+        
+        .history-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .history-item-body {
+            padding: 15px;
+        }
+        
+        .history-item .url {
+            font-weight: bold;
+            word-break: break-all;
+        }
+        
+        .history-item .timestamp {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .history-item .hash-preview {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+	</style>
+</head>
+<body>
+	<header>
+		<h1>网页监控</h1>
+		<p>批量截图与防篡改检测</p>
+	</header>
+
+	<main>
+		<div class="nav-links">
+			<a href="/">← 返回首页</a>
+			<a href="/quota">查看配额</a>
+		</div>
+
+		<section class="query-form">
+			<h2>URL列表</h2>
+			<div class="url-list-container">
+				<div class="url-input-area">
+					<textarea id="url-list" placeholder="请输入URL列表，每行一个&#10;例如：&#10;https://www.example.com&#10;https://www.google.com&#10;example.org"></textarea>
+				</div>
+				<div class="url-stats">
+					<h4>统计信息</h4>
+					<div class="stat-item">
+						<span>总URL数:</span>
+						<span class="stat-value" id="total-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>格式合法URL:</span>
+						<span class="stat-value" id="valid-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>格式非法URL:</span>
+						<span class="stat-value" id="invalid-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>可达URL:</span>
+						<span class="stat-value" id="reachable-urls">0</span>
+					</div>
+					<div class="stat-item">
+						<span>不可达URL:</span>
+						<span class="stat-value" id="unreachable-urls">0</span>
+					</div>
+				</div>
+			</div>
+
+			<div class="options-group">
+				<div class="form-group">
+					<label for="concurrency">并发数 (1-10)</label>
+					<input type="number" id="concurrency" min="1" max="10" value="5">
+				</div>
+				<div class="form-group">
+					<label for="tamper-mode">判定模式</label>
+					<select id="tamper-mode">
+						<option value="relaxed" selected>宽松模式（推荐）</option>
+						<option value="strict">严格模式</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label for="batch-id">批次ID (可选)</label>
+					<input type="text" id="batch-id" placeholder="自动生成">
+				</div>
+			</div>
+
+			<div class="action-buttons">
+					<button type="button" class="btn" id="btn-tamper-check">🔍 篡改检测</button>
+					<button type="button" class="btn" id="btn-set-baseline">📌 设置基线</button>
+					<button type="button" class="btn" id="btn-batch-screenshot">📷 批量截图</button>
+					<button type="button" class="btn" id="btn-export-json">📄 导出JSON</button>
+					<button type="button" class="btn" id="btn-export-excel">📊 导出Excel</button>
+					<button type="button" class="btn" id="btn-clear">🗑️ 清空</button>
+					<button type="button" class="btn" id="btn-load-example">📝 加载示例</button>
+					<button type="button" class="btn" id="btn-import-file">📁 导入文件</button>
+					<input type="file" id="file-input" accept=".txt,.csv" style="display: none;">
+				</div>
+
+			<div class="progress-container" id="progress-container">
+				<div class="progress-bar">
+					<div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+				</div>
+				<div class="progress-text" id="progress-text">准备中...</div>
+			</div>
+
+			<!-- 结果区域 -->
+			<div class="results-section" id="results-section" style="display: none;">
+				<div class="tabs">
+					<button class="tab active" data-tab="tamper">篡改检测结果</button>
+					<button class="tab" data-tab="screenshot">截图结果</button>
+					<button class="tab" data-tab="history">历史记录</button>
+				</div>
+
+				<!-- 篡改检测结果 -->
+				<div class="tab-content active" id="tamper-tab">
+					<div class="summary-cards" id="tamper-summary" style="display: none;">
+						<div class="summary-card">
+							<div class="value" id="tamper-total">0</div>
+							<div class="label">检测总数</div>
+						</div>
+						<div class="summary-card danger">
+							<div class="value" id="tamper-count">0</div>
+							<div class="label">篡改数量</div>
+						</div>
+						<div class="summary-card success">
+							<div class="value" id="tamper-safe">0</div>
+							<div class="label">安全数量</div>
+						</div>
+						<div class="summary-card warning">
+							<div class="value" id="tamper-first">0</div>
+							<div class="label">无基线</div>
+						</div>
+						<div class="summary-card info">
+							<div class="value" id="tamper-unreachable">0</div>
+							<div class="label">不可达/异常</div>
+						</div>
+					</div>
+					<div id="tamper-results"></div>
+				</div>
+
+				<!-- 截图结果 -->
+				<div class="tab-content" id="screenshot-tab">
+					<div class="summary-cards" id="screenshot-summary" style="display: none;">
+						<div class="summary-card">
+							<div class="value" id="screenshot-total">0</div>
+							<div class="label">截图总数</div>
+						</div>
+						<div class="summary-card success">
+							<div class="value" id="screenshot-success">0</div>
+							<div class="label">成功</div>
+						</div>
+						<div class="summary-card danger">
+							<div class="value" id="screenshot-failed">0</div>
+							<div class="label">失败</div>
+						</div>
+					</div>
+					<div id="screenshot-results"></div>
+				</div>
+
+				<!-- 历史记录 -->
+				<div class="tab-content" id="history-tab">
+					<div class="history-controls">
+							<input type="text" id="history-query" placeholder="按URL/状态查询">
+							<select id="history-url-filter">
+								<option value="">全部URL</option>
+							</select>
+							<select id="history-type-filter">
+								<option value="">全部类型</option>
+								<option value="first_check">首次检测</option>
+								<option value="normal">正常</option>
+								<option value="tampered">篡改</option>
+							</select>
+							<select id="history-mode-filter">
+								<option value="">全部模式</option>
+								<option value="relaxed">宽松</option>
+								<option value="strict">严格</option>
+							</select>
+							<input type="datetime-local" id="history-start-time" placeholder="开始时间">
+							<input type="datetime-local" id="history-end-time" placeholder="结束时间">
+							<button type="button" class="btn btn-secondary" id="btn-refresh-history">刷新</button>
+						</div>
+					<div id="history-results"></div>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<p>&copy; 2026 UniMap - 多引擎网络资产查询系统</p>
+	</footer>
+
+	<script>
+		document.addEventListener('DOMContentLoaded', function() {
+			const urlList = document.getElementById('url-list');
+			const totalUrlsEl = document.getElementById('total-urls');
+			const validUrlsEl = document.getElementById('valid-urls');
+			const invalidUrlsEl = document.getElementById('invalid-urls');
+			const reachableUrlsEl = document.getElementById('reachable-urls');
+			const unreachableUrlsEl = document.getElementById('unreachable-urls');
+			const concurrencyInput = document.getElementById('concurrency');
+			const tamperModeInput = document.getElementById('tamper-mode');
+			const batchIdInput = document.getElementById('batch-id');
+			const progressContainer = document.getElementById('progress-container');
+			const progressBarFill = document.getElementById('progress-bar-fill');
+			const progressText = document.getElementById('progress-text');
+			const resultsSection = document.getElementById('results-section');
+			const tamperResults = document.getElementById('tamper-results');
+			const screenshotResults = document.getElementById('screenshot-results');
+			const historyResults = document.getElementById('history-results');
+			const historyUrlFilter = document.getElementById('history-url-filter');
+			const historyTypeFilter = document.getElementById('history-type-filter');
+			const historyModeFilter = document.getElementById('history-mode-filter');
+			const historyQueryInput = document.getElementById('history-query');
+			const historyStartTimeInput = document.getElementById('history-start-time');
+			const historyEndTimeInput = document.getElementById('history-end-time');
+			const refreshHistoryBtn = document.getElementById('btn-refresh-history');
+
+			let currentAction = null;
+		let historyRecords = [];
+		let currentTamperResults = [];
+
+			// 页面加载时自动加载历史记录
+			loadHistory().catch(err => {
+				console.error('历史记录加载失败:', err);
+			});
+
+			// 页面加载时显示结果区域并切换到历史记录标签页
+			resultsSection.style.display = 'block';
+			document.querySelector('.tab[data-tab="history"]').click();
+
+			// 更新统计
+			function updateStats() {
+				const urls = urlList.value.split('\n').filter(u => u.trim() !== '');
+				const total = urls.length;
+				let valid = 0;
+				let invalid = 0;
+
+				urls.forEach(url => {
+					url = url.trim();
+					if (isValidURL(url)) {
+						valid++;
+					} else {
+						invalid++;
+					}
+				});
+
+				totalUrlsEl.textContent = total;
+				validUrlsEl.textContent = valid;
+				invalidUrlsEl.textContent = invalid;
+				reachableUrlsEl.textContent = '0';
+				unreachableUrlsEl.textContent = '0';
+			}
+
+			function escapeHtml(value) {
+				const str = value === null || value === undefined ? '' : String(value);
+				return str
+					.replace(/&/g, '&amp;')
+					.replace(/</g, '&lt;')
+					.replace(/>/g, '&gt;')
+					.replace(/"/g, '&quot;')
+					.replace(/'/g, '&#39;');
+			}
+
+			// 验证URL
+			function isValidURL(url) {
+				url = url.trim();
+				if (!url) return false;
+				return /^(https?:\/\/)?([\w.-]+)(:\d+)?(\/.*)?$/i.test(url);
+			}
+
+			// 显示进度
+			function showProgress(text) {
+				progressContainer.classList.add('active');
+				progressBarFill.style.width = '0%';
+				progressBarFill.style.background = '#007bff';
+				progressText.textContent = text;
+			}
+
+			// 更新进度
+			function updateProgress(percent, text) {
+				progressBarFill.style.width = percent + '%';
+				if (text) progressText.textContent = text;
+			}
+
+			// 隐藏进度
+			function hideProgress() {
+				progressContainer.classList.remove('active');
+			}
+
+			// 显示错误进度
+			function showErrorProgress(text) {
+				progressBarFill.style.width = '100%';
+				progressBarFill.style.background = '#dc3545';
+				progressText.textContent = text;
+			}
+
+			// 获取有效的URL列表
+			function getInputURLs() {
+				return urlList.value.split('\n')
+					.map(u => u.trim())
+					.filter(u => u !== '');
+			}
+
+			// 标准化URL
+			function normalizeURL(url) {
+				url = url.trim();
+				if (!url.startsWith('http://') && !url.startsWith('https://')) {
+					url = 'https://' + url;
+				}
+				return url;
+			}
+
+			function canonicalizeURL(url) {
+				return String(url || '').trim().replace(/\/+$/g, '').toLowerCase();
+			}
+
+			function reasonTypeLabel(reasonType) {
+				switch (reasonType) {
+					case 'dns':
+						return 'DNS 解析失败';
+					case 'timeout':
+						return '连接超时';
+					case 'tls':
+						return 'TLS/证书异常';
+					case 'connection_refused':
+						return '连接被拒绝';
+					case 'http_status':
+						return 'HTTP 响应';
+					case 'invalid_format':
+						return 'URL 格式非法';
+					case 'network':
+						return '网络异常';
+					default:
+						return '未知原因';
+				}
+			}
+
+			async function runReachabilityCheck(rawURLs, actionName, options = {}) {
+				const notifyFiltered = options.notifyFiltered !== false;
+				const normalizedInputs = rawURLs.map(normalizeURL);
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+
+				updateProgress(15, `正在探测URL可达性（${actionName}）...`);
+				const response = await fetch('/api/url/reachability', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						urls: normalizedInputs,
+						concurrency: concurrency
+					})
+				});
+
+				if (!response.ok) {
+					throw new Error('URL 可达性检测失败');
+				}
+
+				const data = await response.json();
+				const summary = data.summary || {};
+				const results = data.results || [];
+
+				totalUrlsEl.textContent = summary.total ?? normalizedInputs.length;
+				validUrlsEl.textContent = summary.formatValid ?? 0;
+				invalidUrlsEl.textContent = summary.invalidFormat ?? 0;
+				reachableUrlsEl.textContent = summary.reachable ?? 0;
+				unreachableUrlsEl.textContent = summary.unreachable ?? 0;
+
+				const reachableURLs = results
+					.filter(item => item && item.status === 'reachable' && item.url)
+					.map(item => item.url);
+
+				const invalidCount = summary.invalidFormat || 0;
+				const unreachableCount = summary.unreachable || 0;
+				if (notifyFiltered && (invalidCount > 0 || unreachableCount > 0)) {
+					alert(`已过滤 ${invalidCount} 个格式非法URL，${unreachableCount} 个不可达URL，本次将仅处理 ${reachableURLs.length} 个可达URL。`);
+				}
+
+				return {
+					reachableURLs,
+					results,
+					summary
+				};
+			}
+
+			async function ensureBaselinesExist(urls) {
+				try {
+					const response = await fetch('/api/tamper/baseline/list');
+					if (!response.ok) {
+						return { checked: false, hasBaseline: true };
+					}
+					const data = await response.json();
+					const baselineURLs = Array.isArray(data.urls) ? data.urls : [];
+					const baselineSet = new Set(baselineURLs.map(canonicalizeURL));
+					return {
+						checked: true,
+						hasBaseline: urls.some(url => baselineSet.has(canonicalizeURL(url)))
+					};
+				} catch (error) {
+					return { checked: false, hasBaseline: true };
+				}
+			}
+
+			async function readErrorResponse(response, fallbackMessage) {
+				try {
+					const text = (await response.text()).trim();
+					return text || fallbackMessage;
+				} catch (error) {
+					return fallbackMessage;
+				}
+			}
+
+			// 截断hash显示
+			function truncateHash(hash, length = 16) {
+				if (!hash) return '-';
+				if (hash.length <= length) return hash;
+				return hash.substring(0, length) + '...';
+			}
+
+			function formatTimestamp(ts) {
+				if (!ts) return '-';
+				const date = new Date(Number(ts) * 1000);
+				if (Number.isNaN(date.getTime())) return '-';
+				return date.toLocaleString();
+			}
+
+			function statusLabel(status) {
+				switch (String(status || '').toLowerCase()) {
+					case 'tampered':
+						return '篡改';
+					case 'normal':
+						return '正常';
+					case 'first_check':
+						return '首次检测';
+					case 'no_baseline':
+						return '无基线';
+					default:
+						return '未知';
+				}
+			}
+
+			function statusClass(status) {
+				switch (String(status || '').toLowerCase()) {
+					case 'tampered':
+						return 'danger';
+					case 'normal':
+						return 'success';
+					case 'first_check':
+					case 'no_baseline':
+						return 'info';
+					default:
+						return 'warning';
+				}
+			}
+
+			function populateHistoryURLFilter(records) {
+				if (!historyUrlFilter) return;
+				const selected = historyUrlFilter.value;
+				const urls = Array.from(new Set(records.map(r => r.url).filter(Boolean))).sort();
+				historyUrlFilter.innerHTML = '<option value="">全部URL</option>';
+				urls.forEach(url => {
+					const option = document.createElement('option');
+					option.value = url;
+					option.textContent = url;
+					historyUrlFilter.appendChild(option);
+				});
+				if (selected && urls.includes(selected)) {
+					historyUrlFilter.value = selected;
+				}
+			}
+
+			function getFilteredHistoryRecords() {
+				const urlFilter = (historyUrlFilter && historyUrlFilter.value) ? historyUrlFilter.value : '';
+				const typeFilter = (historyTypeFilter && historyTypeFilter.value) ? String(historyTypeFilter.value).toLowerCase() : '';
+				const modeFilter = (historyModeFilter && historyModeFilter.value) ? String(historyModeFilter.value).toLowerCase() : '';
+				const keyword = (historyQueryInput && historyQueryInput.value) ? historyQueryInput.value.trim().toLowerCase() : '';
+
+				// 获取时间范围
+				let startTime = null;
+				let endTime = null;
+
+				if (historyStartTimeInput && historyStartTimeInput.value) {
+					startTime = new Date(historyStartTimeInput.value).getTime() / 1000;
+				}
+
+				if (historyEndTimeInput && historyEndTimeInput.value) {
+					endTime = new Date(historyEndTimeInput.value).getTime() / 1000;
+				}
+
+				// 检查时间范围有效性
+				if (startTime && endTime && startTime > endTime) {
+					alert('开始时间不能晚于结束时间');
+					return [];
+				}
+
+				return historyRecords.filter(record => {
+					if (urlFilter && record.url !== urlFilter) {
+						return false;
+					}
+					if (typeFilter) {
+						const checkType = String(record.check_type || '').toLowerCase();
+						const status = String(record.status || '').toLowerCase();
+						if (checkType !== typeFilter && status !== typeFilter) {
+							return false;
+						}
+					}
+					if (modeFilter) {
+						const mode = String(record.detection_mode || '').toLowerCase();
+						if (mode !== modeFilter) {
+							return false;
+						}
+					}
+					if (keyword) {
+						const haystack = [
+							record.url,
+							record.check_type,
+							record.status,
+							record.detection_mode,
+							(record.tampered_segments || []).join(',')
+						].join(' ').toLowerCase();
+						if (!haystack.includes(keyword)) {
+							return false;
+						}
+					}
+					// 时间范围过滤
+					if (startTime && record.timestamp < startTime) {
+						return false;
+					}
+					if (endTime && record.timestamp > endTime) {
+						return false;
+					}
+					return true;
+				});
+			}
+
+			function renderHistoryRecords(records) {
+				if (!historyResults) return;
+				historyResults.innerHTML = '';
+
+				if (!Array.isArray(records) || records.length === 0) {
+					historyResults.innerHTML = '<div class="tamper-alert info"><strong>暂无历史记录</strong><br>请先执行篡改检测后再查看。</div>';
+					return;
+				}
+
+				records.forEach(record => {
+					const status = String(record.status || '').toLowerCase();
+					const item = document.createElement('div');
+					item.className = 'history-item';
+					const segments = Array.isArray(record.tampered_segments) ? record.tampered_segments : [];
+					const modeText = String(record.detection_mode || 'relaxed').toLowerCase() === 'strict' ? '严格' : '宽松';
+					item.innerHTML = `
+						<div class="history-item-header">
+							<div class="url">${escapeHtml(record.url || '-')}</div>
+							<span class="status-badge ${statusClass(status)}">${escapeHtml(statusLabel(status))}</span>
+						</div>
+						<div class="history-item-body">
+							<div class="timestamp">检测时间: ${escapeHtml(formatTimestamp(record.timestamp))}</div>
+							<div>类型: ${escapeHtml(record.check_type || '-')} | 模式: ${escapeHtml(modeText)} | 变更数: ${Number(record.changes_count || 0)}</div>
+							${segments.length > 0 ? `<div>变更分段: ${escapeHtml(segments.join(', '))}</div>` : ''}
+							<div class="hash-preview">current: ${escapeHtml(truncateHash(record.current_full_hash || ''))} | baseline: ${escapeHtml(truncateHash(record.baseline_full_hash || ''))}</div>
+						</div>
+					`;
+					historyResults.appendChild(item);
+				});
+			}
+
+			function applyHistoryFilters() {
+				renderHistoryRecords(getFilteredHistoryRecords());
+			}
+
+			async function loadHistory() {
+				if (!historyResults) return;
+				historyResults.innerHTML = '<div class="tamper-alert info">正在加载历史记录...</div>';
+
+				const params = new URLSearchParams();
+				params.set('limit', '500');
+				const response = await fetch(`/api/tamper/history?${params.toString()}`);
+				if (!response.ok) {
+					throw new Error(await readErrorResponse(response, '历史记录加载失败'));
+				}
+
+				const data = await response.json();
+				historyRecords = Array.isArray(data.records) ? data.records : [];
+				populateHistoryURLFilter(historyRecords);
+				applyHistoryFilters();
+			}
+
+			// Tab切换
+			document.querySelectorAll('.tab').forEach(tab => {
+				tab.addEventListener('click', function() {
+					document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+					document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+					this.classList.add('active');
+					document.getElementById(this.dataset.tab + '-tab').classList.add('active');
+					if (this.dataset.tab === 'history') {
+						loadHistory().catch(err => {
+							historyResults.innerHTML = `<div class="tamper-alert danger">历史记录加载失败: ${escapeHtml(err.message)}</div>`;
+						});
+					}
+				});
+			});
+
+			if (refreshHistoryBtn) {
+				refreshHistoryBtn.addEventListener('click', function() {
+					loadHistory().catch(err => {
+						historyResults.innerHTML = `<div class="tamper-alert danger">历史记录加载失败: ${escapeHtml(err.message)}</div>`;
+					});
+				});
+			}
+
+			if (historyUrlFilter) {
+				historyUrlFilter.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyTypeFilter) {
+				historyTypeFilter.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyModeFilter) {
+				historyModeFilter.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyQueryInput) {
+				historyQueryInput.addEventListener('input', applyHistoryFilters);
+			}
+			if (historyStartTimeInput) {
+				historyStartTimeInput.addEventListener('change', applyHistoryFilters);
+			}
+			if (historyEndTimeInput) {
+				historyEndTimeInput.addEventListener('change', applyHistoryFilters);
+			}
+
+			// 监听输入
+			urlList.addEventListener('input', updateStats);
+
+			// 清空
+			document.getElementById('btn-clear').addEventListener('click', function() {
+				urlList.value = '';
+				updateStats();
+				resultsSection.style.display = 'none';
+				tamperResults.innerHTML = '';
+				screenshotResults.innerHTML = '';
+			});
+
+			// 加载示例
+			document.getElementById('btn-load-example').addEventListener('click', function() {
+				const examples = [
+					'https://www.baidu.com',
+					'https://www.bing.com',
+					'https://www.github.com'
+				];
+				urlList.value = examples.join('\n');
+				updateStats();
+			});
+
+			// 导入文件
+			document.getElementById('btn-import-file').addEventListener('click', function() {
+				document.getElementById('file-input').click();
+			});
+
+			document.getElementById('file-input').addEventListener('change', function(e) {
+				const file = e.target.files[0];
+				if (!file) return;
+
+				const reader = new FileReader();
+				reader.onload = function(event) {
+					const urls = event.target.result.split('\n')
+						.map(line => line.trim())
+						.filter(line => line && isValidURL(line));
+					
+					if (urls.length > 0) {
+						urlList.value = urls.join('\n');
+						updateStats();
+						alert(`成功导入 ${urls.length} 个URL`);
+					} else {
+						alert('未找到有效的URL');
+					}
+				};
+				reader.readAsText(file);
+				e.target.value = '';
+			});
+
+			tamperResults.addEventListener('click', async function(event) {
+				const retryBtn = event.target.closest('.btn-retry-probe');
+				if (!retryBtn) {
+					return;
+				}
+
+				const retryURL = decodeURIComponent(retryBtn.dataset.url || '');
+				if (!retryURL) {
+					return;
+				}
+
+				showProgress(`正在重试探活: ${retryURL}`);
+				try {
+					const probe = await runReachabilityCheck([retryURL], '重试探活', { notifyFiltered: false });
+					const item = (probe.results || [])[0] || {};
+					if (item.status === 'reachable') {
+						updateProgress(100, '探活成功');
+						alert(`探活成功: ${item.url || retryURL} (${item.reason || 'HTTP 可达'})`);
+					} else {
+						showErrorProgress('探活失败');
+						alert(`探活失败: ${reasonTypeLabel(item.reason_type)} - ${item.reason || '未知错误'}`);
+					}
+				} catch (error) {
+					showErrorProgress('重试探活失败');
+					alert(`重试探活失败: ${error.message}`);
+				}
+				setTimeout(hideProgress, 800);
+			});
+
+			// 篡改检测
+			document.getElementById('btn-tamper-check').addEventListener('click', async function() {
+				const urls = getInputURLs();
+				if (urls.length === 0) {
+					alert('请输入至少一个URL');
+					return;
+				}
+
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+				const mode = (tamperModeInput && tamperModeInput.value) ? tamperModeInput.value : 'relaxed';
+				showProgress(`正在进行篡改检测（${mode === 'strict' ? '严格模式' : '宽松模式'}）...`);
+				resultsSection.style.display = 'block';
+
+				// 切换到篡改检测tab
+				document.querySelector('.tab[data-tab="tamper"]').click();
+
+				try {
+					const reachability = await runReachabilityCheck(urls, '篡改检测');
+					if ((reachability.reachableURLs || []).length === 0) {
+						renderTamperResults([], { precheckResults: reachability.results || [] });
+						showErrorProgress('没有可达URL，请先修正目标或网络环境');
+						return;
+					}
+
+					const baselineCheck = await ensureBaselinesExist(reachability.reachableURLs);
+					if (baselineCheck.checked && !baselineCheck.hasBaseline) {
+						throw new Error('没有可比对的基线，请先执行“设置基线”');
+					}
+
+					updateProgress(45, '正在计算网页hash...');
+					
+					const response = await fetch('/api/tamper/check', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							urls: reachability.reachableURLs,
+							concurrency: concurrency,
+							mode: mode
+						})
+					});
+
+					if (!response.ok) throw new Error(await readErrorResponse(response, '请求失败'));
+
+					const data = await response.json();
+					updateProgress(100, '检测完成');
+					
+					renderTamperResults(data.results || [], { precheckResults: reachability.results || [] });
+
+					setTimeout(hideProgress, 1000);
+				} catch (error) {
+					showErrorProgress('检测失败: ' + error.message);
+				}
+			});
+
+			// 设置基线
+			document.getElementById('btn-set-baseline').addEventListener('click', async function() {
+				const urls = getInputURLs();
+				if (urls.length === 0) {
+					alert('请输入至少一个URL');
+					return;
+				}
+
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+				showProgress('正在设置基线...');
+				resultsSection.style.display = 'block';
+
+				// 切换到篡改检测tab以显示结果
+				document.querySelector('.tab[data-tab="tamper"]').click();
+
+				try {
+					const reachability = await runReachabilityCheck(urls, '设置基线');
+					if ((reachability.reachableURLs || []).length === 0) {
+						// 即使没有可达URL，也显示结果（包含不可达URL）
+						renderBaselineResults([], { precheckResults: reachability.results || [] });
+						showErrorProgress('没有可达URL，无法设置基线');
+						return;
+					}
+					updateProgress(45, '正在计算并保存基线...');
+
+					const response = await fetch('/api/tamper/baseline', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							urls: reachability.reachableURLs,
+							concurrency: concurrency
+						})
+					});
+
+					if (!response.ok) throw new Error(await readErrorResponse(response, '请求失败'));
+
+					const data = await response.json();
+					updateProgress(100, '基线设置完成');
+
+					// 显示基线设置结果（包含不可达URL）
+					renderBaselineResults(data.results || [], { precheckResults: reachability.results || [] });
+
+					setTimeout(hideProgress, 1000);
+				} catch (error) {
+					showErrorProgress('设置失败: ' + error.message);
+				}
+			});
+
+			// 批量截图
+			document.getElementById('btn-batch-screenshot').addEventListener('click', async function() {
+				const urls = getInputURLs();
+				if (urls.length === 0) {
+					alert('请输入至少一个URL');
+					return;
+				}
+
+				const concurrency = parseInt(concurrencyInput.value) || 5;
+				const batchId = batchIdInput.value.trim();
+				showProgress('正在进行批量截图...');
+				resultsSection.style.display = 'block';
+
+				// 切换到截图tab
+				document.querySelector('.tab[data-tab="screenshot"]').click();
+
+				try {
+					const reachability = await runReachabilityCheck(urls, '批量截图');
+					if ((reachability.reachableURLs || []).length === 0) {
+						showErrorProgress('没有可达URL，无法截图');
+						return;
+					}
+					updateProgress(45, '正在截图...');
+					
+					const response = await fetch('/api/screenshot/batch-urls', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							urls: reachability.reachableURLs,
+							batch_id: batchId,
+							concurrency: concurrency
+						})
+					});
+
+					if (!response.ok) throw new Error('请求失败');
+
+					const data = await response.json();
+					updateProgress(100, `完成: ${data.success} 成功, ${data.failed} 失败`);
+					
+					renderScreenshotResults(data.results);
+
+					setTimeout(hideProgress, 1000);
+				} catch (error) {
+					showErrorProgress('截图失败: ' + error.message);
+				}
+			});
+
+			// 渲染篡改检测结果
+			function renderTamperResults(results, options = {}) {
+				tamperResults.innerHTML = '';
+				const precheckResults = Array.isArray(options.precheckResults) ? options.precheckResults : [];
+				const precheckMap = new Map();
+				precheckResults.forEach(item => {
+					const key = canonicalizeURL(item.url || item.input || '');
+					if (key) {
+						precheckMap.set(key, item);
+					}
+				});
+
+				// 合并结果：包含不可达的URL
+				const merged = Array.isArray(results) ? [...results] : [];
+				precheckResults
+					.filter(item => item && item.status !== 'reachable')
+					.forEach(item => {
+						merged.push({
+							url: item.url || item.input,
+							status: item.status === 'invalid_format' ? 'invalid_format' : 'unreachable',
+							probe_status: item.status,
+							probe_reason_type: item.reason_type,
+							probe_reason: item.reason,
+							tampered: false
+						});
+					});
+
+				// 保存合并后的结果（包含不可达URL）
+				currentTamperResults = merged;
+
+				if (merged.length === 0) {
+					tamperResults.innerHTML = '<div class="tamper-alert info"><strong>暂无结果</strong><br>请先输入 URL 并执行检测。</div>';
+					document.getElementById('tamper-summary').style.display = 'grid';
+					document.getElementById('tamper-total').textContent = '0';
+					document.getElementById('tamper-count').textContent = '0';
+					document.getElementById('tamper-safe').textContent = '0';
+					document.getElementById('tamper-first').textContent = '0';
+					document.getElementById('tamper-unreachable').textContent = '0';
+					return;
+				}
+				
+				let tamperCount = 0;
+				let safeCount = 0;
+				let firstCount = 0;
+				let unreachableCount = 0;
+
+				merged.forEach(result => {
+					const card = document.createElement('div');
+					card.className = 'result-card';
+					const precheck = precheckMap.get(canonicalizeURL(result.url || '')) || null;
+
+					let statusBadge = '';
+					let alertHtml = '';
+					let hashItemsHtml = '';
+					let normalizedStatus = result.status;
+					if (!normalizedStatus) {
+						if (!result.current_hash || String(result.current_hash.status || '').toLowerCase().includes('error')) {
+							normalizedStatus = 'unreachable';
+						} else if (!result.baseline_hash) {
+							normalizedStatus = 'no_baseline';
+						} else if (result.tampered) {
+							normalizedStatus = 'tampered';
+						} else {
+							normalizedStatus = 'normal';
+						}
+					}
+
+					const probeStatus = result.probe_status || precheck?.status || (normalizedStatus === 'unreachable' ? 'unreachable' : 'reachable');
+					const probeReasonType = result.probe_reason_type || precheck?.reason_type || result.error_type || '';
+					const probeReason = result.probe_reason || precheck?.reason || result.error_message || result.current_hash?.status || '';
+
+					const probeBlock = `<div class="status-block ${probeStatus === 'reachable' ? 'success' : 'danger'}"><div class="label">探活状态</div><div class="value">${probeStatus === 'reachable' ? '可达' : '不可达'}</div>${probeStatus === 'reachable' ? '' : `<div>${escapeHtml(reasonTypeLabel(probeReasonType))}</div><div>${escapeHtml(probeReason || '未知错误')}</div>`}</div>`;
+					let baselineBlock = '<div class="status-block info"><div class="label">基线状态</div><div class="value">未知</div></div>';
+					let tamperBlock = '<div class="status-block info"><div class="label">篡改状态</div><div class="value">未检测</div></div>';
+
+					if (normalizedStatus === 'invalid_format') {
+						unreachableCount++;
+						statusBadge = '<span class="status-badge warning">格式非法</span>';
+						baselineBlock = '<div class="status-block warning"><div class="label">基线状态</div><div class="value">已跳过</div></div>';
+						tamperBlock = '<div class="status-block warning"><div class="label">篡改状态</div><div class="value">已跳过</div></div>';
+						alertHtml = `<div class="tamper-alert danger"><strong>URL 格式非法</strong><br>${escapeHtml(probeReason || '请修正 URL 格式')}</div>`;
+					} else if (normalizedStatus === 'unreachable') {
+						unreachableCount++;
+						statusBadge = '<span class="status-badge warning">目标不可达</span>';
+						baselineBlock = '<div class="status-block warning"><div class="label">基线状态</div><div class="value">无法建立</div></div>';
+						tamperBlock = '<div class="status-block warning"><div class="label">篡改状态</div><div class="value">未执行</div></div>';
+						alertHtml = `<div class="tamper-alert danger"><strong>目标不可达</strong><br>${escapeHtml(reasonTypeLabel(probeReasonType))}: ${escapeHtml(probeReason || '未知错误')}</div>`;
+					} else if (normalizedStatus === 'no_baseline' || !result.baseline_hash) {
+						firstCount++;
+						statusBadge = '<span class="status-badge info">无基线</span>';
+						baselineBlock = '<div class="status-block info"><div class="label">基线状态</div><div class="value">无可比对基线</div></div>';
+						tamperBlock = '<div class="status-block warning"><div class="label">篡改状态</div><div class="value">未判定</div></div>';
+						alertHtml = `<div class="tamper-alert info">
+							<strong>无可比对基线</strong><br>
+							请先执行“设置基线”，再进行篡改检测。
+						</div>`;
+						
+						// 显示所有分段hash
+						if (result.current_hash.segment_hashes) {
+							result.current_hash.segment_hashes.forEach(seg => {
+								hashItemsHtml += `<div class="hash-item">
+									<span class="segment-name">${seg.name}</span>
+									<span class="segment-hash" title="${seg.hash}">${truncateHash(seg.hash)}</span>
+								</div>`;
+							});
+						}
+					} else if (normalizedStatus === 'tampered' || result.tampered) {
+						tamperCount++;
+						statusBadge = '<span class="status-badge danger">已篡改</span>';
+						baselineBlock = '<div class="status-block success"><div class="label">基线状态</div><div class="value">可比对</div></div>';
+						tamperBlock = '<div class="status-block danger"><div class="label">篡改状态</div><div class="value">检测到变更</div></div>';
+						alertHtml = `<div class="tamper-alert danger">
+							<strong>⚠️ 检测到篡改!</strong><br>
+							发现 ${result.tampered_segments?.length || 0} 个分段被修改
+						</div>`;
+						
+						// 显示篡改的分段
+						if (result.changes && result.changes.length > 0) {
+							alertHtml += '<div class="changes-list">';
+							result.changes.forEach(change => {
+								const changeClass = change.change_type === 'added' ? 'added' : 
+													change.change_type === 'removed' ? 'removed' : '';
+								alertHtml += `<div class="change-item ${changeClass}">
+									<strong>${change.segment}</strong>: ${change.description}
+								</div>`;
+							});
+							alertHtml += '</div>';
+						}
+
+						// 显示所有分段hash，标记篡改的
+						if (result.current_hash.segment_hashes) {
+							const tamperedSet = new Set(result.tampered_segments || []);
+							result.current_hash.segment_hashes.forEach(seg => {
+								const isTampered = tamperedSet.has(seg.name);
+								hashItemsHtml += `<div class="hash-item ${isTampered ? 'tampered' : ''}">
+									<span class="segment-name">${seg.name} ${isTampered ? '⚠️' : ''}</span>
+									<span class="segment-hash" title="${seg.hash}">${truncateHash(seg.hash)}</span>
+								</div>`;
+							});
+						}
+					} else {
+						safeCount++;
+						statusBadge = '<span class="status-badge success">安全</span>';
+						baselineBlock = '<div class="status-block success"><div class="label">基线状态</div><div class="value">可比对</div></div>';
+						tamperBlock = '<div class="status-block success"><div class="label">篡改状态</div><div class="value">未发现篡改</div></div>';
+						alertHtml = `<div class="tamper-alert success">
+							<strong>✓ 未检测到篡改</strong><br>
+							网页内容与基线一致
+						</div>`;
+						
+						// 显示所有分段hash
+						if (result.current_hash.segment_hashes) {
+							result.current_hash.segment_hashes.forEach(seg => {
+								hashItemsHtml += `<div class="hash-item">
+									<span class="segment-name">${seg.name}</span>
+									<span class="segment-hash" title="${seg.hash}">${truncateHash(seg.hash)}</span>
+								</div>`;
+							});
+						}
+					}
+
+					card.innerHTML = `
+						<div class="result-card-header">
+							<span class="url">${escapeHtml(result.url)}</span>
+							${statusBadge}
+						</div>
+						<div class="result-card-body">
+							<div class="status-blocks">
+								${probeBlock}
+								${baselineBlock}
+								${tamperBlock}
+							</div>
+							${alertHtml}
+							<div class="hash-info">
+								${hashItemsHtml}
+							</div>
+							${probeStatus === 'reachable' ? '' : `<div class="result-actions"><button type="button" class="btn-retry-probe" data-url="${encodeURIComponent(result.url || '')}">重试探活</button></div>`}
+						</div>
+					`;
+
+					tamperResults.appendChild(card);
+				});
+
+				// 更新统计
+				document.getElementById('tamper-summary').style.display = 'grid';
+				document.getElementById('tamper-total').textContent = merged.length;
+				document.getElementById('tamper-count').textContent = tamperCount;
+				document.getElementById('tamper-safe').textContent = safeCount;
+				document.getElementById('tamper-first').textContent = firstCount;
+				document.getElementById('tamper-unreachable').textContent = unreachableCount;
+			}
+
+			// 渲染基线设置结果
+			function renderBaselineResults(results, options = {}) {
+				tamperResults.innerHTML = '';
+				const precheckResults = Array.isArray(options.precheckResults) ? options.precheckResults : [];
+
+				// 合并结果：包含不可达的URL
+				const merged = Array.isArray(results) ? [...results] : [];
+				precheckResults
+					.filter(item => item && item.status !== 'reachable')
+					.forEach(item => {
+						merged.push({
+							url: item.url || item.input,
+							status: item.status === 'invalid_format' ? 'invalid_format' : 'unreachable',
+							probe_status: item.status,
+							probe_reason_type: item.reason_type,
+							probe_reason: item.reason
+						});
+					});
+
+				// 保存合并后的结果（包含不可达URL）供导出使用
+				currentTamperResults = merged.map(result => {
+					const rawStatus = (result.status || result.Status || '').toString();
+					const normalizedStatus = rawStatus.toLowerCase();
+					return {
+						url: result.url,
+						status: result.status || (normalizedStatus.startsWith('error') ? 'unreachable' : 'success'),
+						tampered: false,
+						timestamp: result.timestamp || Date.now() / 1000,
+						baseline_hash: result.full_hash ? { timestamp: result.timestamp } : null,
+					};
+				});
+
+				if (merged.length === 0) {
+					tamperResults.innerHTML = '<div class="tamper-alert info"><strong>暂无结果</strong><br>请先输入 URL 并执行设置基线。</div>';
+					document.getElementById('tamper-summary').style.display = 'grid';
+					document.getElementById('tamper-total').textContent = '0';
+					document.getElementById('tamper-count').textContent = '0';
+					document.getElementById('tamper-safe').textContent = '0';
+					document.getElementById('tamper-first').textContent = '0';
+					document.getElementById('tamper-unreachable').textContent = '0';
+					return;
+				}
+
+				let savedCount = 0;
+				let unreachableCount = 0;
+				let failedCount = 0;
+
+				merged.forEach(result => {
+					const card = document.createElement('div');
+					card.className = 'result-card';
+
+					const rawStatus = (result.status || result.Status || '').toString();
+					const normalizedStatus = rawStatus.toLowerCase();
+					const isSuccess = normalizedStatus === '' || normalizedStatus === 'success';
+					const isUnreachable =
+						normalizedStatus === 'unreachable' ||
+						normalizedStatus === 'invalid_format' ||
+						normalizedStatus.includes('failed to load');
+
+					let statusBadge = '';
+					let statusClass = '';
+
+					if (isUnreachable) {
+						statusBadge = '<span class="status-badge danger">不可达</span>';
+						statusClass = 'danger';
+						unreachableCount++;
+					} else if (!isSuccess) {
+						statusBadge = '<span class="status-badge warning">失败</span>';
+						statusClass = 'warning';
+						failedCount++;
+					} else {
+						statusBadge = '<span class="status-badge success">已保存</span>';
+						statusClass = 'success';
+						savedCount++;
+					}
+
+					const probeStatus = isUnreachable ? 'unreachable' : 'reachable';
+					const probeReason = result.probe_reason || rawStatus || '';
+					const probeReasonType = result.probe_reason_type || '';
+
+					card.innerHTML = `
+						<div class="result-card-header">
+							<span class="url">${escapeHtml(result.url || '')}</span>
+							${statusBadge}
+						</div>
+						<div class="result-card-body">
+							<div class="status-blocks">
+								<div class="status-block ${probeStatus === 'reachable' ? 'success' : 'danger'}">
+									<div class="label">探活状态</div>
+									<div class="value">${probeStatus === 'reachable' ? '可达' : '不可达'}</div>
+									${probeStatus === 'reachable' ? '' : `<div>${escapeHtml(reasonTypeLabel(probeReasonType))}</div><div>${escapeHtml(probeReason)}</div>`}
+								</div>
+								<div class="status-block ${statusClass}">
+									<div class="label">基线状态</div>
+									<div class="value">${isSuccess ? '已保存' : (isUnreachable ? '无法设置' : '设置失败')}</div>
+								</div>
+							</div>
+						</div>
+					`;
+
+					tamperResults.appendChild(card);
+				});
+
+				// 更新统计
+				document.getElementById('tamper-summary').style.display = 'grid';
+				document.getElementById('tamper-total').textContent = merged.length;
+				document.getElementById('tamper-count').textContent = savedCount;
+				document.getElementById('tamper-safe').textContent = savedCount;
+				document.getElementById('tamper-first').textContent = '0';
+				document.getElementById('tamper-unreachable').textContent = unreachableCount + failedCount;
+			}
+
+			// 渲染截图结果
+			function renderScreenshotResults(results) {
+				screenshotResults.innerHTML = '';
+				
+				let successCount = 0;
+				let failedCount = 0;
+
+				results.forEach(result => {
+					const item = document.createElement('div');
+					item.className = 'screenshot-result ' + (result.success ? 'success' : 'failed');
+
+					if (result.success) {
+						successCount++;
+						item.innerHTML = `
+							<div class="status success">成功</div>
+							<div class="url">${result.url}</div>
+							<div class="path">${result.file_path || ''}</div>
+						`;
+					} else {
+						failedCount++;
+						item.innerHTML = `
+							<div class="status failed">失败</div>
+							<div class="url">${result.url}</div>
+							<div class="error">${result.error || '未知错误'}</div>
+						`;
+					}
+
+					screenshotResults.appendChild(item);
+				});
+
+				// 更新统计
+				document.getElementById('screenshot-summary').style.display = 'grid';
+				document.getElementById('screenshot-total').textContent = results.length;
+				document.getElementById('screenshot-success').textContent = successCount;
+				document.getElementById('screenshot-failed').textContent = failedCount;
+			}
+
+			// 导出为JSON
+			function exportToJSON() {
+				// 确定当前激活的标签页
+				const activeTab = document.querySelector('.tab.active').dataset.tab;
+				let exportData = [];
+
+				if (activeTab === 'history') {
+					// 导出历史记录
+					if (historyRecords.length === 0) {
+						alert('暂无历史记录可导出');
+						return;
+					}
+					exportData = historyRecords.map(record => {
+						return {
+							URL: record.url || '',
+							Reachable: '是', // 历史记录默认视为可达
+							Screenshot: '', // 截图功能需要单独实现
+							Tampered: record.tampered ? '是' : '否',
+							BaselineTime: record.baseline_timestamp ? formatTimestamp(record.baseline_timestamp) : '',
+							CheckTime: record.timestamp ? formatTimestamp(record.timestamp) : ''
+						};
+					});
+				} else {
+					// 导出当前检测结果
+					if (currentTamperResults.length === 0) {
+						alert('暂无检测结果可导出');
+						return;
+					}
+					exportData = currentTamperResults.map(result => {
+						return {
+							URL: result.url || '',
+							Reachable: (result.status !== 'unreachable' && result.status !== 'invalid_format') ? '是' : '否',
+							Screenshot: '', // 截图功能需要单独实现
+							Tampered: result.tampered ? '是' : '否',
+							BaselineTime: result.baseline_hash?.timestamp ? formatTimestamp(result.baseline_hash.timestamp) : '',
+							CheckTime: result.timestamp ? formatTimestamp(result.timestamp) : ''
+						};
+					});
+				}
+
+				showProgress('正在导出JSON...');
+
+				// 创建下载链接
+				const jsonString = JSON.stringify(exportData, null, 2);
+				const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+				const link = document.createElement('a');
+				const url = URL.createObjectURL(blob);
+				const fileName = activeTab === 'history' ? `tamper_history_${new Date().toISOString().slice(0, 10)}.json` : `tamper_detection_${new Date().toISOString().slice(0, 10)}.json`;
+				link.setAttribute('href', url);
+				link.setAttribute('download', fileName);
+				link.style.visibility = 'hidden';
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+
+				updateProgress(100, '导出成功');
+				setTimeout(hideProgress, 1000);
+			}
+
+			// 导出为Excel（CSV格式）
+			function exportToExcel() {
+				// 确定当前激活的标签页
+				const activeTab = document.querySelector('.tab.active').dataset.tab;
+				let exportData = [];
+
+				if (activeTab === 'history') {
+					// 导出历史记录
+					if (historyRecords.length === 0) {
+						alert('暂无历史记录可导出');
+						return;
+					}
+					exportData = historyRecords;
+				} else {
+					// 导出当前检测结果
+					if (currentTamperResults.length === 0) {
+						alert('暂无检测结果可导出');
+						return;
+					}
+					exportData = currentTamperResults;
+				}
+
+				showProgress('正在导出Excel...');
+
+				// 构建CSV内容
+				let csvContent = 'URL,可达性,网页截图,是否被篡改,基线时间,检测时间\n';
+
+				exportData.forEach(item => {
+					let url, reachable, screenshot, tampered, baselineTime, checkTime;
+
+					if (activeTab === 'history') {
+						// 处理历史记录
+						url = item.url || '';
+						reachable = '是'; // 历史记录默认视为可达
+						screenshot = '';
+						tampered = item.tampered ? '是' : '否';
+						baselineTime = item.baseline_timestamp ? formatTimestamp(item.baseline_timestamp) : '';
+						checkTime = item.timestamp ? formatTimestamp(item.timestamp) : '';
+					} else {
+						// 处理当前检测结果
+						url = item.url || '';
+						reachable = (item.status !== 'unreachable' && item.status !== 'invalid_format') ? '是' : '否';
+						screenshot = '';
+						tampered = item.tampered ? '是' : '否';
+						baselineTime = item.baseline_hash?.timestamp ? formatTimestamp(item.baseline_hash.timestamp) : '';
+						checkTime = item.timestamp ? formatTimestamp(item.timestamp) : '';
+					}
+
+					// 处理包含逗号的内容
+					const row = [url, reachable, screenshot, tampered, baselineTime, checkTime].map(field => {
+						if (field.includes(',')) {
+							return `"${field.replace(/"/g, '""')}"`;
+						}
+						return field;
+					}).join(',');
+
+					csvContent += row + '\n';
+				});
+
+				// 创建下载链接
+				const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+				const link = document.createElement('a');
+				const url = URL.createObjectURL(blob);
+				link.setAttribute('href', url);
+				link.setAttribute('download', `tamper_detection_${new Date().toISOString().slice(0, 10)}.csv`);
+				link.style.visibility = 'hidden';
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+
+				updateProgress(100, '导出成功');
+				setTimeout(hideProgress, 1000);
+			}
+
+			// 导出按钮事件
+			document.getElementById('btn-export-json').addEventListener('click', function() {
+				exportToJSON();
+			});
+
+			document.getElementById('btn-export-excel').addEventListener('click', function() {
+				exportToExcel();
+			});
+		});
+	</script>
+</body>
+</html>

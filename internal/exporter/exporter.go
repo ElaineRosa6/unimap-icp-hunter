@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/xuri/excelize/v2"
 )
@@ -52,7 +53,7 @@ func (e *ExcelExporter) Export(assets []model.UnifiedAsset, filepath string) err
 	f := excelize.NewFile()
 	defer func() {
 		if err := f.Close(); err != nil {
-			fmt.Printf("Warning: failed to close Excel file: %v\n", err)
+			logger.Warnf("Failed to close Excel file: %v", err)
 		}
 	}()
 

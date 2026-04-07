@@ -5,6 +5,7 @@
 *.dylib
 bin/
 dist/
+output/
 /unimap-api
 /icp-hunter
 /unimap-gui
@@ -31,6 +32,10 @@ coverage.html
 *.swp
 *~
 
+# IDE tools
+.trae/
+.venv/
+
 # Docker
 docker-compose.override.yml
 
@@ -40,4 +45,17 @@ tmp/
 
 # Export files (for testing)
 *.xlsx
-*.json
+# *.json  # Commented out to allow examples/*.json
+
+# Archived historical documents
+archive/
+
+# Runtime data
+hash_store/**
+!hash_store/
+!hash_store/.gitkeep
+screenshots/**
+!screenshots/
+!screenshots/.gitkeep
+hash_store/records/**/*.json
+!hash_store/records/.gitkeep

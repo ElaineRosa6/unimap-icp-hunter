@@ -11,6 +11,9 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/plugin"
 )
 
+// 预编译正则表达式，避免每次调用时重新编译
+var reValidURL = regexp.MustCompile(`^https?://[^\s/$.?#].[^\s]*$`)
+
 // ValidationProcessor 数据验证处理器
 type ValidationProcessor struct {
 	strictMode      bool
@@ -189,13 +192,8 @@ func (p *ValidationProcessor) isValidPort(port int) bool {
 
 // isValidURL 验证 URL
 func (p *ValidationProcessor) isValidURL(url string) bool {
-	// 简单的 URL 验证
-	pattern := `^https?://[^\s/$.?#].[^\s]*$`
-	matched, err := regexp.MatchString(pattern, url)
-	if err != nil {
-		return false
-	}
-	return matched
+	// 简单的 URL 验证（使用预编译正则）
+	return reValidURL.MatchString(url)
 }
 
 // EnrichmentProcessor 数据富化处理器 - 添加额外的元数据和信息

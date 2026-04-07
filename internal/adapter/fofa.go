@@ -4,11 +4,21 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/unimap-icp-hunter/project/internal/logger"
 	"github.com/unimap-icp-hunter/project/internal/model"
+	"github.com/unimap-icp-hunter/project/internal/utils"
+)
+
+const (
+	// FofaDefaultTimeout FOFA默认超时
+	FofaDefaultTimeout = 30 * time.Second
+	// FofaDefaultQPS FOFA默认QPS
+	FofaDefaultQPS = 3
 )
 
 // FofaAdapter FOFA引擎适配器
@@ -72,7 +82,7 @@ func (f *FofaAdapter) translateNode(node *model.UQLNode) string {
 				values := strings.Split(val, ",")
 				conditions := []string{}
 				for _, v := range values {
-					conditions = append(conditions, fmt.Sprintf(`%s="%s"`, field, v))
+					conditions = append(conditions, fmt.Sprintf(`%s="%s"`, f.mapField(field), v))
 				}
 				return "(" + strings.Join(conditions, " || ") + ")"
 			}
@@ -80,9 +90,14 @@ func (f *FofaAdapter) translateNode(node *model.UQLNode) string {
 			// 处理特殊字段映射
 			field = f.mapField(field)
 
-			if op == "=" || op == "==" {
+			if op == "=" || op == "==" || strings.ToUpper(op) == "CONTAINS" {
 				return fmt.Sprintf(`%s="%s"`, field, val)
 			}
+			if op == "!=" || op == "<>" {
+				return fmt.Sprintf(`%s!="%s"`, field, val)
+			}
+			// Fallback
+			return fmt.Sprintf(`%s="%s"`, field, val)
 		}
 
 	case "logical":
@@ -115,7 +130,13 @@ func (f *FofaAdapter) mapField(field string) string {
 		"org":         "org",
 		"isp":         "isp",
 		"domain":      "domain",
+		"host":        "host",
+		"server":      "server",
 		"status_code": "status_code",
+		"os":          "os",
+		"app":         "app",
+		"cert":        "cert",
+		"url":         "host",
 	}
 
 	if mapped, ok := mapping[field]; ok {
@@ -133,95 +154,128 @@ func (f *FofaAdapter) Search(query string, page, pageSize int) (*model.EngineRes
 		}, nil
 	}
 
-	// FOFA要求query进行base64编码
-	encodedQuery := base64.StdEncoding.EncodeToString([]byte(query))
+	var engineResult *model.EngineResult
 
-	url := fmt.Sprintf("%s/api/v1/search/all", f.baseURL)
+	retryConfig := utils.RetryConfig{
+		MaxRetries:  3,
+		BaseDelay:   100 * time.Millisecond,
+		MaxDelay:    2 * time.Second,
+		Exponential: true,
+		Jitter:      true,
+		RetryableFunc: func(err error) bool {
+			// 网络错误可重试
+			return true
+		},
+	}
 
-	resp, err := f.client.R().
-		SetQueryParams(map[string]string{
-			"email":   f.email,
-			"key":     f.apiKey,
-			"qbase64": encodedQuery,
-			"page":    fmt.Sprintf("%d", page),
-			"size":    fmt.Sprintf("%d", pageSize),
-			"fields":  "ip,port,protocol,domain,title,server,header,body,country,region,city,asn,org,isp,status_code",
-		}).
-		Get(url)
+	err := utils.Retry(retryConfig, func() error {
+		// FOFA要求query进行base64编码
+		encodedQuery := base64.StdEncoding.EncodeToString([]byte(query))
+
+		url := fmt.Sprintf("%s/api/v1/search/all", f.baseURL)
+
+		resp, err := f.client.R().
+			SetQueryParams(map[string]string{
+				"email":   f.email,
+				"key":     f.apiKey,
+				"qbase64": encodedQuery,
+				"page":    fmt.Sprintf("%d", page),
+				"size":    fmt.Sprintf("%d", pageSize),
+				"fields":  "ip,port,protocol,domain,title,server,header,country,region,city,asn,org,isp,status_code",
+			}).
+			Get(url)
+
+		if err != nil {
+			return err
+		}
+
+		if resp.StatusCode() != 200 {
+			return fmt.Errorf("HTTP %d: %s", resp.StatusCode(), resp.String())
+		}
+
+		var result struct {
+			Mode    string          `json:"mode"`
+			Results [][]interface{} `json:"results"`
+			Total   int             `json:"total"`
+			Err     interface{}     `json:"error"`
+			ErrMsg  string          `json:"errmsg"` // Some versions use this
+		}
+
+		if err := json.Unmarshal(resp.Body(), &result); err != nil {
+			return err
+		}
+
+		// Check if Error is true (bool) or non-empty string
+		hasError := false
+		errMsg := ""
+		if b, ok := result.Err.(bool); ok {
+			hasError = b
+		} else if s, ok := result.Err.(string); ok && s != "" && s != "false" {
+			hasError = true
+			errMsg = s
+		}
+
+		if hasError {
+			if errMsg == "" {
+				errMsg = result.ErrMsg
+			}
+			if errMsg == "" {
+				errMsg = "FOFA API reported an error (unknown cause)"
+			}
+			return fmt.Errorf("FOFA API error: %s", errMsg)
+		}
+
+		// 转换为通用格式
+		rawData := []interface{}{}
+		for _, row := range result.Results {
+			// New fields: ip,port,protocol,domain,title,server,header,country,region,city,asn,org,isp,status_code
+			// Total 14 fields
+			if len(row) < 14 {
+				continue
+			}
+			data := map[string]interface{}{
+				"ip":          row[0],
+				"port":        row[1],
+				"protocol":    row[2],
+				"domain":      row[3],
+				"title":       row[4],
+				"server":      row[5],
+				"header":      row[6],
+				"country":     row[7],
+				"region":      row[8],
+				"city":        row[9],
+				"asn":         row[10],
+				"org":         row[11],
+				"isp":         row[12],
+				"status_code": row[13],
+			}
+			rawData = append(rawData, data)
+		}
+
+		engineResult = &model.EngineResult{
+			EngineName: f.Name(),
+			RawData:    rawData,
+			Total:      result.Total,
+			Page:       page,
+			HasMore:    (page * pageSize) < result.Total,
+		}
+
+		return nil
+	})
 
 	if err != nil {
 		return &model.EngineResult{
 			EngineName: f.Name(),
-			Error:      fmt.Sprintf("request error: %v", err),
+			Error:      fmt.Sprintf("search error: %v", err),
 		}, nil
 	}
 
-	if resp.StatusCode() != 200 {
-		return &model.EngineResult{
-			EngineName: f.Name(),
-			Error:      fmt.Sprintf("HTTP %d: %s", resp.StatusCode(), resp.String()),
-		}, nil
-	}
-
-	var result struct {
-		Mode    string          `json:"mode"`
-		Results [][]interface{} `json:"results"`
-		Total   int             `json:"total"`
-		Err     string          `json:"error"`
-	}
-
-	if err := json.Unmarshal(resp.Body(), &result); err != nil {
-		return &model.EngineResult{
-			EngineName: f.Name(),
-			Error:      fmt.Sprintf("parse error: %v", err),
-		}, nil
-	}
-
-	if result.Err != "" {
-		return &model.EngineResult{
-			EngineName: f.Name(),
-			Error:      result.Err,
-		}, nil
-	}
-
-	// 转换为通用格式
-	rawData := []interface{}{}
-	for _, row := range result.Results {
-		if len(row) < 11 {
-			continue
-		}
-		data := map[string]interface{}{
-			"ip":          row[0],
-			"port":        row[1],
-			"protocol":    row[2],
-			"domain":      row[3],
-			"title":       row[4],
-			"server":      row[5],
-			"header":      row[6],
-			"body":        row[7],
-			"country":     row[8],
-			"region":      row[9],
-			"city":        row[10],
-			"asn":         row[11],
-			"org":         row[12],
-			"isp":         row[13],
-			"status_code": row[14],
-		}
-		rawData = append(rawData, data)
-	}
-
-	return &model.EngineResult{
-		EngineName: f.Name(),
-		RawData:    rawData,
-		Total:      result.Total,
-		Page:       page,
-		HasMore:    (page * pageSize) < result.Total,
-	}, nil
+	return engineResult, nil
 }
 
 // Normalize 标准化FOFA结果
 func (f *FofaAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, error) {
-	assets := []model.UnifiedAsset{}
+	assets := make([]model.UnifiedAsset, 0, len(raw.RawData))
 
 	if raw == nil || len(raw.RawData) == 0 {
 		return assets, nil
@@ -233,7 +287,8 @@ func (f *FofaAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, 
 			continue
 		}
 
-		asset := model.UnifiedAsset{
+		// 创建新的资产对象
+		asset := &model.UnifiedAsset{
 			Source: f.Name(),
 		}
 
@@ -292,6 +347,9 @@ func (f *FofaAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, 
 		}
 
 		// 构建URL
+		added := false
+
+		// 优先处理有IP和端口的情况
 		if asset.IP != "" && asset.Port > 0 {
 			if asset.Protocol == "" {
 				if asset.Port == 443 {
@@ -301,22 +359,150 @@ func (f *FofaAdapter) Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, 
 				}
 			}
 
-			if asset.Protocol == "https" {
-				asset.URL = fmt.Sprintf("https://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("https://%s:%d", asset.Host, asset.Port)
-				}
-			} else {
-				asset.URL = fmt.Sprintf("http://%s:%d", asset.IP, asset.Port)
-				if asset.Host != "" {
-					asset.URL = fmt.Sprintf("http://%s:%d", asset.Host, asset.Port)
-				}
+			// 使用 url.URL 结构体安全构建 URL
+			u := &url.URL{
+				Scheme: asset.Protocol,
 			}
+			if asset.Host != "" {
+				u.Host = fmt.Sprintf("%s:%d", asset.Host, asset.Port)
+			} else {
+				u.Host = fmt.Sprintf("%s:%d", asset.IP, asset.Port)
+			}
+			asset.URL = u.String()
 
 			asset.Extra = data
-			assets = append(assets, asset)
+			assets = append(assets, *asset)
+			added = true
+		}
+
+		// 处理只有Host的情况
+		if !added && asset.Host != "" {
+			asset.Extra = data
+			assets = append(assets, *asset)
+			added = true
+		}
+
+		// 处理只有IP没有端口的情况
+		if !added && asset.IP != "" {
+			asset.Extra = data
+			assets = append(assets, *asset)
+			added = true
 		}
 	}
 
 	return assets, nil
+}
+
+// GetQuota 获取FOFA配额信息
+func (f *FofaAdapter) GetQuota() (*model.QuotaInfo, error) {
+	if f.apiKey == "" || f.email == "" {
+		return nil, fmt.Errorf("FOFA API key or email not configured")
+	}
+
+	// FOFA API endpoint for user info (contains quota)
+	url := fmt.Sprintf("%s/api/v1/info/my", f.baseURL)
+
+	resp, err := f.client.R().
+		SetQueryParams(map[string]string{
+			"email": f.email,
+			"key":   f.apiKey,
+		}).
+		Get(url)
+
+	if err != nil {
+		return nil, fmt.Errorf("request error: %v", err)
+	}
+
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode(), resp.String())
+	}
+
+	// 记录响应体，方便调试
+	logger.Debugf("FOFA quota response: %s", resp.String())
+
+	// FOFA quota response structure
+	var result struct {
+		Error           bool   `json:"error"`
+		Email           string `json:"email"`
+		Username        string `json:"username"`
+		Category        string `json:"category"`
+		IsVIP           bool   `json:"isvip"`
+		VIPLevel        int    `json:"vip_level"`
+		RemainFreePoint int    `json:"remain_free_point"`
+		RemainAPIQuery  int    `json:"remain_api_query"`
+		RemainAPIData   int    `json:"remain_api_data"`
+		Message         string `json:"message"`
+	}
+
+	if err := json.Unmarshal(resp.Body(), &result); err != nil {
+		return nil, fmt.Errorf("parse error: %v", err)
+	}
+
+	if result.Error {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+
+	// 计算配额信息 - 简化逻辑，直接使用API返回的值
+	// FOFA API响应结构：
+	// - remain_free_point: 剩余免费点数
+	// - remain_api_query: 剩余API查询次数
+	// - remain_api_data: 剩余API数据条数
+
+	total := 0
+	remain := 0
+
+	// 优先使用API查询次数
+	if result.RemainAPIQuery > 0 {
+		remain = result.RemainAPIQuery
+		// 对于付费用户，假设总配额为剩余+已用（保守估计）
+		// 由于API不直接返回总数，使用剩余作为最小估计
+		total = remain
+	} else if result.RemainFreePoint > 0 {
+		// 使用免费点数
+		remain = result.RemainFreePoint
+		total = remain
+	}
+
+	// 计算已用配额（如果有总数）
+	used := 0
+	if total > 0 {
+		used = total - remain
+	}
+
+	// 确保数值合理
+	if remain < 0 {
+		remain = 0
+	}
+	if used < 0 {
+		used = 0
+	}
+
+	// 仅记录必要的配额信息（不记录敏感用户详情）
+	logger.Debugf("FOFA quota: total=%d, used=%d, remain=%d", total, used, remain)
+
+	return &model.QuotaInfo{
+		Remaining: remain,
+		Total:     total,
+		Used:      used,
+		Unit:      "queries",
+		Expiry:    "", // FOFA API doesn't return expiry info
+	}, nil
+}
+
+// IsWebOnly 检查是否为 Web-only 模式
+func (f *FofaAdapter) IsWebOnly() bool {
+	return false
+}
+
+// FofaAdapterWebOnly FOFA Web-only模式适配器
+type FofaAdapterWebOnly struct {
+	*WebOnlyAdapterBase
+}
+
+// NewFofaAdapterWebOnly 创建FOFA Web-only适配器
+func NewFofaAdapterWebOnly() *FofaAdapterWebOnly {
+	baseAdapter := NewFofaAdapter("", "", "", FofaDefaultQPS, FofaDefaultTimeout)
+	return &FofaAdapterWebOnly{
+		WebOnlyAdapterBase: NewWebOnlyAdapterBase(baseAdapter, "fofa"),
+	}
 }

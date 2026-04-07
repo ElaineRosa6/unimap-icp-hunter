@@ -1,72 +1,48 @@
 package unimap
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestUQLParser_Parse(t *testing.T) {
-	tests := []struct {
-		name    string
-		query   string
-		wantErr bool
-	}{
-		{
-			name:    "Empty query",
-			query:   "",
-			wantErr: true,
-		},
-		{
-			name:    "Simple equality",
-			query:   `country="CN"`,
-			wantErr: false,
-		},
-		{
-			name:    "Contains operator",
-			query:   `title~="登录"`,
-			wantErr: false,
-		},
-	}
-
+func TestParseLogicalAndIn(t *testing.T) {
 	parser := NewUQLParser()
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ast, err := parser.Parse(tt.query)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UQLParser.Parse() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && ast == nil {
-				t.Errorf("UQLParser.Parse() returned nil AST for valid query")
-			}
-		})
+
+	ast, err := parser.Parse(`country="CN" && port IN ["80", "443"]`)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if ast == nil || ast.Root == nil {
+		t.Fatalf("expected non-nil AST root")
+	}
+	if ast.Root.Type != "logical" || ast.Root.Value != "AND" {
+		t.Fatalf("expected root logical AND, got type=%q value=%q", ast.Root.Type, ast.Root.Value)
+	}
+	if len(ast.Root.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(ast.Root.Children))
 	}
 }
 
-func TestUQLParser_Tokenize(t *testing.T) {
-	tests := []struct {
-		name  string
-		query string
-		want  int // Expected minimum number of tokens
-	}{
-		{
-			name:  "Simple query",
-			query: `country="CN"`,
-			want:  1,
-		},
-		{
-			name:  "Query with quotes",
-			query: `title="管理后台"`,
-			want:  1,
-		},
+func TestParseUTF8Condition(t *testing.T) {
+	parser := NewUQLParser()
+
+	ast, err := parser.Parse(`title~="管理后台"`)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if ast == nil || ast.Root == nil {
+		t.Fatalf("expected non-nil AST root")
+	}
+	if ast.Root.Value != "title" {
+		t.Fatalf("expected field title, got %q", ast.Root.Value)
+	}
+}
+
+func TestParseErrors(t *testing.T) {
+	parser := NewUQLParser()
+
+	if _, err := parser.Parse(""); err == nil {
+		t.Fatalf("expected error for empty query")
 	}
 
-	parser := NewUQLParser()
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tokens := parser.tokenize(tt.query)
-			if len(tokens) < tt.want {
-				t.Errorf("tokenize() got %d tokens, want at least %d", len(tokens), tt.want)
-			}
-		})
+	if _, err := parser.Parse(`port IN ["80", "443"`); err == nil {
+		t.Fatalf("expected error for missing closing bracket")
 	}
 }

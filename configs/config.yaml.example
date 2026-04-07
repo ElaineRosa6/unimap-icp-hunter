@@ -1,0 +1,185 @@
+engines:
+    quake:
+        enabled: true
+        api_key: "${QUAKE_API_KEY}"
+        base_url: https://quake.360.net/api
+        qps: 5
+        timeout: 30
+    zoomeye:
+        enabled: true
+        api_key: "${ZOOMEYE_API_KEY}"
+        base_url: https://api.zoomeye.org
+        qps: 3
+        timeout: 30
+    hunter:
+        enabled: true
+        api_key: "${HUNTER_API_KEY}"
+        base_url: https://hunter.qianxin.com
+        qps: 5
+        timeout: 30
+    fofa:
+        enabled: true
+        api_key: "${FOFA_API_KEY}"
+        email: "${FOFA_EMAIL}"
+        base_url: https://fofa.info
+        web_url: https://fofa.info
+        qps: 3
+        timeout: 30
+        use_web_api: true
+system:
+    max_concurrent: 10
+    cache_ttl: 3600
+    cache_max_size: 1000
+    cache_cleanup_interval: 300
+
+# Web 截图与 CDP 配置
+screenshot:
+    enabled: true
+    # cdp | extension
+    engine: cdp
+    base_dir: ./screenshots
+    chrome_path: ""
+    # 浏览器代理，例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:7891
+    proxy_server: ""
+    chrome_user_data_dir: ""
+    chrome_profile_dir: "Default"
+    chrome_remote_debug_url: "http://127.0.0.1:9222"
+    headless: true
+    timeout: 30
+    window_width: 1365
+    window_height: 768
+    wait_time: 500
+    extension:
+        enabled: false
+        listen_addr: "127.0.0.1:19451"
+        pairing_required: true
+        token_ttl_seconds: 600
+        task_timeout_seconds: 30
+        max_concurrency: 5
+        # 生产环境建议开启：要求回调携带签名、时间戳和 nonce
+        callback_signature_required: false
+        callback_signature_skew_seconds: 300
+        callback_nonce_ttl_seconds: 600
+        fallback_to_cdp: true
+    auto_capture:
+        enabled: false
+        capture_search_results: true
+        capture_targets: false
+
+# Day11 profile templates (copy to screenshot section as needed):
+#
+# profile: cdp-only
+# screenshot:
+#   engine: cdp
+#   extension:
+#     enabled: false
+#     fallback_to_cdp: true
+#
+# profile: extension-with-fallback
+# screenshot:
+#   engine: extension
+#   extension:
+#     enabled: true
+#     fallback_to_cdp: true
+#
+# profile: extension-only
+# screenshot:
+#   engine: extension
+#   extension:
+#     enabled: true
+#     fallback_to_cdp: false
+
+web:
+    cors:
+        allowed_origins:
+            - http://localhost:8448
+            - http://127.0.0.1:8448
+        allowed_methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+        allowed_headers:
+            - Content-Type
+            - Authorization
+            - X-Requested-With
+            - X-WebSocket-Token
+        exposed_headers: []
+        allow_credentials: true
+        max_age: 600
+    rate_limit:
+        enabled: true
+        requests_per_window: 60
+        window_seconds: 60
+    request_limits:
+        max_body_bytes: 10485760
+        max_multipart_memory_bytes: 10485760
+
+network:
+    proxy_pool:
+        enabled: false
+        strategy: round_robin
+        # 支持逗号分隔或数组
+        proxies:
+            - http://127.0.0.1:7890
+            - socks5://127.0.0.1:7891
+        failure_threshold: 2
+        cooldown_seconds: 60
+        # 所有代理进入冷却后，是否允许直连
+        allow_direct_fallback: true
+
+distributed:
+    # Day15: default disabled, enable only after node-side rollout
+    enabled: false
+    heartbeat_timeout_seconds: 30
+    max_reassign_attempts: 1
+    # optional: protect controller-side distributed APIs (status/profile/enqueue/task-status)
+    admin_token: ""
+    # node_id -> token
+    node_auth_tokens: {}
+    scheduler:
+        strategy: health_load
+
+cache:
+    # memory | redis
+    backend: memory
+    redis:
+        addr: 127.0.0.1:6379
+        password: ""
+        db: 0
+        prefix: unimap:
+        # 连接池配置（可选）
+        pool_size: 10           # 连接池大小
+        min_idle_conns: 2       # 最小空闲连接数
+        max_idle_conns: 0       # 最大空闲连接数（0表示不限制）
+        max_retries: 3          # 最大重试次数
+        dial_timeout: 5000      # 连接超时（毫秒）
+        read_timeout: 3000      # 读超时（毫秒）
+        write_timeout: 3000     # 写超时（毫秒）
+        pool_timeout: 4000      # 连接池超时（毫秒）
+        conn_max_lifetime: 0    # 连接最大存活时间（毫秒，0表示不限制）
+        conn_max_idle_time: 300000  # 连接最大空闲时间（毫秒，5分钟）
+    # 按引擎的缓存配置（可选，未配置的引擎使用全局默认值）
+    engines:
+        quake:
+            enabled: true
+            ttl: 3600      # 缓存时间（秒），1小时
+            max_size: 500  # 最大缓存条目数
+        zoomeye:
+            enabled: true
+            ttl: 1800      # 30分钟，ZoomEye API 限制较严格
+            max_size: 500
+        hunter:
+            enabled: true
+            ttl: 3600      # 1小时
+            max_size: 500
+        fofa:
+            enabled: true
+            ttl: 1800      # 30分钟，FOFA 数据更新频繁
+            max_size: 500
+        shodan:
+            enabled: true
+            ttl: 7200      # 2小时，Shodan 数据相对稳定
+            max_size: 500

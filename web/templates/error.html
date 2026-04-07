@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>错误 - UniMap</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.staticVersion}}">
+</head>
+<body>
+	<header>
+		<h1>UniMap - 多引擎网络资产查询</h1>
+		<nav>
+			<a href="/">首页</a>
+			<a href="/quota">查看配额</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="error-message">
+			<h2>错误信息</h2>
+			<div class="error-box">
+				<p>{{.error}}</p>
+				<a href="/" class="btn btn-primary">🏠 返回首页</a>
+				<a href="javascript:history.back()" class="btn btn-outline-secondary">⬅️ 返回上一页</a>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<p>&copy; 2026 UniMap - 多引擎网络资产查询系统</p>
+	</footer>
+
+	<script src="/static/js/main.js?v={{.staticVersion}}"></script>
+</body>
+</html>

@@ -17,4 +17,10 @@ type EngineAdapter interface {
 
 	// Normalize 将原生结果映射到统一资产模型
 	Normalize(raw *model.EngineResult) ([]model.UnifiedAsset, error)
+
+	// GetQuota 获取引擎配额信息
+	GetQuota() (*model.QuotaInfo, error)
+
+	// IsWebOnly 检查是否为 Web-only 模式
+	IsWebOnly() bool
 }
