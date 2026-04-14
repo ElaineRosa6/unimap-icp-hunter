@@ -15,10 +15,14 @@ import (
 func TestNodeTaskFlow(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Distributed.Enabled = true
+	cfg.Distributed.AdminToken = "test-admin-token"
+	cfg.Distributed.NodeAuthTokens = map[string]string{"node-a": "node-token-a"}
 	s := &Server{
-		nodeRegistry:  distributed.NewRegistry(60 * time.Second),
-		nodeTaskQueue: distributed.NewTaskQueue(),
-		config:        cfg,
+		distributed: &DistributedState{
+			NodeRegistry:  distributed.NewRegistry(60 * time.Second),
+			NodeTaskQueue: distributed.NewTaskQueue(),
+		},
+		config: cfg,
 	}
 
 	enqueueBody := map[string]interface{}{
@@ -30,6 +34,7 @@ func TestNodeTaskFlow(t *testing.T) {
 	}
 	enqueueBytes, _ := json.Marshal(enqueueBody)
 	enqueueReq := httptest.NewRequest(http.MethodPost, "/api/nodes/task/enqueue", bytes.NewReader(enqueueBytes))
+	enqueueReq.Header.Set("Authorization", "Bearer test-admin-token")
 	enqueueW := httptest.NewRecorder()
 	s.handleNodeTaskEnqueue(enqueueW, enqueueReq)
 	if enqueueW.Code != http.StatusOK {
@@ -39,6 +44,7 @@ func TestNodeTaskFlow(t *testing.T) {
 	claimBody := map[string]interface{}{"node_id": "node-a", "caps": []string{"port_scan"}}
 	claimBytes, _ := json.Marshal(claimBody)
 	claimReq := httptest.NewRequest(http.MethodPost, "/api/nodes/task/claim", bytes.NewReader(claimBytes))
+	claimReq.Header.Set("Authorization", "Bearer node-token-a")
 	claimW := httptest.NewRecorder()
 	s.handleNodeTaskClaim(claimW, claimReq)
 	if claimW.Code != http.StatusOK {
@@ -48,6 +54,7 @@ func TestNodeTaskFlow(t *testing.T) {
 	resultBody := map[string]interface{}{"task_id": "task-1", "node_id": "node-a", "status": "completed", "duration_ms": 32}
 	resultBytes, _ := json.Marshal(resultBody)
 	resultReq := httptest.NewRequest(http.MethodPost, "/api/nodes/task/result", bytes.NewReader(resultBytes))
+	resultReq.Header.Set("Authorization", "Bearer node-token-a")
 	resultW := httptest.NewRecorder()
 	s.handleNodeTaskResult(resultW, resultReq)
 	if resultW.Code != http.StatusOK {
@@ -55,6 +62,7 @@ func TestNodeTaskFlow(t *testing.T) {
 	}
 
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/nodes/task/status", nil)
+	statusReq.Header.Set("Authorization", "Bearer test-admin-token")
 	statusW := httptest.NewRecorder()
 	s.handleNodeTaskStatus(statusW, statusReq)
 	if statusW.Code != http.StatusOK {
@@ -83,7 +91,7 @@ func TestNodeTaskFlow(t *testing.T) {
 }
 
 func TestNodeTask_DistributedDisabled(t *testing.T) {
-	s := &Server{nodeTaskQueue: distributed.NewTaskQueue(), config: &config.Config{}}
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: &config.Config{}}
 	body := map[string]interface{}{"task_id": "task-1", "task_type": "port_scan"}
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/nodes/task/enqueue", bytes.NewReader(b))
@@ -98,9 +106,9 @@ func TestNodeTaskClaim_NodeAuthToken(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Distributed.Enabled = true
 	cfg.Distributed.NodeAuthTokens = map[string]string{"node-a": "token-a"}
-	s := &Server{nodeTaskQueue: distributed.NewTaskQueue(), config: cfg}
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: cfg}
 
-	_, err := s.nodeTaskQueue.Enqueue(distributed.TaskEnvelope{TaskID: "task-auth-1", TaskType: "port_scan"})
+	_, err := s.distributed.NodeTaskQueue.Enqueue(distributed.TaskEnvelope{TaskID: "task-auth-1", TaskType: "port_scan"})
 	if err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
@@ -128,7 +136,7 @@ func TestNodeTaskEnqueue_AdminToken(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Distributed.Enabled = true
 	cfg.Distributed.AdminToken = "admin-token"
-	s := &Server{nodeTaskQueue: distributed.NewTaskQueue(), config: cfg}
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: cfg}
 
 	body := map[string]interface{}{"task_id": "task-admin-1", "task_type": "port_scan"}
 	b, _ := json.Marshal(body)

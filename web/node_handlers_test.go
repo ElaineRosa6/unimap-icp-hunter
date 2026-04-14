@@ -13,7 +13,14 @@ import (
 )
 
 func TestNodeRegisterHeartbeatStatus(t *testing.T) {
-	s := &Server{nodeRegistry: distributed.NewRegistry(60 * time.Second)}
+	cfg := &config.Config{}
+	cfg.Distributed.Enabled = true
+	cfg.Distributed.AdminToken = "test-admin-token"
+	cfg.Distributed.NodeAuthTokens = map[string]string{"node-a": "node-token-a"}
+	s := &Server{
+		distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)},
+		config:      cfg,
+	}
 
 	registerBody := map[string]interface{}{
 		"node_id":         "node-a",
@@ -24,6 +31,7 @@ func TestNodeRegisterHeartbeatStatus(t *testing.T) {
 	}
 	registerBytes, _ := json.Marshal(registerBody)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/nodes/register", bytes.NewReader(registerBytes))
+	registerReq.Header.Set("Authorization", "Bearer node-token-a")
 	registerW := httptest.NewRecorder()
 	s.handleNodeRegister(registerW, registerReq)
 	if registerW.Code != http.StatusOK {
@@ -39,6 +47,7 @@ func TestNodeRegisterHeartbeatStatus(t *testing.T) {
 	}
 	heartbeatBytes, _ := json.Marshal(heartbeatBody)
 	heartbeatReq := httptest.NewRequest(http.MethodPost, "/api/nodes/heartbeat", bytes.NewReader(heartbeatBytes))
+	heartbeatReq.Header.Set("Authorization", "Bearer node-token-a")
 	heartbeatW := httptest.NewRecorder()
 	s.handleNodeHeartbeat(heartbeatW, heartbeatReq)
 	if heartbeatW.Code != http.StatusOK {
@@ -46,6 +55,7 @@ func TestNodeRegisterHeartbeatStatus(t *testing.T) {
 	}
 
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/nodes/status", nil)
+	statusReq.Header.Set("Authorization", "Bearer test-admin-token")
 	statusW := httptest.NewRecorder()
 	s.handleNodeStatus(statusW, statusReq)
 	if statusW.Code != http.StatusOK {
@@ -84,7 +94,11 @@ func TestNodeRegisterHeartbeatStatus(t *testing.T) {
 }
 
 func TestNodeRegisterValidation(t *testing.T) {
-	s := &Server{nodeRegistry: distributed.NewRegistry(60 * time.Second)}
+	s := &Server{
+		distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)},
+		config:      &config.Config{},
+	}
+	s.config.Distributed.Enabled = true
 
 	registerBody := map[string]interface{}{"hostname": "worker-a"}
 	registerBytes, _ := json.Marshal(registerBody)
@@ -97,7 +111,7 @@ func TestNodeRegisterValidation(t *testing.T) {
 }
 
 func TestNodeEndpoints_DistributedDisabled(t *testing.T) {
-	s := &Server{nodeRegistry: distributed.NewRegistry(60 * time.Second), config: &config.Config{}}
+	s := &Server{distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)}, config: &config.Config{}}
 
 	registerBody := map[string]interface{}{"node_id": "node-a"}
 	registerBytes, _ := json.Marshal(registerBody)
@@ -112,12 +126,14 @@ func TestNodeEndpoints_DistributedDisabled(t *testing.T) {
 func TestNodeNetworkProfile(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Distributed.Enabled = true
-	s := &Server{nodeRegistry: distributed.NewRegistry(60 * time.Second), config: cfg}
+	cfg.Distributed.AdminToken = "test-admin-token"
+	s := &Server{distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)}, config: cfg}
 
-	_, _ = s.nodeRegistry.Register(distributed.NodeRegistration{NodeID: "node-a", Region: "cn-east", EgressIP: "1.2.3.4", MaxConcurrency: 3})
-	_, _ = s.nodeRegistry.Heartbeat(distributed.NodeHeartbeat{NodeID: "node-a", CurrentLoad: 1, AvgLatencyMS: 11.2, SuccessRate5m: 98.7})
+	_, _ = s.distributed.NodeRegistry.Register(distributed.NodeRegistration{NodeID: "node-a", Region: "cn-east", EgressIP: "1.2.3.4", MaxConcurrency: 3})
+	_, _ = s.distributed.NodeRegistry.Heartbeat(distributed.NodeHeartbeat{NodeID: "node-a", CurrentLoad: 1, AvgLatencyMS: 11.2, SuccessRate5m: 98.7})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/nodes/network/profile", nil)
+	req.Header.Set("Authorization", "Bearer test-admin-token")
 	w := httptest.NewRecorder()
 	s.handleNodeNetworkProfile(w, req)
 	if w.Code != http.StatusOK {
@@ -143,7 +159,7 @@ func TestNodeRegister_NodeAuthToken(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Distributed.Enabled = true
 	cfg.Distributed.NodeAuthTokens = map[string]string{"node-a": "token-a"}
-	s := &Server{nodeRegistry: distributed.NewRegistry(60 * time.Second), config: cfg}
+	s := &Server{distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)}, config: cfg}
 
 	body := map[string]interface{}{"node_id": "node-a", "hostname": "worker-a"}
 	b, _ := json.Marshal(body)
@@ -168,7 +184,7 @@ func TestNodeStatus_AdminToken(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Distributed.Enabled = true
 	cfg.Distributed.AdminToken = "admin-token"
-	s := &Server{nodeRegistry: distributed.NewRegistry(60 * time.Second), config: cfg}
+	s := &Server{distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)}, config: cfg}
 
 	unauthReq := httptest.NewRequest(http.MethodGet, "/api/nodes/status", nil)
 	unauthW := httptest.NewRecorder()
@@ -181,6 +197,55 @@ func TestNodeStatus_AdminToken(t *testing.T) {
 	authReq.Header.Set("Authorization", "Bearer admin-token")
 	authW := httptest.NewRecorder()
 	s.handleNodeStatus(authW, authReq)
+	if authW.Code != http.StatusOK {
+		t.Fatalf("expected 200 with admin token, got %d, body=%s", authW.Code, authW.Body.String())
+	}
+}
+
+func TestNodeGet_AdminToken(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Distributed.Enabled = true
+	cfg.Distributed.AdminToken = "admin-token"
+	s := &Server{distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)}, config: cfg}
+
+	_, _ = s.distributed.NodeRegistry.Register(distributed.NodeRegistration{NodeID: "node-a", Hostname: "worker-a"})
+
+	unauthReq := httptest.NewRequest(http.MethodGet, "/api/nodes/get?node_id=node-a", nil)
+	unauthW := httptest.NewRecorder()
+	s.handleNodeGet(unauthW, unauthReq)
+	if unauthW.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without admin token, got %d", unauthW.Code)
+	}
+
+	authReq := httptest.NewRequest(http.MethodGet, "/api/nodes/get?node_id=node-a", nil)
+	authReq.Header.Set("Authorization", "Bearer admin-token")
+	authW := httptest.NewRecorder()
+	s.handleNodeGet(authW, authReq)
+	if authW.Code != http.StatusOK {
+		t.Fatalf("expected 200 with admin token, got %d, body=%s", authW.Code, authW.Body.String())
+	}
+}
+
+func TestNodeDeregister_AdminTokenFallback(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Distributed.Enabled = true
+	cfg.Distributed.AdminToken = "admin-token"
+	cfg.Distributed.NodeAuthTokens = map[string]string{"node-a": "token-a"}
+	s := &Server{distributed: &DistributedState{NodeRegistry: distributed.NewRegistry(60 * time.Second)}, config: cfg}
+
+	_, _ = s.distributed.NodeRegistry.Register(distributed.NodeRegistration{NodeID: "node-a", Hostname: "worker-a"})
+
+	unauthReq := httptest.NewRequest(http.MethodDelete, "/api/nodes/deregister?node_id=node-a", nil)
+	unauthW := httptest.NewRecorder()
+	s.handleNodeDeregister(unauthW, unauthReq)
+	if unauthW.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", unauthW.Code)
+	}
+
+	authReq := httptest.NewRequest(http.MethodDelete, "/api/nodes/deregister?node_id=node-a", nil)
+	authReq.Header.Set("Authorization", "Bearer admin-token")
+	authW := httptest.NewRecorder()
+	s.handleNodeDeregister(authW, authReq)
 	if authW.Code != http.StatusOK {
 		t.Fatalf("expected 200 with admin token, got %d, body=%s", authW.Code, authW.Body.String())
 	}
