@@ -58,4 +58,4 @@ screenshots/**
 !screenshots/
 !screenshots/.gitkeep
 hash_store/records/**/*.json
-!hash_store/records/.gitkeep
+!hash_store/records/.gitkeepdata/
