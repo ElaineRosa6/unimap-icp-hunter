@@ -25,6 +25,22 @@ const (
 	TaskCookieVerify      TaskType = "cookie_verify"      // ST-06: Cookie 验证
 	TaskLoginStatusCheck  TaskType = "login_status_check" // ST-07: 登录状态检测
 	TaskDistributedSubmit TaskType = "distributed_submit" // ST-08: 分布式任务提交
+
+	// ST-09 ~ ST-16: 中优先级 Runner
+	TaskExport            TaskType = "export"             // ST-09: 数据导出
+	TaskPortScan          TaskType = "port_scan"          // ST-10: 端口扫描
+	TaskScreenshotCleanup TaskType = "screenshot_cleanup" // ST-11: 截图清理
+	TaskTamperCleanup     TaskType = "tamper_cleanup"     // ST-12: 篡改记录清理
+	TaskQuotaMonitor      TaskType = "quota_monitor"      // ST-13: 配额监控
+	TaskAlertSummary      TaskType = "alert_summary"      // ST-14: 告警汇总
+	TaskBaselineRefresh   TaskType = "baseline_refresh"   // ST-15: 基线刷新
+	TaskURLImport         TaskType = "url_import"         // ST-16: URL 导入
+
+	// ST-17 ~ ST-20: 低优先级 Runner
+	TaskPluginHealth      TaskType = "plugin_health"      // ST-17: 插件健康检查
+	TaskBridgeTokenRotate TaskType = "bridge_token"       // ST-18: Bridge 令牌轮换
+	TaskAlertSilence      TaskType = "alert_silence"      // ST-19: 告警静默窗口
+	TaskCacheWarmup       TaskType = "cache_warmup"       // ST-20: 缓存预热
 )
 
 // AllTaskTypes returns all supported task types.
@@ -32,6 +48,9 @@ func AllTaskTypes() []TaskType {
 	return []TaskType{
 		TaskQuery, TaskSearchScreenshot, TaskBatchScreenshot, TaskTamperCheck,
 		TaskURLReachability, TaskCookieVerify, TaskLoginStatusCheck, TaskDistributedSubmit,
+		TaskExport, TaskPortScan, TaskScreenshotCleanup, TaskTamperCleanup,
+		TaskQuotaMonitor, TaskAlertSummary, TaskBaselineRefresh, TaskURLImport,
+		TaskPluginHealth, TaskBridgeTokenRotate, TaskAlertSilence, TaskCacheWarmup,
 	}
 }
 
@@ -46,6 +65,18 @@ func TaskTypeLabel(t TaskType) string {
 		TaskCookieVerify:      "Cookie 验证",
 		TaskLoginStatusCheck:  "登录状态检测",
 		TaskDistributedSubmit: "分布式任务提交",
+		TaskExport:            "数据导出",
+		TaskPortScan:          "端口扫描",
+		TaskScreenshotCleanup: "截图清理",
+		TaskTamperCleanup:     "篡改记录清理",
+		TaskQuotaMonitor:      "配额监控",
+		TaskAlertSummary:      "告警汇总",
+		TaskBaselineRefresh:   "基线刷新",
+		TaskURLImport:         "URL 导入",
+		TaskPluginHealth:      "插件健康检查",
+		TaskBridgeTokenRotate: "Bridge 令牌轮换",
+		TaskAlertSilence:      "告警静默窗口",
+		TaskCacheWarmup:       "缓存预热",
 	}
 	if l, ok := labels[t]; ok {
 		return l
