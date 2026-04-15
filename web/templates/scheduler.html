@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>定时任务 - UniMap</title>
+	<link rel="stylesheet" href="/static/css/style.css?v={{.Version}}">
+	<style>
+		.nav-links { margin-bottom: 20px; }
+		.nav-links a { margin-right: 15px; text-decoration: none; color: #007bff; }
+		.nav-links a:hover { text-decoration: underline; }
+
+		.tabs { display: flex; gap: 4px; border-bottom: 2px solid #ddd; margin-bottom: 20px; }
+		.tab-btn {
+			padding: 8px 16px; border: none; background: none; cursor: pointer;
+			font-size: 14px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px;
+		}
+		.tab-btn.active { color: #007bff; border-bottom-color: #007bff; font-weight: 600; }
+		.tab-content { display: none; }
+		.tab-content.active { display: block; }
+
+		.summary-cards { display: flex; gap: 16px; margin-bottom: 20px; }
+		.summary-card {
+			flex: 1; padding: 16px; background: #f8f9fa; border-radius: 6px; text-align: center;
+		}
+		.summary-card .count { font-size: 28px; font-weight: 700; color: #333; }
+		.summary-card .label { font-size: 12px; color: #666; margin-top: 4px; }
+
+		.create-form { margin-bottom: 20px; }
+		.create-form summary { cursor: pointer; padding: 10px; background: #f0f4f8; border-radius: 4px; font-weight: 600; }
+		.create-form .form-inner { padding: 16px; border: 1px solid #ddd; border-top: none; border-radius: 0 0 4px 4px; }
+
+		.form-row { display: flex; gap: 12px; margin-bottom: 12px; }
+		.form-row .form-group { flex: 1; margin-bottom: 0; }
+
+		table { width: 100%; border-collapse: collapse; }
+		th, td { padding: 8px 12px; border-bottom: 1px solid #eee; text-align: left; font-size: 13px; }
+		th { background: #f8f9fa; font-weight: 600; }
+		td { vertical-align: middle; }
+
+		.status-badge {
+			display: inline-block; padding: 2px 8px; border-radius: 10px;
+			font-size: 11px; font-weight: 600;
+		}
+		.status-enabled { background: #d4edda; color: #155724; }
+		.status-disabled { background: #f8d7da; color: #721c24; }
+		.status-success { background: #d4edda; color: #155724; }
+		.status-failed { background: #f8d7da; color: #721c24; }
+		.status-timeout { background: #fff3cd; color: #856404; }
+		.status-skipped { background: #e2e3e5; color: #383d41; }
+
+		.btn-sm {
+			padding: 3px 8px; font-size: 12px; border-radius: 3px;
+			border: 1px solid #ddd; background: #fff; cursor: pointer;
+		}
+		.btn-sm:hover { background: #f0f0f0; }
+		.btn-sm.btn-danger { color: #dc3545; border-color: #dc3545; }
+		.btn-sm.btn-danger:hover { background: #dc3545; color: #fff; }
+		.btn-sm.btn-primary { color: #007bff; border-color: #007bff; }
+		.btn-sm.btn-primary:hover { background: #007bff; color: #fff; }
+
+		.toast {
+			position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+			border-radius: 6px; color: #fff; z-index: 9999; display: none;
+		}
+		.toast.success { background: #28a745; }
+		.toast.error { background: #dc3545; }
+
+		.payload-preview {
+			max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+			white-space: nowrap; font-family: monospace; font-size: 11px; color: #666;
+		}
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>⏰ 定时任务管理</h1>
+
+		<div class="nav-links">
+			<a href="/">← 返回首页</a>
+			<a href="/monitor">网页监控</a>
+			<a href="/batch-screenshot">批量截图</a>
+		</div>
+
+		<div class="summary-cards">
+			<div class="summary-card">
+				<div class="count" id="total-count">0</div>
+				<div class="label">总任务数</div>
+			</div>
+			<div class="summary-card">
+				<div class="count" id="enabled-count">0</div>
+				<div class="label">已启用</div>
+			</div>
+			<div class="summary-card">
+				<div class="count" id="disabled-count">0</div>
+				<div class="label">已禁用</div>
+			</div>
+			<div class="summary-card">
+				<div class="count" id="error-count">0</div>
+				<div class="label">执行失败</div>
+			</div>
+		</div>
+
+		<div class="tabs">
+			<button class="tab-btn active" data-tab="tasks">任务列表</button>
+			<button class="tab-btn" data-tab="history">执行历史</button>
+			<button class="tab-btn" data-tab="help">任务类型说明</button>
+		</div>
+
+		<!-- 任务列表 -->
+		<div class="tab-content active" id="tab-tasks">
+			<details class="create-form">
+				<summary>+ 创建新任务</summary>
+				<div class="form-inner">
+					<div class="form-row">
+						<div class="form-group">
+							<label>任务名称</label>
+							<input type="text" id="task-name" placeholder="例如：每日篡改检测" class="form-control">
+						</div>
+						<div class="form-group">
+							<label>任务类型</label>
+							<select id="task-type" class="form-control">
+								{{range .TaskTypes}}
+								<option value="{{.}}">{{index $.TaskTypeLabels .}}</option>
+								{{end}}
+							</select>
+						</div>
+					</div>
+					<div class="form-row">
+						<div class="form-group">
+							<label>Cron 表达式</label>
+							<input type="text" id="task-cron" placeholder="0 0 2 * * *" class="form-control">
+							<small>秒 分 时 日 月 周，例：0 0 2 * * * = 每天凌晨2点</small>
+						</div>
+					</div>
+					<div class="form-row">
+						<div class="form-group">
+							<label>超时（秒）</label>
+							<input type="number" id="task-timeout" value="300" class="form-control">
+						</div>
+						<div class="form-group">
+							<label>最大重试</label>
+							<input type="number" id="task-retries" value="0" class="form-control">
+						</div>
+					</div>
+					<div class="form-group">
+						<label>任务参数（JSON）</label>
+						<textarea id="task-payload" rows="4" class="form-control" placeholder='{"urls": ["https://example.com"], "engines": ["fofa"]}'></textarea>
+					</div>
+					<div class="form-row">
+						<div class="form-group">
+							<label><input type="checkbox" id="task-enabled" checked> 启用</label>
+						</div>
+					</div>
+					<button class="btn" id="btn-create-task">创建任务</button>
+				</div>
+			</details>
+
+			<table>
+				<thead>
+					<tr>
+						<th>名称</th>
+						<th>类型</th>
+						<th>Cron</th>
+						<th>状态</th>
+						<th>上次执行</th>
+						<th>下次执行</th>
+						<th>参数</th>
+						<th>操作</th>
+					</tr>
+				</thead>
+				<tbody id="task-list"></tbody>
+			</table>
+		</div>
+
+		<!-- 执行历史 -->
+		<div class="tab-content" id="tab-history">
+			<div class="form-row" style="margin-bottom: 16px;">
+				<div class="form-group">
+					<select id="history-type-filter" class="form-control" onchange="loadHistory()">
+						<option value="">全部类型</option>
+						{{range .TaskTypes}}
+						<option value="{{.}}">{{index $.TaskTypeLabels .}}</option>
+						{{end}}
+					</select>
+				</div>
+				<div class="form-group">
+					<select id="history-status-filter" class="form-control" onchange="loadHistory()">
+						<option value="">全部状态</option>
+						<option value="success">成功</option>
+						<option value="failed">失败</option>
+						<option value="timeout">超时</option>
+						<option value="skipped">跳过</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<input type="number" id="history-limit" value="50" class="form-control" placeholder="Limit" onchange="loadHistory()">
+				</div>
+			</div>
+			<table>
+				<thead>
+					<tr>
+						<th>任务名</th>
+						<th>类型</th>
+						<th>开始时间</th>
+						<th>耗时</th>
+						<th>状态</th>
+						<th>结果</th>
+						<th>错误</th>
+					</tr>
+				</thead>
+				<tbody id="history-list"></tbody>
+			</table>
+		</div>
+
+		<!-- 任务类型说明 -->
+		<div class="tab-content" id="tab-help">
+			<table>
+				<thead>
+					<tr><th>任务类型</th><th>说明</th><th>参数示例</th></tr>
+				</thead>
+				<tbody>
+					<tr><td>UQL 查询</td><td>执行统一查询语言搜索</td><td><code>{"query": "port=\"80\"", "engines": ["fofa","hunter"], "page_size": 100}</code></td></tr>
+					<tr><td>搜索引擎截图</td><td>打开搜索引擎结果页截图</td><td><code>{"engine": "fofa", "query": "port=80"}</code></td></tr>
+					<tr><td>批量截图</td><td>批量对URL列表截图</td><td><code>{"urls": ["https://a.com","https://b.com"], "concurrency": 5}</code></td></tr>
+					<tr><td>篡改检测</td><td>对指定URL做篡改对比</td><td><code>{"urls": ["https://example.com"], "detection_mode": "relaxed", "concurrency": 5}</code></td></tr>
+					<tr><td>URL 可达性检测</td><td>检测URL是否可访问</td><td><code>{"urls": ["https://example.com"], "concurrency": 5}</code></td></tr>
+					<tr><td>Cookie 验证</td><td>验证各引擎Cookie是否有效</td><td><code>{"engines": ["fofa","hunter","quake","zoomeye"]}</code></td></tr>
+					<tr><td>登录状态检测</td><td>检测是否已登录</td><td><code>{"engines": ["fofa","hunter"], "test_query": "test"}</code></td></tr>
+					<tr><td>分布式任务提交</td><td>向分布式队列提交任务</td><td><code>{"task_type": "screenshot", "task_payload": {"url": "x"}, "priority": 0}</code></td></tr>
+				</tbody>
+			</table>
+		</div>
+	</div>
+
+	<div class="toast" id="toast"></div>
+
+	<script>
+	// Admin token management
+	function getAdminToken() {
+		return sessionStorage.getItem('admin_token') || '';
+	}
+	function authHeaders() {
+		const t = getAdminToken();
+		return t ? {'X-Admin-Token': t} : {};
+	}
+	function authQuery() {
+		const t = getAdminToken();
+		return t ? '&admin_token=' + encodeURIComponent(t) : '';
+	}
+
+	// Tab switching
+	document.querySelectorAll('.tab-btn').forEach(btn => {
+		btn.addEventListener('click', () => {
+			document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+			document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+			btn.classList.add('active');
+			document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+		});
+	});
+
+	function showToast(msg, type) {
+		const t = document.getElementById('toast');
+		t.textContent = msg;
+		t.className = 'toast ' + type;
+		t.style.display = 'block';
+		setTimeout(() => t.style.display = 'none', 3000);
+	}
+
+	async function loadTasks() {
+		try {
+			const res = await fetch('/api/scheduler/tasks' + authQuery());
+			const tasks = await res.json();
+			const tbody = document.getElementById('task-list');
+			tbody.innerHTML = '';
+
+			let total = 0, enabled = 0, disabled = 0, errors = 0;
+
+			tasks.forEach(t => {
+				total++;
+				if (t.enabled) enabled++; else disabled++;
+
+				const tr = document.createElement('tr');
+				const nextRun = t.next_run_at ? new Date(t.next_run_at).toLocaleString() : '-';
+				const lastRun = t.last_run_at ? new Date(t.last_run_at).toLocaleString() : '-';
+				const payloadStr = t.payload ? JSON.stringify(t.payload).substring(0, 60) : '';
+
+				tr.innerHTML = `
+					<td>${escHtml(t.name)}</td>
+					<td>${escHtml(t.type)}</td>
+					<td><code>${escHtml(t.cron_expr)}</code></td>
+					<td><span class="status-badge ${t.enabled ? 'status-enabled' : 'status-disabled'}">${t.enabled ? '启用' : '禁用'}</span></td>
+					<td>${escHtml(lastRun)}</td>
+					<td>${escHtml(nextRun)}</td>
+					<td><span class="payload-preview" title="${escHtml(JSON.stringify(t.payload || {}))}">${escHtml(payloadStr)}</span></td>
+					<td>
+						<button class="btn-sm btn-primary" onclick="runTask('${t.id}')" title="立即执行">▶</button>
+						${t.enabled
+							? `<button class="btn-sm" onclick="toggleTask('${t.id}', false)" title="禁用">⏸</button>`
+							: `<button class="btn-sm" onclick="toggleTask('${t.id}', true)" title="启用">▶️</button>`
+						}
+						<button class="btn-sm btn-danger" onclick="deleteTask('${t.id}')" title="删除">✕</button>
+					</td>
+				`;
+				tbody.appendChild(tr);
+			});
+
+			document.getElementById('total-count').textContent = total;
+			document.getElementById('enabled-count').textContent = enabled;
+			document.getElementById('disabled-count').textContent = disabled;
+			document.getElementById('error-count').textContent = errors;
+		} catch(e) {
+			showToast('加载任务失败: ' + e.message, 'error');
+		}
+	}
+
+	async function loadHistory() {
+		const taskType = document.getElementById('history-type-filter').value;
+		const status = document.getElementById('history-status-filter').value;
+		const limit = document.getElementById('history-limit').value;
+
+		const params = new URLSearchParams();
+		if (taskType) params.set('task_type', taskType);
+		if (status) params.set('status', status);
+		if (limit) params.set('limit', limit);
+
+		try {
+			const res = await fetch('/api/scheduler/history?' + params.toString() + authQuery());
+			const records = await res.json();
+			const tbody = document.getElementById('history-list');
+			tbody.innerHTML = '';
+
+			records.forEach(r => {
+				const tr = document.createElement('tr');
+				const duration = r.duration_ms ? (r.duration_ms / 1000).toFixed(1) + 's' : '-';
+				const statusClass = 'status-' + r.status;
+				const statusLabel = {success:'成功', failed:'失败', timeout:'超时', skipped:'跳过'}[r.status] || r.status;
+
+				tr.innerHTML = `
+					<td>${escHtml(r.task_name)}</td>
+					<td>${escHtml(r.task_type)}</td>
+					<td>${escHtml(r.started_at)}</td>
+					<td>${duration}</td>
+					<td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+					<td>${escHtml(r.result || '-')}</td>
+					<td style="color:#c00">${escHtml(r.error || '')}</td>
+				`;
+				tbody.appendChild(tr);
+			});
+		} catch(e) {
+			showToast('加载历史失败: ' + e.message, 'error');
+		}
+	}
+
+	async function createTask() {
+		const name = document.getElementById('task-name').value.trim();
+		const taskType = document.getElementById('task-type').value;
+		const cronExpr = document.getElementById('task-cron').value.trim();
+		const timeout = parseInt(document.getElementById('task-timeout').value) || 300;
+		const retries = parseInt(document.getElementById('task-retries').value) || 0;
+		const enabled = document.getElementById('task-enabled').checked;
+		let payload = {};
+		try {
+			const raw = document.getElementById('task-payload').value.trim();
+			if (raw) payload = JSON.parse(raw);
+		} catch(e) {
+			showToast('参数JSON格式错误: ' + e.message, 'error');
+			return;
+		}
+
+		if (!name) { showToast('请输入任务名称', 'error'); return; }
+		if (!cronExpr) { showToast('请输入Cron表达式', 'error'); return; }
+
+		const res = await fetch('/api/scheduler/tasks/create', {
+			method: 'POST',
+			headers: Object.assign({'Content-Type': 'application/json'}, authHeaders()),
+			body: JSON.stringify({name, type: taskType, enabled, cron_expr: cronExpr, payload, timeout_seconds: timeout, max_retries: retries})
+		});
+
+		const data = await res.json();
+		if (!res.ok) {
+			showToast('创建失败: ' + (data.error || '未知错误'), 'error');
+			return;
+		}
+
+		showToast('任务创建成功', 'success');
+		document.getElementById('task-name').value = '';
+		document.getElementById('task-cron').value = '';
+		document.getElementById('task-payload').value = '';
+		loadTasks();
+	}
+
+	async function deleteTask(id) {
+		if (!confirm('确定删除此任务？')) return;
+		const res = await fetch('/api/scheduler/tasks/delete' + authQuery(), {
+			method: 'POST',
+			headers: Object.assign({'Content-Type': 'application/json'}, authHeaders()),
+			body: JSON.stringify({id})
+		});
+		const data = await res.json();
+		if (!res.ok) {
+			showToast('删除失败: ' + (data.error || '未知错误'), 'error');
+			return;
+		}
+		showToast('任务已删除', 'success');
+		loadTasks();
+	}
+
+	async function runTask(id) {
+		const res = await fetch('/api/scheduler/tasks/run' + authQuery(), {
+			method: 'POST',
+			headers: Object.assign({'Content-Type': 'application/json'}, authHeaders()),
+			body: JSON.stringify({id})
+		});
+		const data = await res.json();
+		if (!res.ok) {
+			showToast('执行失败: ' + (data.error || '未知错误'), 'error');
+			return;
+		}
+		showToast('任务已提交执行', 'success');
+	}
+
+	async function toggleTask(id, enable) {
+		const endpoint = enable ? '/api/scheduler/tasks/enable' : '/api/scheduler/tasks/disable';
+		const res = await fetch(endpoint + authQuery(), {
+			method: 'POST',
+			headers: Object.assign({'Content-Type': 'application/json'}, authHeaders()),
+			body: JSON.stringify({id})
+		});
+		const data = await res.json();
+		if (!res.ok) {
+			showToast('操作失败: ' + (data.error || '未知错误'), 'error');
+			return;
+		}
+		showToast(enable ? '任务已启用' : '任务已禁用', 'success');
+		loadTasks();
+	}
+
+	function escHtml(s) {
+		if (!s) return '';
+		const d = document.createElement('div');
+		d.textContent = s;
+		return d.innerHTML;
+	}
+
+	// Initial load
+	loadTasks();
+	loadHistory();
+
+	// Auto refresh every 30 seconds
+	setInterval(() => { loadTasks(); }, 30000);
+	setInterval(() => { loadHistory(); }, 60000);
+
+	// Intercept 401 responses and prompt for token
+	const origFetch = window.fetch;
+	window.fetch = async function(...args) {
+		const res = await origFetch.apply(this, args);
+		if (res.status === 401) {
+			const token = prompt('Admin token required. Enter your admin token:');
+			if (token) {
+				sessionStorage.setItem('admin_token', token);
+				loadTasks();
+				loadHistory();
+			}
+		}
+		return res;
+	};
+
+	document.getElementById('btn-create-task').addEventListener('click', createTask);
+	</script>
+</body>
+</html>
