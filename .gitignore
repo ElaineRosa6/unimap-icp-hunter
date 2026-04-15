@@ -58,4 +58,13 @@ screenshots/**
 !screenshots/
 !screenshots/.gitkeep
 hash_store/records/**/*.json
-!hash_store/records/.gitkeepdata/
+!hash_store/records/.gitkeep
+
+# Claude memory
+memory/
+
+# Runtime data
+data/
+
+# Backup test files
+internal/backup/backups/*.tar.gz
