@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+unimap-web
+screenshots/
+hash_store/
+
+# Test/coverage
+*.out
+coverage.*
+*.test
+
+# Docs (not needed in container)
+docs/
+docs_archive/
+*.md
+LICENSE
+
+# CI/CD
+.github/
+
+# Memory
+.clau*/
+memory/
