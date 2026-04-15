@@ -214,23 +214,35 @@
 		</div>
 
 		<!-- 任务类型说明 -->
-		<div class="tab-content" id="tab-help">
-			<table>
-				<thead>
-					<tr><th>任务类型</th><th>说明</th><th>参数示例</th></tr>
-				</thead>
-				<tbody>
-					<tr><td>UQL 查询</td><td>执行统一查询语言搜索</td><td><code>{"query": "port=\"80\"", "engines": ["fofa","hunter"], "page_size": 100}</code></td></tr>
-					<tr><td>搜索引擎截图</td><td>打开搜索引擎结果页截图</td><td><code>{"engine": "fofa", "query": "port=80"}</code></td></tr>
-					<tr><td>批量截图</td><td>批量对URL列表截图</td><td><code>{"urls": ["https://a.com","https://b.com"], "concurrency": 5}</code></td></tr>
-					<tr><td>篡改检测</td><td>对指定URL做篡改对比</td><td><code>{"urls": ["https://example.com"], "detection_mode": "relaxed", "concurrency": 5}</code></td></tr>
-					<tr><td>URL 可达性检测</td><td>检测URL是否可访问</td><td><code>{"urls": ["https://example.com"], "concurrency": 5}</code></td></tr>
-					<tr><td>Cookie 验证</td><td>验证各引擎Cookie是否有效</td><td><code>{"engines": ["fofa","hunter","quake","zoomeye"]}</code></td></tr>
-					<tr><td>登录状态检测</td><td>检测是否已登录</td><td><code>{"engines": ["fofa","hunter"], "test_query": "test"}</code></td></tr>
-					<tr><td>分布式任务提交</td><td>向分布式队列提交任务</td><td><code>{"task_type": "screenshot", "task_payload": {"url": "x"}, "priority": 0}</code></td></tr>
-				</tbody>
-			</table>
-		</div>
+			<div class="tab-content" id="tab-help">
+				<table>
+					<thead>
+						<tr><th>任务类型</th><th>说明</th><th>参数示例</th></tr>
+					</thead>
+					<tbody>
+						<tr><td>UQL 查询</td><td>执行统一查询语言搜索</td><td><code>{"query": "port=\"80\"", "engines": ["fofa"], "page_size": 100}</code></td></tr>
+						<tr><td>搜索引擎截图</td><td>打开搜索引擎结果页截图</td><td><code>{"engine": "fofa", "query": "port=80"}</code></td></tr>
+						<tr><td>批量截图</td><td>批量对URL列表截图</td><td><code>{"urls": ["https://a.com"], "concurrency": 5}</code></td></tr>
+						<tr><td>篡改检测</td><td>对指定URL做篡改对比</td><td><code>{"urls": ["https://example.com"], "concurrency": 5}</code></td></tr>
+						<tr><td>URL 可达性检测</td><td>检测URL是否可访问</td><td><code>{"urls": ["https://example.com"], "concurrency": 5}</code></td></tr>
+						<tr><td>Cookie 验证</td><td>验证各引擎Cookie是否有效</td><td><code>{"engines": ["fofa","hunter"]}</code></td></tr>
+						<tr><td>登录状态检测</td><td>检测搜索引擎是否已登录</td><td><code>{"engines": ["fofa"], "test_query": "test"}</code></td></tr>
+						<tr><td>分布式任务提交</td><td>向分布式队列提交任务</td><td><code>{"task_type": "screenshot", "priority": 0}</code></td></tr>
+						<tr><td>数据导出</td><td>执行查询并导出JSON</td><td><code>{"query": "port=80", "engines": ["fofa"], "format": "json"}</code></td></tr>
+						<tr><td>端口扫描</td><td>对URL做端口扫描检测</td><td><code>{"urls": ["https://example.com"], "ports": ["80","443"]}</code></td></tr>
+						<tr><td>截图清理</td><td>清理过期的截图批次</td><td><code>{"max_age_days": 30}</code></td></tr>
+						<tr><td>篡改记录清理</td><td>清理过期的篡改记录</td><td><code>{"max_age_days": 90}</code></td></tr>
+						<tr><td>配额监控</td><td>监控各引擎API配额</td><td><code>{"low_threshold": 10}</code></td></tr>
+						<tr><td>告警汇总</td><td>生成近期告警统计</td><td><code>{"max_age_days": 7}</code></td></tr>
+						<tr><td>基线刷新</td><td>刷新篡改检测基线</td><td><code>{"urls": ["https://example.com"]}</code></td></tr>
+						<tr><td>URL 导入</td><td>从文件导入URL列表</td><td><code>{"file_pattern": "*.txt"}</code></td></tr>
+						<tr><td>插件健康检查</td><td>检查插件健康状态</td><td><code>{}</code></td></tr>
+						<tr><td>Bridge 令牌轮换</td><td>检查Bridge服务状态</td><td><code>{}</code></td></tr>
+						<tr><td>告警静默窗口</td><td>设置告警静默或清理旧记录</td><td><code>{"alert_type": "tamper", "duration_minutes": 60}</code></td></tr>
+						<tr><td>缓存预热</td><td>预热常用URL缓存</td><td><code>{"warmup_urls": ["https://example.com"]}</code></td></tr>
+					</tbody>
+				</table>
+			</div>
 	</div>
 
 	<div class="toast" id="toast"></div>

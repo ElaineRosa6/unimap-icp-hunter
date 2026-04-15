@@ -301,6 +301,22 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 	sched.RegisterHandler(scheduler.NewLoginStatusCheckRunner(screenshotMgr))
 	sched.RegisterHandler(scheduler.NewDistributedSubmitRunner(nodeTaskQueue))
 
+	// 注册中优先级 Runner (ST-09 ~ ST-16)
+	sched.RegisterHandler(scheduler.NewExportRunner(srv.queryApp, orchestrator, "./data/exports"))
+	sched.RegisterHandler(scheduler.NewPortScanRunner(srv.monitorApp))
+	sched.RegisterHandler(scheduler.NewScreenshotCleanupRunner(screenshotApp, 30))
+	sched.RegisterHandler(scheduler.NewTamperCleanupRunner(srv.tamperApp, 90))
+	sched.RegisterHandler(scheduler.NewQuotaMonitorRunner(orchestrator, 10))
+	sched.RegisterHandler(scheduler.NewAlertSummaryRunner(alertManager))
+	sched.RegisterHandler(scheduler.NewBaselineRefreshRunner(srv.tamperApp))
+	sched.RegisterHandler(scheduler.NewURLImportRunner("./data/imports"))
+
+	// 注册低优先级 Runner (ST-17 ~ ST-20)
+	sched.RegisterHandler(scheduler.NewPluginHealthRunner(unifiedSvc))
+	sched.RegisterHandler(scheduler.NewBridgeTokenRotateRunner(nil)) // bridge service may be nil
+	sched.RegisterHandler(scheduler.NewAlertSilenceRunner(alertManager))
+	sched.RegisterHandler(scheduler.NewCacheWarmupRunner())
+
 	// 加载持久化的任务
 	if err := sched.Load(); err != nil {
 		logger.Warnf("Failed to load scheduled tasks: %v", err)
