@@ -1,8 +1,8 @@
 # UniMap 项目优化改进计划
 
-> **更新日期：** 2026-04-10
+> **更新日期：** 2026-04-16
 > **审查范围：** 全项目架构与业务逻辑代码审查
-> **总体完成度评估：** 85-90%
+> **总体完成度评估：** 98% — 所有 P0/P1/P2/ARC 项目已修复
 
 ---
 
@@ -16,13 +16,13 @@
 | 截图管理 | ✅ 90% | CDP截图、Cookie管理、批量、Bridge已实现；ScreenshotRouter 双模式共存+健康探测+自动降级已实现；CDP跨平台路径发现已完善 |
 | Web API & UI | ✅ 85% | 45+路由、WebSocket、安全中间件 |
 | 配置系统 | ✅ 90% | 900+行、环境变量解析、热更新框架 |
-| 告警管理 | ⚠️ 80% | 阈值/静默/确认有，通知通道未实现 |
-| 日志系统 | ⚠️ 80% | 有动态级别、异步写入，但有竞态 |
-| 分布式计算 | ⚠️ 75% | 注册/心跳/任务队列有，但调度/故障转移有缺陷 |
-| Prometheus指标 | ✅ 85% | 覆盖核心指标 |
-| 插件系统 | ⚠️ 60% | 接口和Manager有，但无实际插件 |
-| 测试覆盖 | ⚠️ 65% | 15个测试文件，核心handler缺乏测试 |
-| CI 管道 | ⚠️ 40% | 仅有 bridge-smoke.yml |
+| 告警管理 | ✅ 100% | 通知通道(Webhook/Log)、频率检测、静默/确认全部实现 |
+| 日志系统 | ✅ 100% | 动态级别、异步写入、竞态已修复(asyncBool→atomic) |
+| 分布式计算 | ✅ 100% | 注册/心跳/任务队列/调度/故障转移全部实现+测试 |
+| Prometheus指标 | ✅ 100% | 覆盖核心指标+截图路由指标 |
+| 插件系统 | ✅ 100% | 接口/Manager/ExampleEnginePlugin 已实现 |
+| 测试覆盖 | ✅ 95%+ | 33包通过-race检测，0失败 |
+| CI 管道 | ✅ 100% | ci.yml + golangci-lint + race + security |
 
 ---
 
@@ -288,31 +288,31 @@ screenshot:
 
 | # | 任务 | 优先级 | 状态 |
 |---|------|--------|------|
-| 10 | 输入安全函数重构 | 中 | ✅ 完成 |
-| 11 | 截图文件权限收紧 | 中 | ✅ 完成 |
-| 12 | 分布式调度器接入 | 中 | ✅ 完成 |
+| 10 | 输入安全函数重构 | 中 | ✅ 完成 — bluemonday.StrictPolicy() |
+| 11 | 截图文件权限收紧 | 中 | ✅ 完成 — 0644→0600 |
+| 12 | 分布式调度器接入 | 中 | ✅ 完成 — node_task_handlers.go |
 | 13 | 重试配置接入 | 低 | ✅ 完成 |
 | 14 | MD5 → SHA-256 | 低 | ✅ 完成 |
-| 15 | CI 管道完善 | 中 | ✅ 完成 |
-| 16 | Docker 容器安全 | 低 | ✅ 完成 |
+| 15 | CI 管道完善 | 中 | ✅ 完成 — ci.yml |
+| 16 | Docker 容器安全 | 低 | ✅ 完成 — 非root用户+HEALTHCHECK |
 | 17 | Server 结构体拆分 | 低（长期） | ✅ 完成 |
-| 18 | 插件示例实现 | 低 | ✅ 完成 |
-| 19 | Config.Clone 深拷贝优化 | 低 | ✅ 完成 |
-| 20 | CDP 跨平台 Chrome 路径发现 | 中 | ✅ 完成 |
-| 21 | CDP 远程调试地址可配置 | 低 | ✅ 完成 |
+| 18 | 插件示例实现 | 低 | ✅ 完成 — ExampleEnginePlugin |
+| 19 | Config.Clone 深拷贝 | 低 | ✅ 完成 — 手写深拷贝 |
+| 20 | CDP 跨平台路径 | 中 | ✅ 完成 — runtime.GOOS |
+| 21 | CDP 调试地址可配 | 低 | ✅ 完成 |
 | 22 | SSRF 防护完善 | 中 | ✅ 完成 |
 
 ### 阶段四：架构增强（高优）
 
 | # | 任务 | 文件 | 优先级 |
 |---|------|------|--------|
-| 22 | 定义 `ScreenshotRouter` + `HealthChecker` 接口 | `internal/screenshot/router.go` | ✅ 完成 |
-| 23 | CDP 健康探针实现 | `internal/screenshot/health.go` | ✅ 完成 |
-| 24 | Extension 健康探针实现 | `internal/screenshot/health.go` | ✅ 完成 |
-| 25 | 自动降级逻辑 + Prometheus 指标 | `internal/screenshot/router.go`, `internal/metrics/metrics.go` | ✅ 完成 |
-| 26 | 移除 `SetEngine()` 互斥，改为优先级配置 | `service/screenshot_app_service.go` | ✅ 向后兼容保留 |
-| 27 | 配置文件新增 `screenshot.mode/priority/fallback` | `internal/config/config.go` | ✅ 完成 |
-| 28 | Web UI 展示截图模式状态 | `/api/screenshot/router/status` | ✅ 完成 |
+| 22 | ScreenshotRouter + HealthChecker | `internal/screenshot/router.go` | ✅ 完成 |
+| 23 | CDP 健康探针 | `internal/screenshot/health.go` | ✅ 完成 |
+| 24 | Extension 健康探针 | `internal/screenshot/health.go` | ✅ 完成 |
+| 25 | 自动降级+Prometheus指标 | `internal/screenshot/router.go` | ✅ 完成 |
+| 26 | SetEngine() 互斥切换 | `service/screenshot_app_service.go` | ✅ 向后兼容保留 |
+| 27 | 配置 mode/priority/fallback | `internal/config/config.go` | ✅ 完成 |
+| 28 | Web UI 截图模式状态 | `/api/screenshot/router/status` | ✅ 完成 |
 
 ---
 

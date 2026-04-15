@@ -58,6 +58,23 @@
 		.btn-sm.btn-danger:hover { background: #dc3545; color: #fff; }
 		.btn-sm.btn-primary { color: #007bff; border-color: #007bff; }
 		.btn-sm.btn-primary:hover { background: #007bff; color: #fff; }
+		.btn-sm.btn-warning { color: #ffc107; border-color: #ffc107; }
+		.btn-sm.btn-warning:hover { background: #ffc107; color: #fff; }
+
+		.modal-overlay {
+			position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+			background: rgba(0,0,0,0.5); z-index: 9998; display: none;
+		}
+		.modal-overlay.active { display: block; }
+		.modal {
+			position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+			background: #fff; border-radius: 8px; padding: 24px; width: 90%; max-width: 600px;
+			z-index: 9999; display: none; max-height: 90vh; overflow-y: auto;
+		}
+		.modal.active { display: block; }
+		.modal h3 { margin: 0 0 16px; }
+		.modal .form-row { display: flex; gap: 12px; margin-bottom: 12px; }
+		.modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
 		.toast {
 			position: fixed; top: 20px; right: 20px; padding: 12px 20px;
@@ -247,6 +264,30 @@
 
 	<div class="toast" id="toast"></div>
 
+
+	<div class="modal-overlay" id="edit-modal-overlay" onclick="closeEditModal()"></div>
+	<div class="modal" id="edit-modal">
+		<h3>编辑任务</h3>
+		<input type="hidden" id="edit-task-id">
+		<div class="form-row">
+			<div class="form-group"><label>任务名称</label><input type="text" id="edit-task-name" class="form-control"></div>
+			<div class="form-group"><label>任务类型</label><select id="edit-task-type" class="form-control">{{range .TaskTypes}}<option value="{{.}}">{{index $.TaskTypeLabels .}}</option>{{end}}</select></div>
+		</div>
+		<div class="form-row">
+			<div class="form-group"><label>Cron 表达式</label><input type="text" id="edit-task-cron" class="form-control"></div>
+		</div>
+		<div class="form-row">
+			<div class="form-group"><label>超时（秒）</label><input type="number" id="edit-task-timeout" class="form-control"></div>
+			<div class="form-group"><label>最大重试</label><input type="number" id="edit-task-retries" class="form-control"></div>
+		</div>
+		<div class="form-group"><label>任务参数（JSON）</label><textarea id="edit-task-payload" rows="4" class="form-control"></textarea></div>
+		<div class="form-group"><label><input type="checkbox" id="edit-task-enabled"> 启用</label></div>
+		<div class="modal-actions">
+			<button class="btn-sm" onclick="closeEditModal()">取消</button>
+			<button class="btn-sm btn-primary" id="btn-save-task">保存</button>
+		</div>
+	</div>
+
 	<script>
 	// Admin token management
 	function getAdminToken() {
@@ -306,6 +347,7 @@
 					<td>${escHtml(nextRun)}</td>
 					<td><span class="payload-preview" title="${escHtml(JSON.stringify(t.payload || {}))}">${escHtml(payloadStr)}</span></td>
 					<td>
+						<button class="btn-sm btn-warning" onclick="editTask('${t.id}')" title="编辑">✎</button>
 						<button class="btn-sm btn-primary" onclick="runTask('${t.id}')" title="立即执行">▶</button>
 						${t.enabled
 							? `<button class="btn-sm" onclick="toggleTask('${t.id}', false)" title="禁用">⏸</button>`
@@ -462,6 +504,74 @@
 	// Auto refresh every 30 seconds
 	setInterval(() => { loadTasks(); }, 30000);
 	setInterval(() => { loadHistory(); }, 60000);
+
+
+// --- Edit task modal ---
+async function editTask(id) {
+	try {
+		const res = await fetch('/api/scheduler/tasks/get?id=' + encodeURIComponent(id) + authQuery());
+		if (!res.ok) { showToast('获取任务失败', 'error'); return; }
+		const task = await res.json();
+
+		document.getElementById('edit-task-id').value = task.id;
+		document.getElementById('edit-task-name').value = task.name || '';
+		document.getElementById('edit-task-type').value = task.type || '';
+		document.getElementById('edit-task-cron').value = task.cron_expr || '';
+		document.getElementById('edit-task-timeout').value = task.timeout_seconds || 300;
+		document.getElementById('edit-task-retries').value = task.max_retries || 0;
+		document.getElementById('edit-task-enabled').checked = task.enabled;
+		document.getElementById('edit-task-payload').value = task.payload ? JSON.stringify(task.payload, null, 2) : '';
+
+		document.getElementById('edit-modal').classList.add('active');
+		document.getElementById('edit-modal-overlay').classList.add('active');
+	} catch(e) {
+		showToast('获取任务失败: ' + e.message, 'error');
+	}
+}
+
+function closeEditModal() {
+	document.getElementById('edit-modal').classList.remove('active');
+	document.getElementById('edit-modal-overlay').classList.remove('active');
+}
+
+async function saveTask() {
+	const id = document.getElementById('edit-task-id').value.trim();
+	const name = document.getElementById('edit-task-name').value.trim();
+	const taskType = document.getElementById('edit-task-type').value;
+	const cronExpr = document.getElementById('edit-task-cron').value.trim();
+	const timeout = parseInt(document.getElementById('edit-task-timeout').value) || 300;
+	const retries = parseInt(document.getElementById('edit-task-retries').value) || 0;
+	const enabled = document.getElementById('edit-task-enabled').checked;
+	let payload = {};
+	try {
+		const raw = document.getElementById('edit-task-payload').value.trim();
+		if (raw) payload = JSON.parse(raw);
+	} catch(e) {
+		showToast('参数JSON格式错误: ' + e.message, 'error');
+		return;
+	}
+
+	if (!name) { showToast('请输入任务名称', 'error'); return; }
+	if (!cronExpr) { showToast('请输入Cron表达式', 'error'); return; }
+
+	const res = await fetch('/api/scheduler/tasks/update', {
+		method: 'POST',
+		headers: Object.assign({'Content-Type': 'application/json'}, authHeaders()),
+		body: JSON.stringify({id, name, type: taskType, enabled, cron_expr: cronExpr, payload, timeout_seconds: timeout, max_retries: retries})
+	});
+
+	const data = await res.json();
+	if (!res.ok) {
+		showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+		return;
+	}
+
+	showToast('任务已保存', 'success');
+	closeEditModal();
+	loadTasks();
+}
+
+document.getElementById('btn-save-task').addEventListener('click', saveTask);
 
 	// Intercept 401 responses and prompt for token
 	const origFetch = window.fetch;
