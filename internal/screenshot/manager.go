@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/utils"
 )
 
 // ScreenshotType 截图类型
@@ -330,6 +332,88 @@ func (m *Manager) isCDPMode() bool {
 	return m.remoteDebugURL != ""
 }
 
+// EngineLoginStatus represents the login status of a search engine.
+type EngineLoginStatus struct {
+	Engine    string `json:"engine"`
+	LoggedIn  bool   `json:"logged_in"`
+	Reason    string `json:"reason"`    // "browser_session" / "cookie_configured" / "login_required" / "no_session"
+	Title     string `json:"title"`     // page title if detected
+	LoginURL  string `json:"login_url"` // engine homepage for login redirect
+	Error     string `json:"error,omitempty"`
+}
+
+// CheckEngineLoginStatus checks whether the user is logged in to the given
+// search engine by opening its page and looking for login wall keywords.
+// When CDP is connected, it uses the same browser session.
+// When CDP is NOT connected, it falls back to checking if cookies are configured.
+func (m *Manager) CheckEngineLoginStatus(ctx context.Context, engine, query string) (*EngineLoginStatus, error) {
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	loginURL := m.EngineLoginURL(engine)
+	if loginURL == "" {
+		return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "unsupported_engine", LoginURL: ""}, nil
+	}
+
+	// Build a test search URL
+	searchURL := m.BuildSearchEngineURL(engine, query)
+	if searchURL == "" {
+		searchURL = loginURL
+	}
+
+	if m.isCDPMode() {
+		// CDP connected → open page in the same browser session, check for login wall
+		ctx, cancel := context.WithTimeout(ctx, m.timeout)
+		defer cancel()
+
+		allocCtx, allocCancel, err := m.newAllocator(ctx)
+		if err != nil {
+			return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "no_session", LoginURL: loginURL, Error: err.Error()}, nil
+		}
+		defer allocCancel()
+
+		ctx, taskCancel := chromedp.NewContext(allocCtx)
+		defer taskCancel()
+
+		title := ""
+		html := ""
+		if err := m.loadPageContent(ctx, searchURL, nil, &title, &html); err != nil {
+			return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "load_failed", LoginURL: loginURL, Title: title, Error: err.Error()}, nil
+		}
+
+		text := strings.ToLower(html)
+		if strings.Contains(text, "login") || strings.Contains(text, "sign in") ||
+			strings.Contains(text, "\u767b\u5f55") || strings.Contains(text, "\u8bf7\u767b\u5f55") {
+			return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "login_required", Title: title, LoginURL: loginURL}, nil
+		}
+		if len(html) < 500 {
+			return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "page_too_short", Title: title, LoginURL: loginURL}, nil
+		}
+		return &EngineLoginStatus{Engine: engine, LoggedIn: true, Reason: "browser_session", Title: title, LoginURL: loginURL}, nil
+	}
+
+	// CDP NOT connected → check if cookies are configured
+	cookies := m.GetCookies(engine)
+	if len(cookies) > 0 {
+		return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "cookie_configured", LoginURL: loginURL}, nil
+	}
+	return &EngineLoginStatus{Engine: engine, LoggedIn: false, Reason: "no_session", LoginURL: loginURL}, nil
+}
+
+// EngineLoginURL returns the homepage URL of a search engine for login redirect.
+func (m *Manager) EngineLoginURL(engine string) string {
+	switch strings.ToLower(engine) {
+	case "fofa":
+		return "https://fofa.info/"
+	case "hunter":
+		return "https://hunter.qianxin.com/"
+	case "quake":
+		return "https://quake.360.cn/"
+	case "zoomeye":
+		return "https://www.zoomeye.org/"
+	default:
+		return ""
+	}
+}
+
 // loadPageContent is a CDP-only helper used by cookie/session validation.
 func (m *Manager) loadPageContent(ctx context.Context, targetURL string, cookies []Cookie, title *string, html *string) error {
 	allocCtx, allocCancel, err := m.newAllocator(ctx)
@@ -434,42 +518,48 @@ func (m *Manager) buildExecAllocatorOptions(proxyOverride string) []chromedp.Exe
 
 // findChromePath 自动查找Chrome路径
 func findChromePath() string {
-	// Windows 常见路径
-	windowsPaths := []string{
-		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-		`C:\Users\` + os.Getenv("USERNAME") + `\AppData\Local\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
-		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
-	}
+	var candidates []string
 
-	// Linux 常见路径
-	linuxPaths := []string{
-		"/usr/bin/google-chrome",
-		"/usr/bin/google-chrome-stable",
-		"/usr/bin/chromium",
-		"/usr/bin/chromium-browser",
-		"/snap/bin/chromium",
-	}
-
-	// macOS 常见路径
-	macPaths := []string{
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"/Applications/Chromium.app/Contents/MacOS/Chromium",
-	}
-
-	var paths []string
-	if os.PathSeparator == '\\' {
-		paths = windowsPaths
-	} else if os.PathSeparator == '/' {
-		if _, err := os.Stat("/Applications"); err == nil {
-			paths = macPaths
-		} else {
-			paths = linuxPaths
+	switch runtime.GOOS {
+	case "windows":
+		candidates = []string{
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+		}
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+			candidates = append(candidates,
+				filepath.Join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+				filepath.Join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
+			)
+		}
+	case "darwin":
+		candidates = []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		}
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			candidates = append(candidates,
+				filepath.Join(homeDir, "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+			)
+		}
+	case "linux":
+		candidates = []string{
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/google-chrome-beta",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+			"/snap/bin/chromium",
+			"/usr/bin/microsoft-edge",
+			"/usr/bin/microsoft-edge-stable",
+			"/opt/google/chrome/chrome",
 		}
 	}
 
-	for _, path := range paths {
+	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
 			logger.Infof("Found Chrome at: %s", path)
 			return path
@@ -528,9 +618,7 @@ func (m *Manager) NewAllocatorWithProxy(ctx context.Context, proxy string) (cont
 
 // isRemoteDebuggerAvailable 检查远程调试端口是否可用
 func isRemoteDebuggerAvailable(remoteURL string) bool {
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-	}
+	client := utils.FastHTTPClient()
 	resp, err := client.Get(remoteURL + "/json/version")
 	if err != nil {
 		return false
@@ -571,7 +659,7 @@ func (m *Manager) CaptureSearchEngineResultWithProxy(ctx context.Context, engine
 	}
 
 	// 保存文件
-	if err := os.WriteFile(filepath, buf, 0644); err != nil {
+	if err := os.WriteFile(filepath, buf, 0600); err != nil {
 		return "", fmt.Errorf("failed to save screenshot: %w", err)
 	}
 
@@ -625,7 +713,7 @@ func (m *Manager) CaptureTargetWebsiteWithProxy(ctx context.Context, targetURL, 
 	}
 
 	// 保存文件
-	if err := os.WriteFile(filepath, buf, 0644); err != nil {
+	if err := os.WriteFile(filepath, buf, 0600); err != nil {
 		return "", fmt.Errorf("failed to save screenshot: %w", err)
 	}
 
@@ -768,7 +856,7 @@ func (m *Manager) CaptureBatchURLsWithTamper(ctx context.Context, urls []string,
 				logger.CtxWarnf(ctx, "Failed to capture screenshot for %s: %v", url, err)
 			} else {
 				// 保存文件
-				if err := os.WriteFile(filepath, buf, 0644); err != nil {
+				if err := os.WriteFile(filepath, buf, 0600); err != nil {
 					result.Success = false
 					result.Error = fmt.Sprintf("failed to save file: %v", err)
 				} else {
@@ -842,6 +930,11 @@ func (m *Manager) SetChromePath(path string) {
 // SetRemoteDebugURL 设置远程调试地址
 func (m *Manager) SetRemoteDebugURL(remoteURL string) {
 	m.remoteDebugURL = strings.TrimSpace(remoteURL)
+}
+
+// RemoteDebugURL returns the current remote debug URL.
+func (m *Manager) RemoteDebugURL() string {
+	return m.remoteDebugURL
 }
 
 // SetProxyServer 设置浏览器代理地址

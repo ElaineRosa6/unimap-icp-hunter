@@ -24,10 +24,12 @@ func newBridgeTestServer(signatureRequired bool) *Server {
 	cfg.Screenshot.Extension.CallbackNonceTTLSeconds = 600
 
 	return &Server{
-		config:               cfg,
-		bridgeMock:           newBridgeMockClient(),
-		bridgeTokens:         map[string]int64{"tok-test": time.Now().Add(5 * time.Minute).Unix()},
-		bridgeCallbackNonces: make(map[string]int64),
+		config: cfg,
+		bridge: &BridgeState{
+			Mock:           newBridgeMockClient(),
+			Tokens:         map[string]int64{"tok-test": time.Now().Add(5 * time.Minute).Unix()},
+			CallbackNonces: make(map[string]int64),
+		},
 	}
 }
 

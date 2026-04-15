@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/unimap-icp-hunter/project/internal/proxypool"
-	"github.com/unimap-icp-hunter/project/internal/util/workerpool"
+	"github.com/unimap-icp-hunter/project/internal/utils/workerpool"
 )
 
 // URLReachabilityResult 单个 URL 可达性结果。
@@ -84,7 +84,7 @@ func (t *reachabilityTask) Execute() error {
 		return nil
 	}
 
-	probeCtx, cancel := context.WithTimeout(t.ctx, 10*time.Second)
+	probeCtx, cancel := context.WithTimeout(t.ctx, 20*time.Second)
 	defer cancel()
 
 	reachable, statusCode, reasonType, reason, selectedProxy := probeURLReachabilityForService(probeCtx, normalizedURL, t.proxyPool)
@@ -247,57 +247,55 @@ func probeURLReachabilityForService(ctx context.Context, targetURL string, pool 
 		}
 	}()
 
-	var headErr error
+	methods := []string{http.MethodHead, http.MethodGet}
 
-	headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, targetURL, nil)
-	if err != nil {
-		errType, reason := classifyReachabilityErrorForService(err)
-		return false, 0, errType, reason, selectedProxy
-	}
+	for attempt := 0; attempt < 2; attempt++ {
+		for _, method := range methods {
+			req, err := http.NewRequestWithContext(ctx, method, targetURL, nil)
+			if err != nil {
+				continue
+			}
 
-	headResp, err := client.Do(headReq)
-	if err == nil {
-		defer headResp.Body.Close()
-		if headResp.StatusCode != http.StatusMethodNotAllowed {
-			succeeded = true
-			return true, headResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", headResp.StatusCode), selectedProxy
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+			req.Header.Set("Accept", "*/*")
+			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+			req.Header.Set("Connection", "keep-alive")
+
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+					succeeded = true
+					return true, resp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", resp.StatusCode), selectedProxy
+				}
+				if resp.StatusCode != http.StatusMethodNotAllowed {
+					succeeded = true
+					return true, resp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", resp.StatusCode), selectedProxy
+				}
+			}
 		}
-	} else {
-		headErr = err
-	}
 
-	getReq, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if reqErr != nil {
-		if headErr != nil {
-			errType, reason := classifyReachabilityErrorForService(headErr)
-			return false, 0, errType, reason, selectedProxy
+		if attempt < 1 {
+			select {
+			case <-ctx.Done():
+				return false, 0, "timeout", ctx.Err().Error(), selectedProxy
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
-		errType, reason := classifyReachabilityErrorForService(reqErr)
-		return false, 0, errType, reason, selectedProxy
 	}
 
-	getResp, getErr := client.Do(getReq)
-	if getErr != nil {
-		if headErr != nil {
-			errType, reason := classifyReachabilityErrorForService(headErr)
-			return false, 0, errType, reason, selectedProxy
-		}
-		errType, reason := classifyReachabilityErrorForService(getErr)
-		return false, 0, errType, reason, selectedProxy
-	}
-	defer getResp.Body.Close()
-
-	succeeded = true
-	return true, getResp.StatusCode, "http_status", fmt.Sprintf("HTTP %d", getResp.StatusCode), selectedProxy
+	return false, 0, "network", "failed to connect after multiple attempts", selectedProxy
 }
 
 func buildReachabilityHTTPClient(proxyAddr string) (*http.Client, error) {
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 6 * time.Second,
+		DialContext:           (&net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   8 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
 	}
 
 	if strings.TrimSpace(proxyAddr) != "" {
@@ -308,5 +306,5 @@ func buildReachabilityHTTPClient(proxyAddr string) (*http.Client, error) {
 		transport.Proxy = http.ProxyURL(parsedProxy)
 	}
 
-	return &http.Client{Timeout: 8 * time.Second, Transport: transport}, nil
+	return &http.Client{Timeout: 15 * time.Second, Transport: transport}, nil
 }

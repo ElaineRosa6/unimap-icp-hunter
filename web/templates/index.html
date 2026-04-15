@@ -44,36 +44,74 @@
 
 				<div class="form-group">
 					<label>Cookie (用于搜索引擎网页截图，可选)</label>
-					<div class="query-options">
-						<label class="option-label" for="cookie-fofa">FOFA</label>
-						<span class="cookie-status {{if .cookieHasFofa}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-fofa">{{if .cookieHasFofa}}已配置{{else}}未配置{{end}}</span>
-						<input type="text" id="cookie-fofa" name="cookie_fofa" placeholder="session=xxx; token=yyy" value="{{.cookieFofa}}">
-						<label class="option-label" for="cookie-hunter">Hunter</label>
-						<span class="cookie-status {{if .cookieHasHunter}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-hunter">{{if .cookieHasHunter}}已配置{{else}}未配置{{end}}</span>
-						<input type="text" id="cookie-hunter" name="cookie_hunter" placeholder="session=xxx; token=yyy" value="{{.cookieHunter}}">
-						<label class="option-label" for="cookie-zoomeye">ZoomEye</label>
-						<span class="cookie-status {{if .cookieHasZoomeye}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-zoomeye">{{if .cookieHasZoomeye}}已配置{{else}}未配置{{end}}</span>
-						<input type="text" id="cookie-zoomeye" name="cookie_zoomeye" placeholder="session=xxx; token=yyy" value="{{.cookieZoomeye}}">
-						<label class="option-label" for="cookie-quake">Quake</label>
-						<span class="cookie-status {{if .cookieHasQuake}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-quake">{{if .cookieHasQuake}}已配置{{else}}未配置{{end}}</span>
-						<input type="text" id="cookie-quake" name="cookie_quake" placeholder="session=xxx; token=yyy" value="{{.cookieQuake}}">
+					<!-- 登录状态总览 -->
+					<div class="login-status-bar" id="login-status-bar">
+						<span class="status-indicator" id="status-cdp">CDP: 检测中</span>
+						<span class="status-indicator" id="status-ext">扩展: 检测中</span>
 					</div>
-					<small class="form-text">格式示例：name=value; name2=value2</small>
+					<!-- 各引擎登录状态 -->
+					<div class="engine-login-status" id="engine-login-status">
+						<div class="engine-status-row" data-engine="fofa">
+							<span class="engine-label">FOFA</span>
+							<span class="engine-status-text" id="engine-status-fofa">检测中</span>
+							<a class="btn btn-sm btn-login" id="btn-login-fofa" href="https://fofa.info/" target="_blank" style="display:none;">点击登录</a>
+						</div>
+						<div class="engine-status-row" data-engine="hunter">
+							<span class="engine-label">Hunter</span>
+							<span class="engine-status-text" id="engine-status-hunter">检测中</span>
+							<a class="btn btn-sm btn-login" id="btn-login-hunter" href="https://hunter.qianxin.com/" target="_blank" style="display:none;">点击登录</a>
+						</div>
+						<div class="engine-status-row" data-engine="zoomeye">
+							<span class="engine-label">ZoomEye</span>
+							<span class="engine-status-text" id="engine-status-zoomeye">检测中</span>
+							<a class="btn btn-sm btn-login" id="btn-login-zoomeye" href="https://www.zoomeye.org/" target="_blank" style="display:none;">点击登录</a>
+						</div>
+						<div class="engine-status-row" data-engine="quake">
+							<span class="engine-label">Quake</span>
+							<span class="engine-status-text" id="engine-status-quake">检测中</span>
+							<a class="btn btn-sm btn-login" id="btn-login-quake" href="https://quake.360.cn/" target="_blank" style="display:none;">点击登录</a>
+						</div>
+					</div>
+					<!-- 可折叠的 cookie 填写区域 -->
+					<div class="cookie-input-section" id="cookie-input-section">
+						<button type="button" class="btn-toggle-cookie" id="btn-toggle-cookie" title="展开/折叠 Cookie 填写">
+							<span class="toggle-arrow">▶</span> Headless 模式备用 Cookie 填写
+						</button>
+						<div class="cookie-input-content" id="cookie-input-content" style="display:none;">
+							<div class="query-options">
+								<label class="option-label" for="cookie-fofa">FOFA</label>
+								<span class="cookie-status {{if .cookieHasFofa}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-fofa">{{if .cookieHasFofa}}已配置{{else}}未配置{{end}}</span>
+								<input type="text" id="cookie-fofa" name="cookie_fofa" placeholder="session=xxx; token=yyy" value="{{.cookieFofa}}">
+								<label class="option-label" for="cookie-hunter">Hunter</label>
+								<span class="cookie-status {{if .cookieHasHunter}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-hunter">{{if .cookieHasHunter}}已配置{{else}}未配置{{end}}</span>
+								<input type="text" id="cookie-hunter" name="cookie_hunter" placeholder="session=xxx; token=yyy" value="{{.cookieHunter}}">
+								<label class="option-label" for="cookie-zoomeye">ZoomEye</label>
+								<span class="cookie-status {{if .cookieHasZoomeye}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-zoomeye">{{if .cookieHasZoomeye}}已配置{{else}}未配置{{end}}</span>
+								<input type="text" id="cookie-zoomeye" name="cookie_zoomeye" placeholder="session=xxx; token=yyy" value="{{.cookieZoomeye}}">
+								<label class="option-label" for="cookie-quake">Quake</label>
+								<span class="cookie-status {{if .cookieHasQuake}}cookie-status--on{{else}}cookie-status--off{{end}}" id="cookie-status-quake">{{if .cookieHasQuake}}已配置{{else}}未配置{{end}}</span>
+								<input type="text" id="cookie-quake" name="cookie_quake" placeholder="session=xxx; token=yyy" value="{{.cookieQuake}}">
+							</div>
+							<small class="form-text">格式示例：name=value; name2=value2（仅在无头 Chrome 模式需要）</small>
+						</div>
+					</div>
 				</div>
 
-				<div class="form-group">
-					<label for="cookie-json">导入 Cookie JSON（浏览器导出）</label>
-					<div class="cookie-import">
-						<select id="cookie-json-engine">
-							<option value="fofa">FOFA</option>
-							<option value="hunter">Hunter</option>
-							<option value="zoomeye">ZoomEye</option>
-							<option value="quake">Quake</option>
-						</select>
-						<textarea id="cookie-json" rows="3" placeholder='[{"name":"session","value":"xxx","domain":".fofa.info","path":"/","httpOnly":true,"secure":true}]'></textarea>
-						<button type="button" class="btn btn-secondary" id="btn-import-cookie-json">导入 JSON</button>
+				<div class="cookie-input-content" id="cookie-input-content-advanced" style="display:none;">
+					<div class="form-group">
+						<label for="cookie-json">导入 Cookie JSON（浏览器导出）</label>
+						<div class="cookie-import">
+							<select id="cookie-json-engine">
+								<option value="fofa">FOFA</option>
+								<option value="hunter">Hunter</option>
+								<option value="zoomeye">ZoomEye</option>
+								<option value="quake">Quake</option>
+							</select>
+							<textarea id="cookie-json" rows="3" placeholder='[{"name":"session","value":"xxx","domain":".fofa.info","path":"/","httpOnly":true,"secure":true}]'></textarea>
+							<button type="button" class="btn btn-secondary" id="btn-import-cookie-json">导入 JSON</button>
+						</div>
+						<small class="form-text">支持浏览器导出的 JSON 数组</small>
 					</div>
-					<small class="form-text">支持浏览器导出的 JSON 数组</small>
 				</div>
 
 				<div class="form-group">
@@ -113,10 +151,12 @@
 					<button type="submit" class="btn">🔍 执行查询</button>
 					<button type="button" class="btn" id="btn-save-query">💾 保存查询</button>
 					<a href="/monitor" class="btn">🌐 网页监控</a>
+					<a href="/scheduler" class="btn">⏰ 定时任务</a>
 					<a href="/batch-screenshot" class="btn">📷 批量截图</a>
 					<a href="/quota" class="btn">📊 查看配额</a>
 				</div>
 				<div class="form-group cookie-actions">
+					<button type="button" class="btn btn-sm" id="btn-refresh-login-status">🔄 刷新登录状态</button>
 					<button type="button" class="btn btn-sm" id="btn-save-cookies">🍪 保存Cookie</button>
 					<button type="button" class="btn btn-sm" id="btn-verify-cookies">✅ 验证Cookie</button>
 					<button type="button" class="btn btn-sm" id="btn-clear-cookies">🗑️ 清空Cookie</button>

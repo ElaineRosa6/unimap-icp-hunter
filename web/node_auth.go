@@ -15,10 +15,15 @@ func (s *Server) isNodeAuthRequired() bool {
 		// But since no tokens are configured, node endpoints should be disabled
 		return false
 	}
+	// 当节点 token 非空时必须鉴权
 	for _, token := range s.config.Distributed.NodeAuthTokens {
 		if strings.TrimSpace(token) != "" {
 			return true
 		}
+	}
+	// 分布式启用但 token 为空时仍要求鉴权（安全默认值）
+	if s.config.Distributed.Enabled {
+		return true
 	}
 	return false
 }
@@ -63,6 +68,12 @@ func (s *Server) requireDistributedAdminToken(w http.ResponseWriter, r *http.Req
 	}
 	expected := strings.TrimSpace(s.config.Distributed.AdminToken)
 	if expected == "" {
+		// 分布式启用但 admin_token 为空时拒绝访问，避免生产暴露
+		if s.config.Distributed.Enabled {
+			writeAPIError(w, http.StatusServiceUnavailable, "admin_auth_failed", "admin auth failed", "distributed admin token not configured -- set distributed.admin_token in config")
+			return false
+		}
+		// 分布式未启用时保持原有行为（允许通过，由 requireDistributedEnabled 控制）
 		return true
 	}
 
@@ -76,6 +87,33 @@ func (s *Server) requireDistributedAdminToken(w http.ResponseWriter, r *http.Req
 	}
 
 	return true
+}
+
+func (s *Server) hasValidDistributedAdminToken(r *http.Request) bool {
+	if s == nil || s.config == nil {
+		return false
+	}
+	expected := strings.TrimSpace(s.config.Distributed.AdminToken)
+	if expected == "" {
+		return false
+	}
+
+	provided := extractBearerToken(r.Header.Get("Authorization"))
+	if provided == "" {
+		provided = strings.TrimSpace(r.Header.Get("X-Admin-Token"))
+	}
+	if provided == "" {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
+}
+
+func (s *Server) requireNodeOrDistributedAdminToken(w http.ResponseWriter, r *http.Request, nodeID string) bool {
+	if s.hasValidDistributedAdminToken(r) {
+		return true
+	}
+	return s.requireNodeToken(w, r, nodeID)
 }
 
 func extractBearerToken(v string) string {

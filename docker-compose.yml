@@ -4,7 +4,7 @@ services:
   unimap:
     build: .
     ports:
-      - "8080:8080"
+      - "8448:8448"
     volumes:
       - ./configs/config.yaml:/app/configs/config.yaml
       - ./web:/app/web
@@ -14,7 +14,7 @@ services:
       - LOG_LEVEL=info
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/health >/dev/null 2>&1" ]
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8448/health >/dev/null 2>&1" ]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -73,6 +73,25 @@ function initQueryForm() {
 		});
 	}
 
+	// 登录状态刷新按钮
+	const refreshLoginBtn = document.getElementById('btn-refresh-login-status');
+	if (refreshLoginBtn) {
+		refreshLoginBtn.addEventListener('click', function() {
+			refreshLoginStatus();
+		});
+	}
+
+	// Cookie 折叠按钮
+	const toggleCookieBtn = document.getElementById('btn-toggle-cookie');
+	if (toggleCookieBtn) {
+		toggleCookieBtn.addEventListener('click', function() {
+			toggleCookieSection();
+		});
+	}
+
+	// 初始化登录状态轮询
+	initLoginStatusPoll();
+
 	initCookieStatus();
 	initCDPControls();
 	initBridgeStatusControls();
@@ -622,6 +641,135 @@ let wsConnection = null;
 let wsConnected = false;
 let currentQueryID = null;
 let cdpOnline = false;
+
+// ============================================================
+// 登录状态检测
+// ============================================================
+
+let loginStatusPollInterval = null;
+
+function refreshLoginStatus() {
+	const query = document.getElementById('query');
+	const queryVal = query && query.value.trim() ? query.value.trim() : 'protocol="http"';
+
+	fetch('/api/cookies/login-status?query=' + encodeURIComponent(queryVal))
+		.then(resp => resp.json())
+		.then(data => {
+			if (!data || !data.success) return;
+			updateCDPStatus(data.cdp_connected);
+			updateExtStatus(data.ext_paired);
+			if (data.engines && Array.isArray(data.engines)) {
+				updateEngineLoginStatus(data.engines);
+			}
+		})
+		.catch(err => {
+			console.error('Failed to fetch login status:', err);
+		});
+}
+
+function updateCDPStatus(connected) {
+	const el = document.getElementById('status-cdp');
+	if (!el) return;
+	if (connected) {
+		el.textContent = 'CDP: 已连接';
+		el.className = 'status-indicator connected';
+	} else {
+		el.textContent = 'CDP: 未连接';
+		el.className = 'status-indicator disconnected';
+	}
+}
+
+function updateExtStatus(paired) {
+	const el = document.getElementById('status-ext');
+	if (!el) return;
+	if (paired) {
+		el.textContent = '扩展: 已配对';
+		el.className = 'status-indicator connected';
+	} else {
+		el.textContent = '扩展: 未配对';
+		el.className = 'status-indicator disconnected';
+	}
+}
+
+function updateEngineLoginStatus(engines) {
+	let anyNotLoggedIn = false;
+
+	engines.forEach(function(engine) {
+		var statusEl = document.getElementById('engine-status-' + engine.engine);
+		var loginBtn = document.getElementById('btn-login-' + engine.engine);
+		if (!statusEl) return;
+
+		if (engine.logged_in) {
+			statusEl.textContent = '\u2713 已登录';
+			statusEl.className = 'engine-status-text logged-in';
+			if (loginBtn) loginBtn.style.display = 'none';
+		} else {
+			anyNotLoggedIn = true;
+			switch (engine.reason) {
+				case 'cookie_configured':
+					statusEl.textContent = 'Cookie 已配置（headless 模式）';
+					statusEl.className = 'engine-status-text logged-in';
+					break;
+				case 'login_required':
+					statusEl.textContent = '需要登录';
+					statusEl.className = 'engine-status-text not-logged-in';
+					if (loginBtn) {
+						loginBtn.href = engine.login_url || '#';
+						loginBtn.style.display = 'inline-block';
+					}
+					break;
+				case 'no_session':
+					statusEl.textContent = '无浏览器会话';
+					statusEl.className = 'engine-status-text no-session';
+					if (loginBtn) {
+						loginBtn.href = engine.login_url || '#';
+						loginBtn.style.display = 'inline-block';
+					}
+					break;
+				case 'page_too_short':
+					statusEl.textContent = '页面加载异常';
+					statusEl.className = 'engine-status-text not-logged-in';
+					if (loginBtn) {
+						loginBtn.href = engine.login_url || '#';
+						loginBtn.style.display = 'inline-block';
+					}
+					break;
+				default:
+					statusEl.textContent = engine.error || '状态未知';
+					statusEl.className = 'engine-status-text no-session';
+			}
+		}
+	});
+
+	// 自动折叠/展开逻辑
+	var content = document.getElementById('cookie-input-content');
+	var arrow = document.querySelector('.toggle-arrow');
+	if (!anyNotLoggedIn && content && arrow) {
+		content.style.display = 'none';
+		arrow.classList.remove('expanded');
+	} else if (anyNotLoggedIn && content && arrow) {
+		content.style.display = 'block';
+		arrow.classList.add('expanded');
+	}
+}
+
+function toggleCookieSection() {
+	var content = document.getElementById('cookie-input-content');
+	var arrow = document.querySelector('.toggle-arrow');
+	if (!content || !arrow) return;
+	var isVisible = content.style.display === 'block';
+	content.style.display = isVisible ? 'none' : 'block';
+	arrow.classList.toggle('expanded', !isVisible);
+}
+
+// 初始化登录状态轮询
+function initLoginStatusPoll() {
+	// 不立即刷新，等待 15s 后首次执行，避免页面打开时自动执行查询检查
+	if (loginStatusPollInterval) {
+		clearInterval(loginStatusPollInterval);
+	}
+	loginStatusPollInterval = setInterval(refreshLoginStatus, 15000);
+}
 
 // 初始化WebSocket连接
 function initWebSocket() {

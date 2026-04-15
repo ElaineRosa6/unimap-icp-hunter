@@ -135,7 +135,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		zoomeyeCookies = s.config.Engines.Zoomeye.Cookies
 		proxyServer = strings.TrimSpace(s.config.Screenshot.ProxyServer)
 	}
-	s.templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
+	if !s.renderTemplate(w, http.StatusInternalServerError, "index.html", map[string]interface{}{
 		"engines":          engines,
 		"staticVersion":    s.staticVersion,
 		"proxyServer":      proxyServer,
@@ -147,7 +147,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"cookieHasHunter":  hasCookies(hunterCookies),
 		"cookieHasQuake":   hasCookies(quakeCookies),
 		"cookieHasZoomeye": hasCookies(zoomeyeCookies),
-	})
+	}) {
+		return
+	}
 }
 
 // handleQuery 处理查询请求
@@ -159,9 +161,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	query := strings.TrimSpace(r.FormValue("query"))
 	if err := validateQueryInput(query); err != nil {
-		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
+		if !s.renderTemplate(w, http.StatusInternalServerError, "error.html", map[string]interface{}{
 			"error": err.Error(),
-		})
+		}) {
+			return
+		}
 		return
 	}
 
@@ -179,9 +183,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(engines) == 0 {
-		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
+		if !s.renderTemplate(w, http.StatusInternalServerError, "error.html", map[string]interface{}{
 			"error": "No engines configured/registered. Please set API keys in configs/config.yaml and enable at least one engine.",
-		})
+		}) {
+			return
+		}
 		return
 	}
 
@@ -195,16 +201,18 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.service.Query(r.Context(), req)
 	if err != nil {
-		s.templates.ExecuteTemplate(w, "error.html", map[string]interface{}{
+		if !s.renderTemplate(w, http.StatusInternalServerError, "error.html", map[string]interface{}{
 			"error":   fmt.Sprintf("Query failed: %v", err),
 			"query":   query,
 			"engines": engines,
-		})
+		}) {
+			return
+		}
 		return
 	}
 
 	// 渲染结果页面
-	s.templates.ExecuteTemplate(w, "results.html", map[string]interface{}{
+	if !s.renderTemplate(w, http.StatusInternalServerError, "results.html", map[string]interface{}{
 		"query":         query,
 		"engines":       engines,
 		"assets":        resp.Assets,
@@ -212,7 +220,9 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		"engineStats":   resp.EngineStats,
 		"errors":        resp.Errors,
 		"staticVersion": s.staticVersion,
-	})
+	}) {
+		return
+	}
 }
 
 // handleResults 处理结果页面请求
@@ -224,12 +234,14 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 渲染结果页面
-	s.templates.ExecuteTemplate(w, "results.html", map[string]interface{}{
+	if !s.renderTemplate(w, http.StatusInternalServerError, "results.html", map[string]interface{}{
 		"query":         query,
 		"engines":       engines,
 		"assets":        []model.UnifiedAsset{},
 		"staticVersion": s.staticVersion,
-	})
+	}) {
+		return
+	}
 }
 
 // handleQuota 处理配额页面请求
@@ -258,12 +270,14 @@ func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.templates.ExecuteTemplate(w, "quota.html", map[string]interface{}{
+	if !s.renderTemplate(w, http.StatusInternalServerError, "quota.html", map[string]interface{}{
 		"engines":       engines,
 		"quotaInfo":     quotaInfo,
 		"errorInfo":     errorInfo,
 		"staticVersion": s.staticVersion,
-	})
+	}) {
+		return
+	}
 }
 
 // handleQueryStatus 处理查询状态请求

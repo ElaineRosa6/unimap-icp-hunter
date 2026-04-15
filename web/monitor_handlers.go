@@ -17,9 +17,11 @@ var reURLPattern = regexp.MustCompile(`^(https?://)?([\w.-]+)(:\d+)?(/.*)?$`)
 
 // handleScreenshot 处理截图请求
 func (s *Server) handleMonitorPage(w http.ResponseWriter, r *http.Request) {
-	s.templates.ExecuteTemplate(w, "monitor.html", map[string]interface{}{
+	if !s.renderTemplate(w, http.StatusInternalServerError, "monitor.html", map[string]interface{}{
 		"staticVersion": s.staticVersion,
-	})
+	}) {
+		return
+	}
 }
 
 // handleImportURLs 处理URL文件导入

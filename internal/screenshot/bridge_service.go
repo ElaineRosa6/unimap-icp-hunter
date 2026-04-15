@@ -176,6 +176,14 @@ func (s *BridgeService) InFlight() int {
 	return int(s.inFlight.Load())
 }
 
+// IsStarted reports whether the BridgeService worker goroutines are running.
+func (s *BridgeService) IsStarted() bool {
+	if s == nil {
+		return false
+	}
+	return s.started.Load()
+}
+
 func (s *BridgeService) executeWithRetry(ctx context.Context, task BridgeTask) (BridgeResult, error) {
 	attempts := s.retry + 1
 	if attempts < 1 {

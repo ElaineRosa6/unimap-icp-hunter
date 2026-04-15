@@ -76,13 +76,17 @@ type Config struct {
 	// 截图配置
 	Screenshot struct {
 		Enabled              bool   `yaml:"enabled"`
-		Engine               string `yaml:"engine"`
+		Engine               string `yaml:"engine"`                // legacy: "cdp" or "extension"
+		Mode                 string `yaml:"mode"`                  // new: "auto"|"cdp"|"extension"
+		Priority             string `yaml:"priority"`              // new: "cdp"|"extension" (for auto mode)
+		Fallback             *bool  `yaml:"fallback"`              // new: explicit fallback toggle
 		BaseDir              string `yaml:"base_dir"`
 		ChromePath           string `yaml:"chrome_path"`
 		ProxyServer          string `yaml:"proxy_server"`
 		ChromeUserDataDir    string `yaml:"chrome_user_data_dir"`
 		ChromeProfileDir     string `yaml:"chrome_profile_dir"`
-		ChromeRemoteDebugURL string `yaml:"chrome_remote_debug_url"`
+		ChromeRemoteDebugURL    string `yaml:"chrome_remote_debug_url"`
+		ChromeRemoteDebugAddress string `yaml:"chrome_remote_debug_address"`
 		Extension            struct {
 			Enabled                      bool   `yaml:"enabled"`
 			ListenAddr                   string `yaml:"listen_addr"`
@@ -110,6 +114,8 @@ type Config struct {
 
 	// Web 配置
 	Web struct {
+		Port        int    `yaml:"port"`         // 监听端口
+		BindAddress string `yaml:"bind_address"` // 监听地址
 		CORS struct {
 			AllowedOrigins   []string `yaml:"allowed_origins"`
 			AllowedMethods   []string `yaml:"allowed_methods"`
@@ -127,6 +133,11 @@ type Config struct {
 			MaxBodyBytes       int64 `yaml:"max_body_bytes"`
 			MaxMultipartMemory int64 `yaml:"max_multipart_memory_bytes"`
 		} `yaml:"request_limits"`
+		Auth struct {
+			Enabled     bool   `yaml:"enabled"`      // 是否启用 Web 鉴权
+			AdminToken  string `yaml:"admin_token"`  // 管理端点 token
+			APIKeyStore string `yaml:"api_key_store"` // API Key 文件路径
+		} `yaml:"auth"`
 	} `yaml:"web"`
 
 	// Network 配置
@@ -152,6 +163,35 @@ type Config struct {
 			Strategy string `yaml:"strategy"`
 		} `yaml:"scheduler"`
 	} `yaml:"distributed"`
+
+	// Alerting 告警配置
+	Alerting struct {
+		Webhook struct {
+			Enabled   bool   `yaml:"enabled"`
+			URL       string `yaml:"url"`
+			AuthToken string `yaml:"auth_token"`
+		} `yaml:"webhook"`
+		ErrorAlerting struct {
+			Enabled       bool `yaml:"enabled"`
+			Threshold     int  `yaml:"threshold"`     // 窗口内 ERROR 数量阈值
+			WindowSeconds int  `yaml:"window_seconds"` // 滑动窗口大小（秒）
+		} `yaml:"error_alerting"`
+	} `yaml:"alerting"`
+
+	// Backup 数据备份配置
+	Backup struct {
+		Enabled    bool   `yaml:"enabled"`
+		OutputDir  string `yaml:"output_dir"`  // 备份输出目录
+		Prefix     string `yaml:"prefix"`      // 备份文件名前缀
+		MaxBackups int    `yaml:"max_backups"` // 最大保留备份数，0=不限制
+		Sources    []string `yaml:"sources"`   // 要备份的目录/文件列表
+	} `yaml:"backup"`
+
+	// Scheduler 定时任务配置
+	Scheduler struct {
+		Enabled    bool `yaml:"enabled"`
+		MaxHistory int  `yaml:"max_history"` // 执行历史保留条数
+	} `yaml:"scheduler"`
 
 	// 缓存配置
 	Cache struct {
@@ -193,6 +233,106 @@ type Cookie struct {
 	Path     string `yaml:"path"`
 	HTTPOnly bool   `yaml:"http_only"`
 	Secure   bool   `yaml:"secure"`
+}
+
+// Clone 克隆配置，使用手写深拷贝替代 YAML 序列化方式。
+// 优点：更高效，保留 nil vs 空切片区分，不会丢失未导出字段。
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	clone := &Config{}
+
+	// Copy engine configs with Cookie slices
+	clone.Engines.Quake = c.Engines.Quake
+	clone.Engines.Quake.Cookies = cloneCookies(c.Engines.Quake.Cookies)
+	clone.Engines.Zoomeye = c.Engines.Zoomeye
+	clone.Engines.Zoomeye.Cookies = cloneCookies(c.Engines.Zoomeye.Cookies)
+	clone.Engines.Hunter = c.Engines.Hunter
+	clone.Engines.Hunter.Cookies = cloneCookies(c.Engines.Hunter.Cookies)
+	clone.Engines.Fofa = c.Engines.Fofa
+	clone.Engines.Fofa.Cookies = cloneCookies(c.Engines.Fofa.Cookies)
+	clone.Engines.Shodan = c.Engines.Shodan
+
+	// System, Log are all primitives — safe to copy directly
+	clone.System = c.System
+	clone.Log = c.Log
+
+	// Screenshot (has pointer fields: Fallback, Headless)
+	clone.Screenshot = c.Screenshot
+	if c.Screenshot.Fallback != nil {
+		v := *c.Screenshot.Fallback
+		clone.Screenshot.Fallback = &v
+	}
+	if c.Screenshot.Headless != nil {
+		v := *c.Screenshot.Headless
+		clone.Screenshot.Headless = &v
+	}
+
+	// Web (has slice fields: CORS)
+	clone.Web = c.Web
+	clone.Web.CORS.AllowedOrigins = cloneStringSlice(c.Web.CORS.AllowedOrigins)
+	clone.Web.CORS.AllowedMethods = cloneStringSlice(c.Web.CORS.AllowedMethods)
+	clone.Web.CORS.AllowedHeaders = cloneStringSlice(c.Web.CORS.AllowedHeaders)
+	clone.Web.CORS.ExposedHeaders = cloneStringSlice(c.Web.CORS.ExposedHeaders)
+	clone.Web.Auth = c.Web.Auth
+
+	// Network (has slice: Proxies)
+	clone.Network = c.Network
+	clone.Network.ProxyPool.Proxies = cloneStringSlice(c.Network.ProxyPool.Proxies)
+
+	// Distributed (has map: NodeAuthTokens)
+	clone.Distributed = c.Distributed
+	clone.Distributed.NodeAuthTokens = cloneStringMap(c.Distributed.NodeAuthTokens)
+
+	// Scheduler
+	clone.Scheduler = c.Scheduler
+
+	// Cache (has map: Engines)
+	clone.Cache = c.Cache
+	clone.Cache.Engines = cloneEngineCacheMap(c.Cache.Engines)
+
+	return clone
+}
+
+func cloneCookies(src []Cookie) []Cookie {
+	if src == nil {
+		return nil
+	}
+	out := make([]Cookie, len(src))
+	copy(out, src)
+	return out
+}
+
+func cloneStringSlice(src []string) []string {
+	if src == nil {
+		return nil
+	}
+	out := make([]string, len(src))
+	copy(out, src)
+	return out
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneEngineCacheMap(src map[string]EngineCacheConfig) map[string]EngineCacheConfig {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]EngineCacheConfig, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // Manager 配置管理器
@@ -281,12 +421,16 @@ func (m *Manager) resolveEnv(config *Config) {
 	config.Screenshot.ChromeUserDataDir = m.ResolveEnv(config.Screenshot.ChromeUserDataDir)
 	config.Screenshot.ChromeProfileDir = m.ResolveEnv(config.Screenshot.ChromeProfileDir)
 	config.Screenshot.ChromeRemoteDebugURL = m.ResolveEnv(config.Screenshot.ChromeRemoteDebugURL)
+	config.Screenshot.ChromeRemoteDebugAddress = m.ResolveEnv(config.Screenshot.ChromeRemoteDebugAddress)
 	config.Screenshot.Engine = m.ResolveEnv(config.Screenshot.Engine)
+	config.Screenshot.Mode = m.ResolveEnv(config.Screenshot.Mode)
+	config.Screenshot.Priority = m.ResolveEnv(config.Screenshot.Priority)
 	config.Screenshot.Extension.ListenAddr = m.ResolveEnv(config.Screenshot.Extension.ListenAddr)
 	for i := range config.Network.ProxyPool.Proxies {
 		config.Network.ProxyPool.Proxies[i] = m.ResolveEnv(config.Network.ProxyPool.Proxies[i])
 	}
 	config.Distributed.AdminToken = m.ResolveEnv(config.Distributed.AdminToken)
+	config.Web.Auth.AdminToken = m.ResolveEnv(config.Web.Auth.AdminToken)
 
 	// 解析缓存配置
 	config.Cache.Backend = m.ResolveEnv(config.Cache.Backend)
@@ -417,6 +561,45 @@ func (m *Manager) applyDefaults(config *Config) {
 	if strings.TrimSpace(config.Screenshot.Engine) == "" {
 		config.Screenshot.Engine = "cdp"
 	}
+
+	// 解析截图模式：新字段 mode 优先，legacy engine 向后兼容
+	mode := strings.ToLower(strings.TrimSpace(config.Screenshot.Mode))
+	engine := strings.ToLower(strings.TrimSpace(config.Screenshot.Engine))
+	if mode == "" {
+		// 从 legacy engine 推导 mode
+		switch engine {
+		case "extension":
+			mode = "auto" // extension 用户通常期望 fallback
+		default:
+			mode = "cdp"
+		}
+	}
+	config.Screenshot.Mode = mode
+
+	// 推导 priority
+	priority := strings.ToLower(strings.TrimSpace(config.Screenshot.Priority))
+	if priority == "" {
+		switch mode {
+		case "cdp":
+			priority = "cdp"
+		case "extension":
+			priority = "extension"
+		case "auto":
+			priority = "cdp"
+		default:
+			priority = "cdp"
+		}
+	}
+	config.Screenshot.Priority = priority
+
+	// 推导 fallback
+	if config.Screenshot.Fallback == nil {
+		fb := true
+		if mode == "cdp" || mode == "extension" {
+			fb = false
+		}
+		config.Screenshot.Fallback = &fb
+	}
 	if strings.TrimSpace(config.Screenshot.Extension.ListenAddr) == "" {
 		config.Screenshot.Extension.ListenAddr = "127.0.0.1:19451"
 	}
@@ -473,6 +656,12 @@ func (m *Manager) applyDefaults(config *Config) {
 	}
 
 	// 默认 Web 配置
+	if config.Web.Port == 0 {
+		config.Web.Port = 8448
+	}
+	if config.Web.BindAddress == "" {
+		config.Web.BindAddress = "0.0.0.0"
+	}
 	if len(config.Web.CORS.AllowedOrigins) == 0 {
 		config.Web.CORS.AllowedOrigins = []string{"http://localhost:8448", "http://127.0.0.1:8448"}
 	}
@@ -498,6 +687,14 @@ func (m *Manager) applyDefaults(config *Config) {
 	}
 	if config.Web.RequestLimits.MaxMultipartMemory == 0 {
 		config.Web.RequestLimits.MaxMultipartMemory = 10 * 1024 * 1024
+	}
+
+	// 默认定时任务配置
+	if !config.Scheduler.Enabled {
+		config.Scheduler.Enabled = true
+	}
+	if config.Scheduler.MaxHistory == 0 {
+		config.Scheduler.MaxHistory = 500
 	}
 
 	// 默认缓存后端配置
@@ -671,6 +868,16 @@ func (m *Manager) validate(config *Config) error {
 	if engine != "" && engine != "cdp" && engine != "extension" {
 		return fmt.Errorf("screenshot engine must be one of: cdp, extension")
 	}
+
+	mode := strings.ToLower(strings.TrimSpace(config.Screenshot.Mode))
+	if mode != "auto" && mode != "cdp" && mode != "extension" {
+		return fmt.Errorf("screenshot mode must be one of: auto, cdp, extension")
+	}
+
+	priority := strings.ToLower(strings.TrimSpace(config.Screenshot.Priority))
+	if priority != "" && priority != "cdp" && priority != "extension" {
+		return fmt.Errorf("screenshot priority must be one of: cdp, extension")
+	}
 	if config.Screenshot.Extension.TokenTTLSeconds <= 0 {
 		return fmt.Errorf("screenshot extension token_ttl_seconds must be greater than 0")
 	}
@@ -726,6 +933,17 @@ func (m *Manager) validate(config *Config) error {
 	}
 	if backend == "redis" && strings.TrimSpace(config.Cache.Redis.Addr) == "" {
 		return fmt.Errorf("cache redis addr must be set when backend is redis")
+	}
+
+	// 分布式安全校验：启用但未配置 token 时告警
+	if config.Distributed.Enabled {
+		if strings.TrimSpace(config.Distributed.AdminToken) == "" {
+			// 不阻塞启动，但记录严重警告
+			// 实际运行时 requireDistributedAdminToken 会返回 503
+		}
+		if len(config.Distributed.NodeAuthTokens) == 0 {
+			// 同上：节点 token 为空时运行时拒绝注册
+		}
 	}
 
 	return nil

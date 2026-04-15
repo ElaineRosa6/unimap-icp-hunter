@@ -17,7 +17,7 @@ func (s *Server) handleNodeTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedAdminToken(w, r) {
 		return
 	}
-	if s.nodeTaskQueue == nil {
+	if s.distributed.NodeTaskQueue == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
 		return
 	}
@@ -27,7 +27,7 @@ func (s *Server) handleNodeTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.nodeTaskQueue.Enqueue(req)
+	rec, err := s.distributed.NodeTaskQueue.Enqueue(req)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_task_enqueue_failed", "node task enqueue failed", err.Error())
 		return
@@ -43,7 +43,7 @@ func (s *Server) handleNodeTaskClaim(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedEnabled(w) {
 		return
 	}
-	if s.nodeTaskQueue == nil {
+	if s.distributed.NodeTaskQueue == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
 		return
 	}
@@ -59,7 +59,31 @@ func (s *Server) handleNodeTaskClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.nodeTaskQueue.Claim(req.NodeID, req.Caps)
+	// 优先使用调度器：从注册表查找节点，使用 ClaimWithNode
+	if s.distributed.NodeRegistry != nil {
+		if node, err := s.distributed.NodeRegistry.Get(req.NodeID); err == nil && node != nil {
+			rec, err := s.distributed.NodeTaskQueue.ClaimWithNode(node)
+			if err != nil {
+				writeAPIError(w, http.StatusBadRequest, "node_task_claim_failed", "node task claim failed", err.Error())
+				return
+			}
+			if rec == nil {
+				writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "task": nil, "message": "no task available"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "task": rec})
+			return
+		}
+	}
+
+	// 回退：节点未注册或无注册表时，构造最小 NodeRecord 使用 ClaimWithNode（调度器感知）
+	node := &distributed.NodeRecord{
+		NodeID:       req.NodeID,
+		Online:       true,
+		HealthStatus: "healthy",
+		Capabilities: req.Caps,
+	}
+	rec, err := s.distributed.NodeTaskQueue.ClaimWithNode(node)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_task_claim_failed", "node task claim failed", err.Error())
 		return
@@ -79,7 +103,7 @@ func (s *Server) handleNodeTaskResult(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedEnabled(w) {
 		return
 	}
-	if s.nodeTaskQueue == nil {
+	if s.distributed.NodeTaskQueue == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
 		return
 	}
@@ -96,7 +120,7 @@ func (s *Server) handleNodeTaskResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.nodeTaskQueue.SubmitResult(req)
+	rec, err := s.distributed.NodeTaskQueue.SubmitResult(req)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_task_result_failed", "node task result failed", err.Error())
 		return
@@ -115,12 +139,12 @@ func (s *Server) handleNodeTaskStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedAdminToken(w, r) {
 		return
 	}
-	if s.nodeTaskQueue == nil {
+	if s.distributed.NodeTaskQueue == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
 		return
 	}
 
-	tasks := s.nodeTaskQueue.Snapshot()
+	tasks := s.distributed.NodeTaskQueue.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"summary": map[string]int{"total": len(tasks)},
@@ -139,7 +163,7 @@ func (s *Server) handleNodeTaskGet(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedAdminToken(w, r) {
 		return
 	}
-	if s.nodeTaskQueue == nil {
+	if s.distributed.NodeTaskQueue == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
 		return
 	}
@@ -150,7 +174,7 @@ func (s *Server) handleNodeTaskGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.nodeTaskQueue.Get(taskID)
+	rec, err := s.distributed.NodeTaskQueue.Get(taskID)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "task_get_failed", "failed to get task", err.Error())
 		return
@@ -177,7 +201,7 @@ func (s *Server) handleNodeTaskDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedAdminToken(w, r) {
 		return
 	}
-	if s.nodeTaskQueue == nil {
+	if s.distributed.NodeTaskQueue == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_task_queue_unavailable", "node task queue not initialized", nil)
 		return
 	}
@@ -188,7 +212,7 @@ func (s *Server) handleNodeTaskDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.nodeTaskQueue.Delete(taskID); err != nil {
+	if err := s.distributed.NodeTaskQueue.Delete(taskID); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "task_delete_failed", "failed to delete task", err.Error())
 		return
 	}

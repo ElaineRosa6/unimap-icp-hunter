@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -121,6 +122,29 @@ func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, absFullPath)
 }
 
+// isPrivateOrInternalIP 检查主机名是否为私有/回环/内部地址
+func isPrivateOrInternalIP(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	// 去除端口
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	// 检查常见主机名
+	lower := strings.ToLower(host)
+	if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "0.0.0.0" {
+		return true
+	}
+	// 解析 IP
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
 // handleScreenshot 处理截图请求
 func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
@@ -150,6 +174,11 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	parsed, err := url.Parse(targetURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		writeAPIError(w, http.StatusBadRequest, "invalid_url", "invalid url", nil)
+		return
+	}
+
+	if isPrivateOrInternalIP(parsed.Hostname()) {
+		writeAPIError(w, http.StatusForbidden, "blocked_url", "url resolves to private/internal address", nil)
 		return
 	}
 
@@ -225,17 +254,25 @@ func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Req
 	}
 
 	startTime := time.Now()
-	proxy := s.selectRequestProxy()
-	screenshotPath, engine, query, queryID, err := s.screenshotApp.CaptureSearchEngineResultWithProxy(r.Context(), s.screenshotMgr, engine, query, queryID, proxy)
+
+	var screenshotPath string
+	var err error
+
+	if s.screenshotRouter != nil {
+		screenshotPath, err = s.screenshotRouter.CaptureSearchEngineResult(r.Context(), engine, query, queryID)
+	} else {
+		proxy := s.selectRequestProxy()
+		screenshotPath, _, _, _, err = s.screenshotApp.CaptureSearchEngineResultWithProxy(r.Context(), s.screenshotMgr, engine, query, queryID, proxy)
+		s.reportRequestProxy(proxy, err == nil)
+	}
+
 	if err != nil {
-		s.reportRequestProxy(proxy, false)
 		logger.Errorf("Failed to capture search engine screenshot: %v", err)
 		metrics.IncScreenshotRequest("search_engine", "error")
 		metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
 		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
 		return
 	}
-	s.reportRequestProxy(proxy, true)
 
 	metrics.IncScreenshotRequest("search_engine", "success")
 	metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
@@ -275,20 +312,50 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if req.URL != "" {
+		if parsed, err := url.Parse(req.URL); err == nil && isPrivateOrInternalIP(parsed.Hostname()) {
+			writeAPIError(w, http.StatusForbidden, "blocked_url", "url resolves to private/internal address", nil)
+			return
+		}
+	}
+	// SSRF: also validate IP when provided without URL
+	if req.URL == "" && req.IP != "" {
+		if isPrivateOrInternalIP(req.IP) {
+			writeAPIError(w, http.StatusForbidden, "blocked_url", "ip resolves to private/internal address", nil)
+			return
+		}
+	}
+
 	startTime := time.Now()
-	proxy := s.selectRequestProxy()
-	screenshotPath, targetURL, ip, port, protocol, queryID, err := s.screenshotApp.CaptureTargetWebsiteWithProxy(
-		r.Context(),
-		s.screenshotMgr,
-		req.URL,
-		req.IP,
-		req.Port,
-		req.Protocol,
-		req.QueryID,
-		proxy,
-	)
+
+	var screenshotPath, targetURL, ip, port, protocol, queryID string
+	var err error
+
+	if s.screenshotRouter != nil {
+		screenshotPath, err = s.screenshotRouter.CaptureTargetWebsite(r.Context(), req.URL, req.IP, req.Port, req.Protocol, req.QueryID)
+		targetURL = req.URL
+		ip = req.IP
+		port = req.Port
+		protocol = req.Protocol
+		queryID = req.QueryID
+		if queryID == "" {
+			queryID = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+	} else {
+		proxy := s.selectRequestProxy()
+		screenshotPath, targetURL, ip, port, protocol, queryID, err = s.screenshotApp.CaptureTargetWebsiteWithProxy(
+			r.Context(),
+			s.screenshotMgr,
+			req.URL,
+			req.IP,
+			req.Port,
+			req.Protocol,
+			req.QueryID,
+			proxy,
+		)
+		s.reportRequestProxy(proxy, err == nil)
+	}
 	if err != nil {
-		s.reportRequestProxy(proxy, false)
 		logger.Errorf("Failed to capture target screenshot: %v", err)
 		metrics.IncScreenshotRequest("target", "error")
 		metrics.ObserveScreenshotDuration("target", time.Since(startTime))
@@ -299,7 +366,6 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
 		return
 	}
-	s.reportRequestProxy(proxy, true)
 
 	metrics.IncScreenshotRequest("target", "success")
 	metrics.ObserveScreenshotDuration("target", time.Since(startTime))
@@ -346,6 +412,21 @@ func (s *Server) handleBatchScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	if !decodeJSONBody(w, r, &req) {
 		return
+	}
+
+	// SSRF: validate target URLs
+	for _, t := range req.Targets {
+		if t.URL != "" {
+			if parsed, err := url.Parse(t.URL); err == nil && isPrivateOrInternalIP(parsed.Hostname()) {
+				writeAPIError(w, http.StatusForbidden, "blocked_url", "target url resolves to private/internal address", nil)
+				return
+			}
+		} else if t.IP != "" {
+			if isPrivateOrInternalIP(t.IP) {
+				writeAPIError(w, http.StatusForbidden, "blocked_url", "target ip resolves to private/internal address", nil)
+				return
+			}
+		}
 	}
 
 	appReq := service.BatchScreenshotRequest{QueryID: req.QueryID}
@@ -405,25 +486,77 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	for _, u := range req.URLs {
+		parsed, err := url.Parse(u)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_url", "invalid url", nil)
+			return
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_url_scheme", "only http/https schemes allowed", nil)
+			return
+		}
+		if isPrivateOrInternalIP(parsed.Hostname()) {
+			writeAPIError(w, http.StatusForbidden, "blocked_url", "url resolves to private/internal address", nil)
+			return
+		}
+	}
+
 	metrics.IncBatchOperation("screenshot")
 	metrics.ObserveBatchOperationSize("screenshot", len(req.URLs))
 
-	results, err := s.screenshotApp.CaptureBatchURLs(r.Context(), s.screenshotMgr, service.BatchURLsRequest{
-		URLs:        req.URLs,
-		BatchID:     req.BatchID,
-		Concurrency: req.Concurrency,
-	})
-	if err != nil {
-		errText := strings.ToLower(err.Error())
-		switch {
-		case strings.Contains(errText, "no urls"):
-			writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
-		case strings.Contains(errText, "too many"):
-			writeAPIError(w, http.StatusBadRequest, "too_many_urls", "too many URLs", map[string]int{"max": 100})
-		default:
-			writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
+	var results *service.BatchURLsResponse
+	var err error
+
+	if s.screenshotRouter != nil {
+		routerResults, err := s.screenshotRouter.CaptureBatchURLs(r.Context(), req.URLs, req.BatchID, req.Concurrency)
+		if err != nil {
+			errText := strings.ToLower(err.Error())
+			switch {
+			case strings.Contains(errText, "no urls"):
+				writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
+			case strings.Contains(errText, "too many"):
+				writeAPIError(w, http.StatusBadRequest, "too_many_urls", "too many URLs", map[string]int{"max": 100})
+			default:
+				writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
+			}
+			return
 		}
-		return
+		successCount := 0
+		failCount := 0
+		for _, item := range routerResults {
+			if item.Success {
+				successCount++
+			} else {
+				failCount++
+			}
+		}
+		results = &service.BatchURLsResponse{
+			BatchID:       req.BatchID,
+			Total:         len(req.URLs),
+			Success:       successCount,
+			Failed:        failCount,
+			Results:       routerResults,
+			ScreenshotDir: s.screenshotRouter.GetScreenshotDirectory(),
+		}
+	} else {
+		results, err = s.screenshotApp.CaptureBatchURLs(r.Context(), s.screenshotMgr, service.BatchURLsRequest{
+			URLs:        req.URLs,
+			BatchID:     req.BatchID,
+			Concurrency: req.Concurrency,
+		})
+		if err != nil {
+			errText := strings.ToLower(err.Error())
+			switch {
+			case strings.Contains(errText, "no urls"):
+				writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
+			case strings.Contains(errText, "too many"):
+				writeAPIError(w, http.StatusBadRequest, "too_many_urls", "too many URLs", map[string]int{"max": 100})
+			default:
+				writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
+			}
+			return
+		}
 	}
 
 	// 记录批量截图成功/失败统计
@@ -441,9 +574,11 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 
 // handleBatchScreenshotPage 处理批量截图页面
 func (s *Server) handleBatchScreenshotPage(w http.ResponseWriter, r *http.Request) {
-	s.templates.ExecuteTemplate(w, "batch-screenshot.html", map[string]interface{}{
+	if !s.renderTemplate(w, http.StatusInternalServerError, "batch-screenshot.html", map[string]interface{}{
 		"staticVersion": s.staticVersion,
-	})
+	}) {
+		return
+	}
 }
 
 func normalizeScreenshotPathToken(raw string) (string, bool) {
@@ -596,5 +731,36 @@ func (s *Server) handleScreenshotFileDelete(w http.ResponseWriter, r *http.Reque
 		"success": true,
 		"batch":   batch,
 		"file":    fileName,
+	})
+}
+
+// handleScreenshotRouterStatus returns the current screenshot router status.
+func (s *Server) handleScreenshotRouterStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+
+	if s.screenshotRouter == nil {
+		mode := "cdp"
+		if cfg := s.config; cfg != nil {
+			mode = strings.ToLower(strings.TrimSpace(cfg.Screenshot.Engine))
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"router_enabled": false,
+			"mode":           mode,
+		})
+		return
+	}
+
+	cdpHealthy, extHealthy := s.screenshotRouter.HealthStatus()
+	cfg := s.screenshotRouter.Config()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"router_enabled": true,
+		"current_mode":   string(s.screenshotRouter.ActiveMode()),
+		"cdp_healthy":    cdpHealthy,
+		"ext_healthy":    extHealthy,
+		"priority":       string(cfg.Priority),
+		"fallback":       cfg.Fallback,
 	})
 }

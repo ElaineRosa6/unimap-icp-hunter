@@ -36,9 +36,12 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("quota", "GET", "/quota", r.server.handleQuota, false)
 	r.addRoute("batch-screenshot", "GET", "/batch-screenshot", r.server.handleBatchScreenshotPage, false)
 	r.addRoute("monitor", "GET", "/monitor", r.server.handleMonitorPage, false)
+	r.addRoute("scheduler", "GET", "/scheduler", r.server.handleSchedulerPage, false)
 
 	// API 路由 - 查询相关（限流）
 	r.addRoute("health", "GET", "/health", r.server.handleHealth, false)
+	r.addRoute("health-ready", "GET", "/health/ready", r.server.handleHealthReady, false)
+	r.addRoute("health-live", "GET", "/health/live", r.server.handleHealthLive, false)
 	r.addRoute("metrics", "GET", "/metrics", r.server.handleMetrics, false)
 	r.addRoute("query", "GET", "/query", r.server.handleQuery, true)
 	r.addRoute("api-query", "POST", "/api/query", r.server.handleAPIQuery, true)
@@ -48,6 +51,7 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("cookies-save", "POST", "/api/cookies", r.server.handleSaveCookies, false)
 	r.addRoute("cookies-verify", "POST", "/api/cookies/verify", r.server.handleVerifyCookies, false)
 	r.addRoute("cookies-import", "POST", "/api/cookies/import", r.server.handleImportCookieJSON, false)
+	r.addRoute("cookies-login-status", "GET", "/api/cookies/login-status", r.server.handleCookieLoginStatus, false)
 
 	// API 路由 - CDP
 	r.addRoute("cdp-status", "GET", "/api/cdp/status", r.server.handleCDPStatus, false)
@@ -73,6 +77,7 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("screenshot-bridge-token-rotate", "POST", "/api/screenshot/bridge/token/rotate", r.server.handleScreenshotBridgeRotateToken, false)
 	r.addRoute("screenshot-bridge-task-next", "GET", "/api/screenshot/bridge/tasks/next", r.server.handleScreenshotBridgeTaskNext, false)
 	r.addRoute("screenshot-bridge-mock-result", "POST", "/api/screenshot/bridge/mock/result", r.server.handleScreenshotBridgeMockResult, false)
+	r.addRoute("screenshot-router-status", "GET", "/api/screenshot/router/status", r.server.handleScreenshotRouterStatus, false)
 
 	// API 路由 - 导入（限流）
 	r.addRoute("import-urls", "POST", "/api/import/urls", r.server.handleImportURLs, true)
@@ -93,6 +98,16 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("node-task-get", "GET", "/api/nodes/task/get", r.server.handleNodeTaskGet, false)
 	r.addRoute("node-task-delete", "DELETE", "/api/nodes/task/delete", r.server.handleNodeTaskDelete, false)
 
+	// API 路由 - 定时任务
+	r.addRoute("scheduler-tasks-list", "GET", "/api/scheduler/tasks", r.server.handleListTasks, false)
+	r.addRoute("scheduler-task-get", "GET", "/api/scheduler/tasks/get", r.server.handleGetTask, false)
+	r.addRoute("scheduler-task-create", "POST", "/api/scheduler/tasks/create", r.server.handleCreateTask, false)
+	r.addRoute("scheduler-task-update", "POST", "/api/scheduler/tasks/update", r.server.handleUpdateTask, false)
+	r.addRoute("scheduler-task-delete", "POST", "/api/scheduler/tasks/delete", r.server.handleDeleteTask, false)
+	r.addRoute("scheduler-task-run", "POST", "/api/scheduler/tasks/run", r.server.handleRunTaskNow, false)
+	r.addRoute("scheduler-task-enable", "POST", "/api/scheduler/tasks/enable", r.server.handleEnableTask, false)
+	r.addRoute("scheduler-task-disable", "POST", "/api/scheduler/tasks/disable", r.server.handleDisableTask, false)
+	r.addRoute("scheduler-history", "GET", "/api/scheduler/history", r.server.handleTaskHistory, false)
 	// API 路由 - 篡改检测（限流）
 	r.addRoute("tamper-check", "POST", "/api/tamper/check", r.server.handleTamperCheck, true)
 	r.addRoute("tamper-baseline", "POST", "/api/tamper/baseline", r.server.handleTamperBaseline, true)
@@ -100,6 +115,10 @@ func (r *Router) RegisterRoutes() http.Handler {
 	r.addRoute("tamper-baseline-delete", "DELETE", "/api/tamper/baseline/delete", r.server.handleTamperBaselineDelete, false)
 	r.addRoute("tamper-history", "GET", "/api/tamper/history", r.server.handleTamperHistory, false)
 	r.addRoute("tamper-history-delete", "DELETE", "/api/tamper/history/delete", r.server.handleTamperHistoryDelete, false)
+
+	// API 路由 - 数据备份
+	r.addRoute("backup-create", "POST", "/api/backup/create", r.server.handleCreateBackup, false)
+	r.addRoute("backup-list", "GET", "/api/backup/list", r.server.handleListBackups, false)
 
 	// 创建 mux
 	mux := http.NewServeMux()

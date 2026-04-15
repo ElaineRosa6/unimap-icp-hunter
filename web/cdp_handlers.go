@@ -254,9 +254,15 @@ func (s *Server) startCDPChrome(baseURL string) error {
 	}
 
 	port := resolveCDPPort(baseURL)
+	debugAddr := "127.0.0.1"
+	if s.config != nil {
+		if addr := strings.TrimSpace(s.config.Screenshot.ChromeRemoteDebugAddress); addr != "" {
+			debugAddr = addr
+		}
+	}
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
-		"--remote-debugging-address=127.0.0.1",
+		fmt.Sprintf("--remote-debugging-address=%s", debugAddr),
 		"--no-first-run",
 		"--no-default-browser-check",
 	}
@@ -358,6 +364,45 @@ func (s *Server) resolveChromePathWithDiagnostics() (string, []string) {
 			)
 		}
 		for _, p := range windowsCandidates {
+			checked = append(checked, "path:"+p)
+			if _, err := os.Stat(p); err == nil {
+				return p, checked
+			}
+		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		for _, p := range []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		} {
+			checked = append(checked, "path:"+p)
+			if _, err := os.Stat(p); err == nil {
+				return p, checked
+			}
+		}
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			userChrome := filepath.Join(homeDir, "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome")
+			checked = append(checked, "path:"+userChrome)
+			if _, err := os.Stat(userChrome); err == nil {
+				return userChrome, checked
+			}
+		}
+	}
+
+	if runtime.GOOS == "linux" {
+		for _, p := range []string{
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/google-chrome-beta",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+			"/snap/bin/chromium",
+			"/usr/bin/microsoft-edge",
+			"/usr/bin/microsoft-edge-stable",
+			"/opt/google/chrome/chrome",
+		} {
 			checked = append(checked, "path:"+p)
 			if _, err := os.Stat(p); err == nil {
 				return p, checked

@@ -23,20 +23,21 @@ import (
 
 // UnifiedService 统一服务层 - 为 CLI、GUI 和 Web 提供统一接口
 type UnifiedService struct {
-	pluginManager *plugin.PluginManager
-	orchestrator  *adapter.EngineOrchestrator
-	parser        *unimap.UQLParser
-	merger        *unimap.ResultMerger
-	cache         utils.QueryCache
-	cacheTTL      time.Duration
-	cacheMaxSize  int
-	cacheCleanup  time.Duration
-	cacheBackend  string
-	mu            sync.RWMutex
-	maxMemoryMB   int        // 最大内存使用限制（MB）
-	maxConcurrent int        // 最大并发查询数
-	activeQueries int        // 当前活跃查询数
-	queryMutex    sync.Mutex // 查询并发控制锁
+	pluginManager     *plugin.PluginManager
+	orchestrator      *adapter.EngineOrchestrator
+	parser            *unimap.UQLParser
+	merger            *unimap.ResultMerger
+	cache             utils.QueryCache
+	cacheTTL          time.Duration
+	cacheMaxSize      int
+	cacheCleanup      time.Duration
+	cacheBackend      string
+	strategyManager   *utils.CacheStrategyManager
+	mu                sync.RWMutex
+	maxMemoryMB       int        // 最大内存使用限制（MB）
+	maxConcurrent     int        // 最大并发查询数
+	activeQueries     int        // 当前活跃查询数
+	queryMutex        sync.Mutex // 查询并发控制锁
 }
 
 // NewUnifiedService 创建统一服务
@@ -95,6 +96,13 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 	// 初始化缓存
 	cache := utils.NewCacheWithConfig(cacheBackend, redisCfg, memoryMaxSize, cacheCleanupInterval)
 
+	// 初始化缓存策略管理器
+	strategyManager := utils.NewCacheStrategyManager()
+	dynamicStrategy := utils.NewDynamicCacheStrategy(cacheTTL, 5*time.Minute, 2*time.Hour)
+	strategyManager.RegisterStrategy("dynamic", dynamicStrategy)
+	configStrategy := utils.NewConfigBasedCacheStrategy(cacheTTL)
+	strategyManager.RegisterStrategy("config", configStrategy)
+
 	// 检测实际使用的缓存后端
 	useRedis := strings.EqualFold(cacheBackend, "redis")
 	orchestrator := adapter.NewEngineOrchestratorWithConfig(useRedis, redisCfg.Addr, redisCfg.Password, redisCfg.DB)
@@ -104,10 +112,15 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 		// 设置默认缓存TTL
 		orchestrator.SetDefaultCacheTTL(cacheTTL)
 
-		// 从配置加载引擎级别的缓存设置
+		// 从配置加载引擎级别的缓存设置，同步到策略管理器
 		for engineName, engineCfg := range cfg.Cache.Engines {
 			if engineCfg.TTL > 0 {
 				orchestrator.SetEngineCacheTTL(engineName, time.Duration(engineCfg.TTL)*time.Second, engineCfg.Enabled)
+				configStrategy.SetEngineConfig(engineName, &utils.SimpleEngineCacheConfig{
+					Enabled: engineCfg.Enabled,
+					TTL:     time.Duration(engineCfg.TTL) * time.Second,
+					MaxSize: engineCfg.MaxSize,
+				})
 			}
 		}
 	}
@@ -118,18 +131,19 @@ func NewUnifiedServiceWithConfig(cfg *config.Config) *UnifiedService {
 	}
 
 	return &UnifiedService{
-		pluginManager: plugin.NewPluginManager(),
-		orchestrator:  orchestrator,
-		parser:        unimap.NewUQLParser(),
-		merger:        unimap.NewResultMerger(),
-		cache:         cache,
-		cacheTTL:      cacheTTL,
-		cacheMaxSize:  memoryMaxSize,
-		cacheCleanup:  cacheCleanupInterval,
-		cacheBackend:  cacheBackend,
-		maxMemoryMB:   maxMemoryMB,
-		maxConcurrent: maxConcurrent,
-		activeQueries: 0,
+		pluginManager:   plugin.NewPluginManager(),
+		orchestrator:    orchestrator,
+		parser:          unimap.NewUQLParser(),
+		merger:          unimap.NewResultMerger(),
+		cache:           cache,
+		cacheTTL:        cacheTTL,
+		cacheMaxSize:    memoryMaxSize,
+		cacheCleanup:    cacheCleanupInterval,
+		cacheBackend:    cacheBackend,
+		strategyManager: strategyManager,
+		maxMemoryMB:     maxMemoryMB,
+		maxConcurrent:   maxConcurrent,
+		activeQueries:   0,
 	}
 }
 
@@ -329,9 +343,10 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		}
 	}
 
-	// 将结果存入缓存
+	// 将结果存入缓存 — 使用策略管理器动态计算TTL
 	if len(allAssets) > 0 {
-		s.cache.Set(cacheKey, allAssets, s.cacheTTL)
+		cacheTTL := s.resolveCacheTTL(req)
+		s.cache.Set(cacheKey, allAssets, cacheTTL)
 	}
 
 	// 触发查询后钩子
@@ -347,6 +362,23 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		EngineStats: engineStats,
 		Errors:      errors,
 	}, nil
+}
+
+// resolveCacheTTL 通过策略管理器动态计算缓存TTL
+func (s *UnifiedService) resolveCacheTTL(req QueryRequest) time.Duration {
+	engine := "default"
+	if len(req.Engines) > 0 {
+		engine = req.Engines[0]
+	}
+	// 优先使用动态策略（根据查询频率、引擎性能等自动调整）
+	if s.strategyManager != nil {
+		return s.strategyManager.GetCacheDuration("dynamic", engine, req.Query, req.PageSize, req.PageSize)
+	}
+	// 降级到原有逻辑：使用引擎级TTL或全局默认TTL
+	if engineTTL, ok := s.orchestrator.GetEngineCacheTTL(engine); ok {
+		return engineTTL
+	}
+	return s.cacheTTL
 }
 
 // processAssets 处理资产数据
@@ -525,11 +557,11 @@ func (s *UnifiedService) checkResourceLimits(ctx context.Context) error {
 func (s *UnifiedService) acquireQueryLock() bool {
 	s.queryMutex.Lock()
 	defer s.queryMutex.Unlock()
-	
+
 	if s.activeQueries >= s.maxConcurrent {
 		return false
 	}
-	
+
 	s.activeQueries++
 	return true
 }
@@ -538,7 +570,7 @@ func (s *UnifiedService) acquireQueryLock() bool {
 func (s *UnifiedService) releaseQueryLock() {
 	s.queryMutex.Lock()
 	defer s.queryMutex.Unlock()
-	
+
 	if s.activeQueries > 0 {
 		s.activeQueries--
 	}

@@ -44,7 +44,7 @@ func TestHandleTamperHistoryDelete(t *testing.T) {
 	}
 	recordsDir := filepath.Join(recordsBase, entries[0].Name())
 
-	s := &Server{tamperApp: service.NewTamperAppService("./hash_store")}
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store", nil)}
 
 	missingReq := httptest.NewRequest(http.MethodDelete, "/api/tamper/history/delete", nil)
 	missingW := httptest.NewRecorder()
@@ -77,7 +77,7 @@ func TestHandleTamperHistoryDelete(t *testing.T) {
 }
 
 func TestHandleTamperBaselineDeleteMethodContract(t *testing.T) {
-	s := &Server{tamperApp: service.NewTamperAppService("./hash_store")}
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store", nil)}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/tamper/baseline/delete?url=https://example.com", nil)
 	w := httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestHandleTamperBaselineDeleteByQueryParam(t *testing.T) {
 		t.Fatalf("expected 1 baseline before delete, got %d", len(urls))
 	}
 
-	s := &Server{tamperApp: service.NewTamperAppService("./hash_store")}
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store", nil)}
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/tamper/baseline/delete?url=https://example.com", nil)
 	w := httptest.NewRecorder()

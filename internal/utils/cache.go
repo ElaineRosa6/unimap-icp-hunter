@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,10 @@ type QueryCache interface {
 	Close()
 	// IsHealthy 检查缓存是否健康
 	IsHealthy() bool
+	// GetMulti 批量获取多个键的值
+	GetMulti(keys []string) map[string][]model.UnifiedAsset
+	// SetMulti 批量设置多个键值对
+	SetMulti(keyAssets map[string][]model.UnifiedAsset, duration time.Duration)
 }
 
 // CacheStats 缓存统计信息
@@ -64,6 +69,7 @@ type cacheItem struct {
 	expiryTime time.Time
 	lastAccess time.Time
 	accessIdx  uint64
+	accessFreq int // 访问频率计数
 }
 
 // NewMemoryCache 创建内存缓存
@@ -102,13 +108,15 @@ func (c *MemoryCache) Get(key string) ([]model.UnifiedAsset, bool) {
 		return nil, false
 	}
 
-	// 更新最后访问时间/序号
+	// 更新访问信息
 	c.accessCounter++
+	item.accessFreq++ // 增加访问频率计数
 	c.cache[key] = cacheItem{
 		assets:     item.assets,
 		expiryTime: item.expiryTime,
 		lastAccess: time.Now(),
 		accessIdx:  c.accessCounter,
+		accessFreq: item.accessFreq,
 	}
 
 	c.hits++
@@ -123,8 +131,8 @@ func (c *MemoryCache) Set(key string, assets []model.UnifiedAsset, duration time
 	_, exists := c.cache[key]
 	// 检查缓存大小是否超过限制（覆盖已有 key 不应触发驱逐）
 	if !exists && len(c.cache) >= c.maxSize {
-		// 使用LRU策略：删除最近最少使用的项
-		c.evictLRU()
+		// 使用LFU策略：删除访问频率最低的项
+		c.evictLFU()
 	}
 
 	// 存入缓存
@@ -134,6 +142,7 @@ func (c *MemoryCache) Set(key string, assets []model.UnifiedAsset, duration time
 		expiryTime: time.Now().Add(duration),
 		lastAccess: time.Now(),
 		accessIdx:  c.accessCounter,
+		accessFreq: 1, // 初始访问频率为1
 	}
 }
 
@@ -184,26 +193,79 @@ func (c *MemoryCache) GetStats() CacheStats {
 	}
 }
 
-// evictLRU 使用LRU策略删除缓存项
-func (c *MemoryCache) evictLRU() {
+// GetMulti 批量获取多个键的值
+func (c *MemoryCache) GetMulti(keys []string) map[string][]model.UnifiedAsset {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	result := make(map[string][]model.UnifiedAsset)
+	now := time.Now()
+
+	for _, key := range keys {
+		if item, exists := c.cache[key]; exists {
+			// 检查是否过期
+			if !item.expiryTime.IsZero() && now.After(item.expiryTime) {
+				continue
+			}
+			result[key] = item.assets
+		}
+	}
+
+	return result
+}
+
+// SetMulti 批量设置多个键值对
+func (c *MemoryCache) SetMulti(keyAssets map[string][]model.UnifiedAsset, duration time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	now := time.Now()
+	c.accessCounter++
+
+	for key, assets := range keyAssets {
+		// 检查缓存大小，如果超过限制，先删除一些项
+		if len(c.cache) >= c.maxSize {
+			c.evictLFU()
+		}
+
+		c.cache[key] = cacheItem{
+			assets:     assets,
+			expiryTime: now.Add(duration),
+			lastAccess: now,
+			accessIdx:  c.accessCounter,
+			accessFreq: 1,
+		}
+	}
+}
+
+// evictLFU 使用LFU策略删除缓存项
+func (c *MemoryCache) evictLFU() {
 	if len(c.cache) == 0 {
 		return
 	}
 
-	lruKey := ""
-	var lruIdx uint64
-	hasLRU := false
+	lfuKey := ""
+	var lfuFreq int
+	var lfuIdx uint64
+	hasLFU := false
 
 	for key, item := range c.cache {
-		if !hasLRU || item.accessIdx < lruIdx {
-			lruKey = key
-			lruIdx = item.accessIdx
-			hasLRU = true
+		if !hasLFU || item.accessFreq < lfuFreq {
+			lfuKey = key
+			lfuFreq = item.accessFreq
+			lfuIdx = item.accessIdx
+			hasLFU = true
+		} else if item.accessFreq == lfuFreq {
+			// 如果访问频率相同，使用LRU作为tie-breaker
+			if item.accessIdx < lfuIdx {
+				lfuKey = key
+				lfuIdx = item.accessIdx
+			}
 		}
 	}
 
-	if lruKey != "" {
-		delete(c.cache, lruKey)
+	if lfuKey != "" {
+		delete(c.cache, lfuKey)
 	}
 }
 
@@ -256,12 +318,29 @@ func (c *MemoryCache) cleanupExpired() {
 
 // GenerateCacheKey 生成缓存键
 func GenerateCacheKey(engineName, query string, page, pageSize int) string {
+	// 规范化查询字符串
+	normalizedQuery := normalizeQuery(query)
+
 	// 组合查询参数
-	cacheKey := fmt.Sprintf("%s:%s:%d:%d", engineName, query, page, pageSize)
+	cacheKey := fmt.Sprintf("%s:%s:%d:%d", engineName, normalizedQuery, page, pageSize)
 
 	// 使用MD5生成哈希值作为缓存键
 	hash := md5.Sum([]byte(cacheKey))
 	return hex.EncodeToString(hash[:])
+}
+
+// normalizeQuery 规范化查询字符串
+func normalizeQuery(query string) string {
+	// 去除首尾空白
+	query = strings.TrimSpace(query)
+
+	// 转换为小写
+	query = strings.ToLower(query)
+
+	// 去除多余的空白
+	query = strings.Join(strings.Fields(query), " ")
+
+	return query
 }
 
 // RedisCache Redis缓存实现
@@ -319,6 +398,9 @@ func NewRedisCache(cfg RedisConfig) *RedisCache {
 	if opts.MinIdleConns == 0 {
 		opts.MinIdleConns = 2
 	}
+	if opts.MaxIdleConns == 0 {
+		opts.MaxIdleConns = opts.PoolSize
+	}
 	if opts.MaxRetries == 0 {
 		opts.MaxRetries = 3
 	}
@@ -333,6 +415,9 @@ func NewRedisCache(cfg RedisConfig) *RedisCache {
 	}
 	if opts.PoolTimeout == 0 {
 		opts.PoolTimeout = 4 * time.Second
+	}
+	if opts.ConnMaxIdleTime == 0 {
+		opts.ConnMaxIdleTime = 5 * time.Minute
 	}
 
 	client := redis.NewClient(opts)
@@ -351,7 +436,8 @@ func NewRedisCache(cfg RedisConfig) *RedisCache {
 
 	cache.healthy = true
 	cache.lastCheck = time.Now()
-	logger.Infof("Redis cache initialized: addr=%s pool_size=%d prefix=%s", cfg.Addr, opts.PoolSize, cfg.Prefix)
+	logger.Infof("Redis cache initialized: addr=%s pool_size=%d min_idle=%d max_idle=%d prefix=%s",
+		cfg.Addr, opts.PoolSize, opts.MinIdleConns, opts.MaxIdleConns, cfg.Prefix)
 	return cache
 }
 
@@ -442,10 +528,24 @@ func (c *RedisCache) Delete(key string) {
 
 // Clear 清空缓存
 func (c *RedisCache) Clear() {
-	// 使用前缀匹配删除所有键
-	keys, err := c.client.Keys(c.ctx, c.prefix+"*").Result()
-	if err == nil && len(keys) > 0 {
-		c.client.Del(c.ctx, keys...)
+	// 使用SCAN命令替代KEYS命令，避免阻塞Redis
+	var cursor uint64 = 0
+	for {
+		var keys []string
+		var err error
+		keys, cursor, err = c.client.Scan(c.ctx, cursor, c.prefix+"*", 100).Result()
+		if err != nil {
+			logger.Errorf("Redis scan failed: %v", err)
+			break
+		}
+
+		if len(keys) > 0 {
+			c.client.Del(c.ctx, keys...)
+		}
+
+		if cursor == 0 {
+			break
+		}
 	}
 
 	c.mutex.Lock()
@@ -456,11 +556,25 @@ func (c *RedisCache) Clear() {
 
 // Size 获取缓存大小
 func (c *RedisCache) Size() int {
-	keys, err := c.client.Keys(c.ctx, c.prefix+"*").Result()
-	if err != nil {
-		return 0
+	// 使用SCAN命令替代KEYS命令，避免阻塞Redis
+	var cursor uint64 = 0
+	var count int
+	for {
+		var keys []string
+		var err error
+		keys, cursor, err = c.client.Scan(c.ctx, cursor, c.prefix+"*", 100).Result()
+		if err != nil {
+			logger.Errorf("Redis scan failed: %v", err)
+			return 0
+		}
+
+		count += len(keys)
+
+		if cursor == 0 {
+			break
+		}
 	}
-	return len(keys)
+	return count
 }
 
 // GetStats 获取缓存统计信息
@@ -483,6 +597,87 @@ func (c *RedisCache) GetStats() CacheStats {
 		MaxSize:     -1, // Redis没有固定大小限制
 		HitRate:     hitRate,
 		LastCleanup: time.Now(),
+	}
+}
+
+// GetMulti 批量获取多个键的值
+func (c *RedisCache) GetMulti(keys []string) map[string][]model.UnifiedAsset {
+	if len(keys) == 0 {
+		return make(map[string][]model.UnifiedAsset)
+	}
+
+	// 构建完整的键名
+	fullKeys := make([]string, len(keys))
+	keyMap := make(map[string]string) // 完整键名到原始键名的映射
+	for i, key := range keys {
+		fullKey := c.prefix + key
+		fullKeys[i] = fullKey
+		keyMap[fullKey] = key
+	}
+
+	// 使用MGET批量获取
+	pipe := c.client.Pipeline()
+	cmds := make(map[string]*redis.StringCmd)
+	for _, fullKey := range fullKeys {
+		cmds[fullKey] = pipe.Get(c.ctx, fullKey)
+	}
+
+	// 执行批量操作
+	if _, err := pipe.Exec(c.ctx); err != nil && err != redis.Nil {
+		logger.Errorf("Redis MGET failed: %v", err)
+		return make(map[string][]model.UnifiedAsset)
+	}
+
+	// 处理结果
+	result := make(map[string][]model.UnifiedAsset)
+	for fullKey, cmd := range cmds {
+		val, err := cmd.Result()
+		if err != nil {
+			if err != redis.Nil {
+				logger.Errorf("Redis GET failed for key %s: %v", fullKey, err)
+			}
+			continue
+		}
+
+		// 解析JSON
+		var assets []model.UnifiedAsset
+		if err := json.Unmarshal([]byte(val), &assets); err != nil {
+			logger.Errorf("Redis value unmarshal failed for key %s: %v", fullKey, err)
+			continue
+		}
+
+		originalKey := keyMap[fullKey]
+		result[originalKey] = assets
+	}
+
+	return result
+}
+
+// SetMulti 批量设置多个键值对
+func (c *RedisCache) SetMulti(keyAssets map[string][]model.UnifiedAsset, duration time.Duration) {
+	if len(keyAssets) == 0 {
+		return
+	}
+
+	// 使用Pipeline批量设置
+	pipe := c.client.Pipeline()
+	for key, assets := range keyAssets {
+		fullKey := c.prefix + key
+
+		// 序列化为JSON
+		data, err := json.Marshal(assets)
+		if err != nil {
+			logger.Errorf("JSON marshal failed for key %s: %v", key, err)
+			continue
+		}
+
+		// 添加到Pipeline
+		pipe.Set(c.ctx, fullKey, data, duration)
+	}
+
+	// 执行批量操作
+	if _, err := pipe.Exec(c.ctx); err != nil {
+		logger.Errorf("Redis MSET failed: %v", err)
 	}
 }
 

@@ -17,6 +17,9 @@ on:
       - "scripts/bridge_e2e.ps1"
       - ".github/workflows/bridge-smoke.yml"
 
+# This workflow runs quick bridge-focused tests.
+# Full CI (build + test + lint + security) is handled by ci.yml.
+
 jobs:
   bridge-handler-tests:
     runs-on: ubuntu-latest
@@ -30,7 +33,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run bridge-focused tests
-        run: go test ./web -run Bridge -count=1
+        run: go test -race -v ./web -run Bridge -count=1
 
   extension-script-check:
     runs-on: ubuntu-latest
@@ -45,8 +48,7 @@ jobs:
 
       - name: Syntax check extension scripts
         run: |
-          node --check tools/extension-screenshot/src/api.js
-          node --check tools/extension-screenshot/src/background.js
-          node --check tools/extension-screenshot/src/capture.js
-          node --check tools/extension-screenshot/src/pairing.js
-          node --check tools/extension-screenshot/src/storage.js
+          for f in tools/extension-screenshot/src/*.js; do
+            echo "Checking $f ..."
+            node --check "$f"
+          done

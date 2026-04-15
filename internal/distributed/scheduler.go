@@ -36,8 +36,14 @@ func (s *HealthLoadScheduler) Strategy() SchedulerStrategy {
 
 // SelectTask selects the best matching task for a node
 // Tasks are sorted by priority (higher first), then by creation time (earlier first)
+// Considers node health status when making decisions
 func (s *HealthLoadScheduler) SelectTask(tasks []*TaskRecord, node *NodeRecord) *TaskRecord {
 	if len(tasks) == 0 {
+		return nil
+	}
+
+	// Skip nodes that are offline or in critical health
+	if !node.Online || node.HealthStatus == "critical" {
 		return nil
 	}
 

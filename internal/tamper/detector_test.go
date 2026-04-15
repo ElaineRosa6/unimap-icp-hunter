@@ -411,3 +411,67 @@ func BenchmarkComputeSHA256(b *testing.B) {
 		computeSHA256(data)
 	}
 }
+
+// --- detectMaliciousContent Tests ---
+
+func TestDetectMaliciousContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		html     string
+		wantLen  int
+		wantFlag string
+	}{
+		{"clean html", "<html><body><h1>Hello</h1></body></html>", 0, ""},
+		{"eval script", "<script>eval('bad')</script>", 1, "suspicious_script: eval("},
+		{"document.write", "<script>document.write('x')</script>", 1, "suspicious_script: document.write("},
+		{"multiple script keywords", "<script>eval( atob( crypto miner</script>", 4, "suspicious_script:"},
+		{"single domain keyword", "<p>casino</p>", 0, ""},
+		{"multiple domain keywords", "<p>casino bitcoin</p>", 1, "suspicious_domain_keywords"},
+		{"hidden iframe", `<iframe style="display:none" src="evil"></iframe>`, 1, "hidden_iframe"},
+		{"dangerous event handler", `<body onload="eval(document.cookie)">`, 2, "dangerous_event_handler"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags := detectMaliciousContent(tt.html)
+			if len(flags) < tt.wantLen {
+				t.Errorf("expected at least %d flags, got %d: %v", tt.wantLen, len(flags), flags)
+			}
+			if tt.wantFlag != "" && len(flags) > 0 {
+				found := false
+				for _, f := range flags {
+					if strings.Contains(f, tt.wantFlag) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected flag containing %q, got %v", tt.wantFlag, flags)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizePerformanceMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want string
+	}{
+		{"", PerformanceModeBalanced},
+		{"balanced", PerformanceModeBalanced},
+		{"BALANCED", PerformanceModeBalanced},
+		{"fast", PerformanceModeFast},
+		{"FAST", PerformanceModeFast},
+		{"comprehensive", PerformanceModeComprehensive},
+		{"COMPREHENSIVE", PerformanceModeComprehensive},
+		{"unknown", PerformanceModeBalanced},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			if got := normalizePerformanceMode(tt.mode); got != tt.want {
+				t.Errorf("normalizePerformanceMode(%q) = %q, want %q", tt.mode, got, tt.want)
+			}
+		})
+	}
+}

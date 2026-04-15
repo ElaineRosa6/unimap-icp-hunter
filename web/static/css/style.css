@@ -1125,6 +1125,129 @@ section h3 {
 	border-color: #3498db;
 }
 
+/* 登录状态栏 */
+.login-status-bar {
+	display: flex;
+	gap: 1rem;
+	margin-bottom: 0.75rem;
+	padding: 0.5rem 0.75rem;
+	background: #f8f9fa;
+	border-radius: 4px;
+	font-size: 0.85rem;
+}
+
+.status-indicator {
+	color: #7f8c8d;
+}
+
+.status-indicator.connected {
+	color: #27ae60;
+}
+
+.status-indicator.disconnected {
+	color: #e74c3c;
+}
+
+/* 引擎登录状态 */
+.engine-login-status {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 1.5rem;
+	margin-bottom: 0.75rem;
+	padding: 0.5rem 0.75rem;
+	background: #fafbfc;
+	border: 1px solid #eee;
+	border-radius: 4px;
+}
+
+.engine-status-row {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.85rem;
+}
+
+.engine-label {
+	font-weight: 600;
+	min-width: 55px;
+	color: #2c3e50;
+}
+
+.engine-status-text {
+	color: #7f8c8d;
+}
+
+.engine-status-text.logged-in {
+	color: #27ae60;
+}
+
+.engine-status-text.not-logged-in {
+	color: #e67e22;
+}
+
+.engine-status-text.no-session {
+	color: #e74c3c;
+}
+
+.btn-login {
+	padding: 2px 8px;
+	font-size: 0.75rem;
+	text-decoration: none;
+}
+
+/* 可折叠 Cookie 区域 */
+.cookie-input-section {
+	margin-top: 0.5rem;
+}
+
+.btn-toggle-cookie {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	background: none;
+	border: 1px dashed #bdc3c7;
+	border-radius: 4px;
+	padding: 0.4rem 0.75rem;
+	font-size: 0.85rem;
+	color: #7f8c8d;
+	cursor: pointer;
+	width: 100%;
+	text-align: left;
+	transition: all 0.2s ease;
+}
+
+.btn-toggle-cookie:hover {
+	border-color: #3498db;
+	color: #3498db;
+}
+
+.toggle-arrow {
+	display: inline-block;
+	transition: transform 0.2s ease;
+	font-size: 0.7rem;
+}
+
+.toggle-arrow.expanded {
+	transform: rotate(90deg);
+}
+
+.cookie-input-content {
+	margin-top: 0.5rem;
+	padding: 0.5rem 0;
+	animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+	from {
+		opacity: 0;
+		max-height: 0;
+	}
+	to {
+		opacity: 1;
+		max-height: 500px;
+	}
+}
+
 /* Cookie操作按钮组样式 */
 .cookie-actions {
 	display: flex;

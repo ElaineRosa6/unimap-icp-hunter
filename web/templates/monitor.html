@@ -447,6 +447,9 @@
 					<label for="tamper-mode">判定模式</label>
 					<select id="tamper-mode">
 						<option value="relaxed" selected>宽松模式（推荐）</option>
+						<option value="balanced">平衡模式</option>
+						<option value="security">安全模式</option>
+						<option value="precise">精确模式</option>
 						<option value="strict">严格模式</option>
 					</select>
 				</div>
@@ -545,6 +548,9 @@
 							<select id="history-mode-filter">
 								<option value="">全部模式</option>
 								<option value="relaxed">宽松</option>
+								<option value="balanced">平衡</option>
+								<option value="security">安全</option>
+								<option value="precise">精确</option>
 								<option value="strict">严格</option>
 							</select>
 							<input type="datetime-local" id="history-start-time" placeholder="开始时间">
@@ -1086,7 +1092,14 @@
 
 				const concurrency = parseInt(concurrencyInput.value) || 5;
 				const mode = (tamperModeInput && tamperModeInput.value) ? tamperModeInput.value : 'relaxed';
-				showProgress(`正在进行篡改检测（${mode === 'strict' ? '严格模式' : '宽松模式'}）...`);
+				const modeName = {
+					'relaxed': '宽松模式',
+					'balanced': '平衡模式',
+					'security': '安全模式',
+					'precise': '精确模式',
+					'strict': '严格模式'
+				}[mode] || '宽松模式';
+				showProgress(`正在进行篡改检测（${modeName}）...`);
 				resultsSection.style.display = 'block';
 
 				// 切换到篡改检测tab

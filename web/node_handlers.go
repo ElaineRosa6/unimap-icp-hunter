@@ -34,7 +34,7 @@ func (s *Server) handleNodeRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedEnabled(w) {
 		return
 	}
-	if s.nodeRegistry == nil {
+	if s.distributed.NodeRegistry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
 		return
 	}
@@ -47,7 +47,7 @@ func (s *Server) handleNodeRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := s.nodeRegistry.Register(req)
+	record, err := s.distributed.NodeRegistry.Register(req)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_register_failed", "node register failed", err.Error())
 		return
@@ -66,7 +66,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedEnabled(w) {
 		return
 	}
-	if s.nodeRegistry == nil {
+	if s.distributed.NodeRegistry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
 		return
 	}
@@ -79,7 +79,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := s.nodeRegistry.Heartbeat(req)
+	record, err := s.distributed.NodeRegistry.Heartbeat(req)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_heartbeat_failed", "node heartbeat failed", err.Error())
 		return
@@ -101,12 +101,12 @@ func (s *Server) handleNodeStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedAdminToken(w, r) {
 		return
 	}
-	if s.nodeRegistry == nil {
+	if s.distributed.NodeRegistry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
 		return
 	}
 
-	snapshot := s.nodeRegistry.Snapshot()
+	snapshot := s.distributed.NodeRegistry.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"summary": map[string]int{
@@ -128,12 +128,12 @@ func (s *Server) handleNodeNetworkProfile(w http.ResponseWriter, r *http.Request
 	if !s.requireDistributedAdminToken(w, r) {
 		return
 	}
-	if s.nodeRegistry == nil {
+	if s.distributed.NodeRegistry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
 		return
 	}
 
-	snapshot := s.nodeRegistry.Snapshot()
+	snapshot := s.distributed.NodeRegistry.Snapshot()
 	profiles := make([]map[string]interface{}, 0, len(snapshot.Nodes))
 	egressCount := make(map[string]int)
 	for _, node := range snapshot.Nodes {
@@ -192,7 +192,7 @@ func (s *Server) handleNodeDeregister(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedEnabled(w) {
 		return
 	}
-	if s.nodeRegistry == nil {
+	if s.distributed.NodeRegistry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
 		return
 	}
@@ -204,11 +204,11 @@ func (s *Server) handleNodeDeregister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Require node token for this node or admin token
-	if !s.requireNodeToken(w, r, nodeID) {
+	if !s.requireNodeOrDistributedAdminToken(w, r, nodeID) {
 		return
 	}
 
-	if err := s.nodeRegistry.Deregister(nodeID); err != nil {
+	if err := s.distributed.NodeRegistry.Deregister(nodeID); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_deregister_failed", "node deregister failed", err.Error())
 		return
 	}
@@ -227,7 +227,10 @@ func (s *Server) handleNodeGet(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDistributedEnabled(w) {
 		return
 	}
-	if s.nodeRegistry == nil {
+	if !s.requireDistributedAdminToken(w, r) {
+		return
+	}
+	if s.distributed.NodeRegistry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "node_registry_unavailable", "node registry not initialized", nil)
 		return
 	}
@@ -238,7 +241,7 @@ func (s *Server) handleNodeGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.nodeRegistry.Get(nodeID)
+	rec, err := s.distributed.NodeRegistry.Get(nodeID)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "node_get_failed", "failed to get node", err.Error())
 		return

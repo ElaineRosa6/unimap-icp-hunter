@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/unimap-icp-hunter/project/internal/alerting"
 	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/tamper"
 )
@@ -16,14 +17,18 @@ type TamperAllocatorFactory func(ctx context.Context) (context.Context, context.
 
 // TamperAppService 封装篡改检测应用层流程。
 type TamperAppService struct {
-	baseDir string
+	baseDir      string
+	alertManager *alerting.Manager
 }
 
-func NewTamperAppService(baseDir string) *TamperAppService {
+func NewTamperAppService(baseDir string, alertManager *alerting.Manager) *TamperAppService {
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = "./hash_store"
 	}
-	return &TamperAppService{baseDir: baseDir}
+	return &TamperAppService{
+		baseDir:      baseDir,
+		alertManager: alertManager,
+	}
 }
 
 type TamperCheckRequest struct {
@@ -173,7 +178,10 @@ func (s *TamperAppService) SetBaseline(ctx context.Context, req TamperBaselineRe
 }
 
 func (s *TamperAppService) ListBaselines() ([]string, error) {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:      s.baseDir,
+		AlertManager: s.alertManager,
+	})
 	urls, err := detector.ListBaselines()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -185,31 +193,46 @@ func (s *TamperAppService) ListBaselines() ([]string, error) {
 }
 
 func (s *TamperAppService) DeleteBaseline(targetURL string) error {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:      s.baseDir,
+		AlertManager: s.alertManager,
+	})
 	return detector.DeleteBaseline(targetURL)
 }
 
 // LoadCheckRecords 加载指定URL的检测记录
 func (s *TamperAppService) LoadCheckRecords(url string, limit int) ([]*tamper.CheckRecord, error) {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:      s.baseDir,
+		AlertManager: s.alertManager,
+	})
 	return detector.LoadCheckRecords(url, limit)
 }
 
 // ListAllCheckRecords 列出所有URL的检测记录
 func (s *TamperAppService) ListAllCheckRecords() (map[string][]*tamper.CheckRecord, error) {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:      s.baseDir,
+		AlertManager: s.alertManager,
+	})
 	return detector.ListAllCheckRecords()
 }
 
 // GetCheckStats 获取检测统计信息
 func (s *TamperAppService) GetCheckStats(url string) (map[string]interface{}, error) {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:      s.baseDir,
+		AlertManager: s.alertManager,
+	})
 	return detector.GetCheckStats(url)
 }
 
 // DeleteCheckRecords 删除指定URL的所有检测记录
 func (s *TamperAppService) DeleteCheckRecords(url string) error {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:      s.baseDir,
+		AlertManager: s.alertManager,
+	})
 	return detector.DeleteCheckRecords(url)
 }
 
@@ -369,7 +392,11 @@ func (s *TamperAppService) QueryHistory(filter HistoryFilter) (*HistoryResult, e
 }
 
 func (s *TamperAppService) newDetector(ctx context.Context, mode string, allocatorFactory TamperAllocatorFactory) (*tamper.Detector, context.CancelFunc, error) {
-	detector := tamper.NewDetector(tamper.DetectorConfig{BaseDir: s.baseDir, DetectionMode: mode})
+	detector := tamper.NewDetector(tamper.DetectorConfig{
+		BaseDir:       s.baseDir,
+		DetectionMode: mode,
+		AlertManager:  s.alertManager,
+	})
 	cleanup := func() {}
 
 	if allocatorFactory == nil {

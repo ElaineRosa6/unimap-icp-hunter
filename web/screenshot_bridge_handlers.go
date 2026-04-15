@@ -153,7 +153,7 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		writeAPIError(w, http.StatusForbidden, "forbidden_origin", "mock bridge callback is restricted to loopback requests", nil)
 		return
 	}
-	if s.bridgeMock == nil {
+	if s.bridge.Mock == nil {
 		s.setBridgeLastError("bridge_unavailable: bridge mock client not initialized")
 		writeAPIError(w, http.StatusServiceUnavailable, "bridge_unavailable", "bridge mock client not initialized", nil)
 		return
@@ -199,7 +199,7 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 
 	resolvedPath := strings.TrimSpace(req.ImagePath)
 	if resolvedPath == "" && strings.TrimSpace(req.ImageData) != "" {
-		taskMeta, _ := s.bridgeMock.TaskForRequest(strings.TrimSpace(req.RequestID))
+		taskMeta, _ := s.bridge.Mock.TaskForRequest(strings.TrimSpace(req.RequestID))
 		batchID := strings.TrimSpace(req.BatchID)
 		if batchID == "" {
 			batchID = strings.TrimSpace(taskMeta.BatchID)
@@ -217,7 +217,7 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		resolvedPath = savedPath
 	}
 
-	s.bridgeMock.PushResult(screenshot.BridgeResult{
+	s.bridge.Mock.PushResult(screenshot.BridgeResult{
 		RequestID:  strings.TrimSpace(req.RequestID),
 		Success:    req.Success,
 		ImagePath:  resolvedPath,
@@ -246,7 +246,7 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 		writeAPIError(w, http.StatusForbidden, "forbidden_origin", "bridge task pull is restricted to loopback requests", nil)
 		return
 	}
-	if s.bridgeMock == nil {
+	if s.bridge.Mock == nil {
 		s.setBridgeLastError("bridge_unavailable: bridge mock client not initialized")
 		writeAPIError(w, http.StatusServiceUnavailable, "bridge_unavailable", "bridge mock client not initialized", nil)
 		return
@@ -259,7 +259,7 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 		s.touchBridgeToken(token)
 	}
 
-	task, ok := s.bridgeMock.NextTask()
+	task, ok := s.bridge.Mock.NextTask()
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
@@ -389,21 +389,21 @@ func (s *Server) consumeBridgeCallbackNonce(token, nonce string, expireAt int64)
 	now := time.Now().Unix()
 	key := token + ":" + nonce
 
-	s.configMutex.Lock()
-	if s.bridgeCallbackNonces == nil {
-		s.bridgeCallbackNonces = make(map[string]int64)
+	s.bridge.mu.Lock()
+	if s.bridge.CallbackNonces == nil {
+		s.bridge.CallbackNonces = make(map[string]int64)
 	}
-	for k, exp := range s.bridgeCallbackNonces {
+	for k, exp := range s.bridge.CallbackNonces {
 		if exp <= now {
-			delete(s.bridgeCallbackNonces, k)
+			delete(s.bridge.CallbackNonces, k)
 		}
 	}
-	if _, exists := s.bridgeCallbackNonces[key]; exists {
-		s.configMutex.Unlock()
+	if _, exists := s.bridge.CallbackNonces[key]; exists {
+		s.bridge.mu.Unlock()
 		return false
 	}
-	s.bridgeCallbackNonces[key] = expireAt
-	s.configMutex.Unlock()
+	s.bridge.CallbackNonces[key] = expireAt
+	s.bridge.mu.Unlock()
 
 	return true
 }
@@ -419,39 +419,39 @@ func (s *Server) issueBridgeToken(ttlSeconds int) (string, int64, error) {
 	token := base64.RawURLEncoding.EncodeToString(buf)
 	expireAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second).Unix()
 
-	s.configMutex.Lock()
-	if s.bridgeTokens == nil {
-		s.bridgeTokens = make(map[string]int64)
+	s.bridge.mu.Lock()
+	if s.bridge.Tokens == nil {
+		s.bridge.Tokens = make(map[string]int64)
 	}
-	if s.bridgeTokenLastSeen == nil {
-		s.bridgeTokenLastSeen = make(map[string]int64)
+	if s.bridge.LastSeen == nil {
+		s.bridge.LastSeen = make(map[string]int64)
 	}
-	s.bridgeTokens[token] = expireAt
-	s.bridgeTokenLastSeen[token] = time.Now().Unix()
-	for tk, exp := range s.bridgeTokens {
+	s.bridge.Tokens[token] = expireAt
+	s.bridge.LastSeen[token] = time.Now().Unix()
+	for tk, exp := range s.bridge.Tokens {
 		if exp <= time.Now().Unix() {
-			delete(s.bridgeTokens, tk)
-			delete(s.bridgeTokenLastSeen, tk)
+			delete(s.bridge.Tokens, tk)
+			delete(s.bridge.LastSeen, tk)
 		}
 	}
-	s.configMutex.Unlock()
+	s.bridge.mu.Unlock()
 
 	return token, expireAt, nil
 }
 
 func (s *Server) validateBridgeToken(token string) bool {
-	s.configMutex.Lock()
-	defer s.configMutex.Unlock()
-	if s.bridgeTokens == nil {
+	s.bridge.mu.Lock()
+	defer s.bridge.mu.Unlock()
+	if s.bridge.Tokens == nil {
 		return false
 	}
-	expireAt, ok := s.bridgeTokens[token]
+	expireAt, ok := s.bridge.Tokens[token]
 	if !ok {
 		return false
 	}
 	if expireAt <= time.Now().Unix() {
-		delete(s.bridgeTokens, token)
-		delete(s.bridgeTokenLastSeen, token)
+		delete(s.bridge.Tokens, token)
+		delete(s.bridge.LastSeen, token)
 		return false
 	}
 	return true
@@ -462,14 +462,14 @@ func (s *Server) touchBridgeToken(token string) {
 	if token == "" || s == nil {
 		return
 	}
-	s.configMutex.Lock()
-	if s.bridgeTokenLastSeen == nil {
-		s.bridgeTokenLastSeen = make(map[string]int64)
+	s.bridge.mu.Lock()
+	if s.bridge.LastSeen == nil {
+		s.bridge.LastSeen = make(map[string]int64)
 	}
-	if _, ok := s.bridgeTokens[token]; ok {
-		s.bridgeTokenLastSeen[token] = time.Now().Unix()
+	if _, ok := s.bridge.Tokens[token]; ok {
+		s.bridge.LastSeen[token] = time.Now().Unix()
 	}
-	s.configMutex.Unlock()
+	s.bridge.mu.Unlock()
 }
 
 func (s *Server) revokeBridgeToken(token string) bool {
@@ -478,22 +478,22 @@ func (s *Server) revokeBridgeToken(token string) bool {
 		return false
 	}
 
-	s.configMutex.Lock()
-	defer s.configMutex.Unlock()
-	if s.bridgeTokens == nil {
+	s.bridge.mu.Lock()
+	defer s.bridge.mu.Unlock()
+	if s.bridge.Tokens == nil {
 		return false
 	}
-	if _, ok := s.bridgeTokens[token]; !ok {
+	if _, ok := s.bridge.Tokens[token]; !ok {
 		return false
 	}
-	delete(s.bridgeTokens, token)
-	delete(s.bridgeTokenLastSeen, token)
+	delete(s.bridge.Tokens, token)
+	delete(s.bridge.LastSeen, token)
 
-	if s.bridgeCallbackNonces != nil {
+	if s.bridge.CallbackNonces != nil {
 		prefix := token + ":"
-		for k := range s.bridgeCallbackNonces {
+		for k := range s.bridge.CallbackNonces {
 			if strings.HasPrefix(k, prefix) {
-				delete(s.bridgeCallbackNonces, k)
+				delete(s.bridge.CallbackNonces, k)
 			}
 		}
 	}
@@ -660,20 +660,20 @@ func (s *Server) setBridgeLastError(message string) {
 	if s == nil {
 		return
 	}
-	s.configMutex.Lock()
-	s.bridgeLastErr = strings.TrimSpace(message)
-	s.bridgeLastAt = time.Now().Unix()
-	s.configMutex.Unlock()
+	s.bridge.mu.Lock()
+	s.bridge.LastErr = strings.TrimSpace(message)
+	s.bridge.LastAt = time.Now().Unix()
+	s.bridge.mu.Unlock()
 }
 
 func (s *Server) clearBridgeLastError() {
 	if s == nil {
 		return
 	}
-	s.configMutex.Lock()
-	s.bridgeLastErr = ""
-	s.bridgeLastAt = 0
-	s.configMutex.Unlock()
+	s.bridge.mu.Lock()
+	s.bridge.LastErr = ""
+	s.bridge.LastAt = 0
+	s.bridge.mu.Unlock()
 }
 
 func (s *Server) activeBridgeTokens() int {
@@ -682,16 +682,16 @@ func (s *Server) activeBridgeTokens() int {
 	}
 	now := time.Now().Unix()
 	count := 0
-	s.configMutex.Lock()
-	for token, expireAt := range s.bridgeTokens {
+	s.bridge.mu.Lock()
+	for token, expireAt := range s.bridge.Tokens {
 		if expireAt <= now {
-			delete(s.bridgeTokens, token)
-			delete(s.bridgeTokenLastSeen, token)
+			delete(s.bridge.Tokens, token)
+			delete(s.bridge.LastSeen, token)
 			continue
 		}
 		count++
 	}
-	s.configMutex.Unlock()
+	s.bridge.mu.Unlock()
 	return count
 }
 
@@ -702,20 +702,20 @@ func (s *Server) activeBridgeLiveTokens() int {
 	now := time.Now().Unix()
 	const liveWindowSeconds = 15
 	count := 0
-	s.configMutex.Lock()
-	for token, expireAt := range s.bridgeTokens {
+	s.bridge.mu.Lock()
+	for token, expireAt := range s.bridge.Tokens {
 		if expireAt <= now {
-			delete(s.bridgeTokens, token)
-			delete(s.bridgeTokenLastSeen, token)
+			delete(s.bridge.Tokens, token)
+			delete(s.bridge.LastSeen, token)
 			continue
 		}
-		lastSeen := s.bridgeTokenLastSeen[token]
+		lastSeen := s.bridge.LastSeen[token]
 		if lastSeen <= 0 || now-lastSeen > liveWindowSeconds {
 			continue
 		}
 		count++
 	}
-	s.configMutex.Unlock()
+	s.bridge.mu.Unlock()
 	return count
 }
 
@@ -738,23 +738,23 @@ func (s *Server) buildBridgeDiagnosticSnapshot() map[string]interface{} {
 	workers := 0
 	queueLen := 0
 	bridgeConnected := false
-	if s.bridgeService != nil {
-		inFlight = s.bridgeService.InFlight()
-		workers = s.bridgeService.WorkerCount()
-		queueLen = s.bridgeService.QueueLen()
+	if s.bridge.Service != nil {
+		inFlight = s.bridge.Service.InFlight()
+		workers = s.bridge.Service.WorkerCount()
+		queueLen = s.bridge.Service.QueueLen()
 		bridgeConnected = true
 	}
 	pending, waiters := 0, 0
-	if s.bridgeMock != nil {
-		pending, waiters = s.bridgeMock.Stats()
+	if s.bridge.Mock != nil {
+		pending, waiters = s.bridge.Mock.Stats()
 	}
 
 	ready := engine == "cdp" || (engine == "extension" && enabled && bridgeConnected)
 
-	s.configMutex.Lock()
-	lastErr := s.bridgeLastErr
-	lastAt := s.bridgeLastAt
-	s.configMutex.Unlock()
+	s.bridge.mu.Lock()
+	lastErr := s.bridge.LastErr
+	lastAt := s.bridge.LastAt
+	s.bridge.mu.Unlock()
 
 	return map[string]interface{}{
 		"engine":            engine,
@@ -772,5 +772,31 @@ func (s *Server) buildBridgeDiagnosticSnapshot() map[string]interface{} {
 		"worker_count":      workers,
 		"last_error":        lastErr,
 		"last_error_at":     lastAt,
+		"router_mode":       s.screenshotRouterMode(),
+		"router_cdp_healthy": s.screenshotRouterCDPHealthy(),
+		"router_ext_healthy": s.screenshotRouterExtHealthy(),
 	}
+}
+
+func (s *Server) screenshotRouterMode() string {
+	if s.screenshotRouter != nil {
+		return string(s.screenshotRouter.ActiveMode())
+	}
+	return ""
+}
+
+func (s *Server) screenshotRouterCDPHealthy() bool {
+	if s.screenshotRouter != nil {
+		cdp, _ := s.screenshotRouter.HealthStatus()
+		return cdp
+	}
+	return false
+}
+
+func (s *Server) screenshotRouterExtHealthy() bool {
+	if s.screenshotRouter != nil {
+		_, ext := s.screenshotRouter.HealthStatus()
+		return ext
+	}
+	return false
 }

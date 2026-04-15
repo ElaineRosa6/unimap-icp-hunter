@@ -265,6 +265,31 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	// Screenshot Router 指标
+	screenshotModeSwitchesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unimap_screenshot_mode_switches_total",
+			Help: "Total number of screenshot mode switches by from/to mode.",
+		},
+		[]string{"from", "to"},
+	)
+
+	screenshotCurrentMode = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "unimap_screenshot_current_mode",
+			Help: "Current active screenshot mode (1=cdp, 2=extension).",
+		},
+		[]string{"mode"},
+	)
+
+	screenshotHealthCheckTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unimap_screenshot_health_check_total",
+			Help: "Total health checks by mode and result.",
+		},
+		[]string{"mode", "result"},
+	)
 )
 
 func init() {
@@ -318,6 +343,11 @@ func init() {
 	prometheus.MustRegister(bridgeRetriesTotal)
 	prometheus.MustRegister(bridgeTimeoutsTotal)
 	prometheus.MustRegister(bridgeFallbackTotal)
+
+	// Screenshot Router 指标
+	prometheus.MustRegister(screenshotModeSwitchesTotal)
+	prometheus.MustRegister(screenshotCurrentMode)
+	prometheus.MustRegister(screenshotHealthCheckTotal)
 }
 
 // HTTP 指标函数
@@ -491,3 +521,24 @@ func IncBridgeFallback(reason string) {
 	}
 	bridgeFallbackTotal.WithLabelValues(reason).Inc()
 }
+
+// Screenshot Router 指标函数
+func IncScreenshotModeSwitch(from, to string) {
+	screenshotModeSwitchesTotal.WithLabelValues(from, to).Inc()
+	// Update current mode gauge
+	screenshotCurrentMode.WithLabelValues("cdp").Set(0)
+	screenshotCurrentMode.WithLabelValues("extension").Set(0)
+	screenshotCurrentMode.WithLabelValues(to).Set(1)
+}
+
+func IncScreenshotHealthCheck(mode string, healthy bool) {
+	if mode == "" {
+		mode = "unknown"
+	}
+	r := "unhealthy"
+	if healthy {
+		r = "healthy"
+	}
+	screenshotHealthCheckTotal.WithLabelValues(mode, r).Inc()
+}
+

@@ -276,7 +276,7 @@ func (s *Server) currentScreenshotEngine() string {
 
 func (s *Server) verifyEngineSession(ctx context.Context, engineMode, engine, query string) (bool, string, string, error) {
 	if engineMode == "extension" {
-		if s.bridgeService == nil {
+		if s.bridge.Service == nil {
 			return false, "", "extension_not_paired", fmt.Errorf("bridge_unavailable")
 		}
 		if s.screenshotMgr == nil {
@@ -288,7 +288,7 @@ func (s *Server) verifyEngineSession(ctx context.Context, engineMode, engine, qu
 			return false, "", "unsupported engine", fmt.Errorf("unsupported engine: %s", engine)
 		}
 
-		result, err := s.bridgeService.Submit(ctx, screenshot.BridgeTask{
+		result, err := s.bridge.Service.Submit(ctx, screenshot.BridgeTask{
 			RequestID:    fmt.Sprintf("verify_%s_%d", strings.ToLower(strings.TrimSpace(engine)), time.Now().UnixNano()),
 			URL:          searchURL,
 			BatchID:      "cookie_verify",
@@ -338,4 +338,146 @@ func hasCookies(cookies []config.Cookie) bool {
 		}
 	}
 	return false
+}
+
+// handleCookieLoginStatus returns per-engine login status for the UI.
+// GET /api/cookies/login-status?query=...
+// Detects: CDP connected, Extension paired, per-engine login wall detection.
+func (s *Server) handleCookieLoginStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		query = `protocol="http"`
+	}
+
+	// Detect CDP connection status
+	cdpConnected := s.screenshotMgr != nil && s.screenshotMgr.RemoteDebugURL() != ""
+
+	// Detect Extension pairing status (non-mock)
+	extPaired := s.bridge != nil && s.bridge.Service != nil
+
+	// Check per-engine login status
+	engines := []string{"fofa", "hunter", "zoomeye", "quake"}
+	results := make([]map[string]interface{}, 0, len(engines))
+
+	if cdpConnected {
+		// CDP connected → check each engine by opening its page in the same browser
+		for _, engine := range engines {
+			status, err := s.screenshotMgr.CheckEngineLoginStatus(r.Context(), engine, query)
+			item := map[string]interface{}{
+				"engine":     status.Engine,
+				"logged_in":  status.LoggedIn,
+				"reason":     status.Reason,
+				"title":      status.Title,
+				"login_url":  status.LoginURL,
+				"cdp_connected": cdpConnected,
+				"ext_paired": extPaired,
+			}
+			if status.Error != "" {
+				item["error"] = status.Error
+			}
+			if err != nil {
+				item["error"] = err.Error()
+			}
+			results = append(results, item)
+		}
+	} else if extPaired {
+		// Extension paired → use bridge to open each engine page
+		for _, engine := range engines {
+			searchURL := ""
+			if s.screenshotMgr != nil {
+				searchURL = s.screenshotMgr.BuildSearchEngineURL(engine, query)
+			}
+			loginURL := ""
+			if s.screenshotMgr != nil {
+				loginURL = s.screenshotMgr.EngineLoginURL(engine)
+			}
+
+			item := map[string]interface{}{
+				"engine":     engine,
+				"cdp_connected": cdpConnected,
+				"ext_paired": extPaired,
+				"login_url":  loginURL,
+			}
+
+			if searchURL != "" {
+				ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+				result, err := s.bridge.Service.Submit(ctx, screenshot.BridgeTask{
+					RequestID:    fmt.Sprintf("login_check_%s_%d", engine, time.Now().UnixNano()),
+					URL:          searchURL,
+					BatchID:      "login_status",
+					WaitStrategy: "load",
+				})
+				cancel()
+
+				if err != nil {
+					item["logged_in"] = false
+					item["reason"] = "bridge_failed"
+					item["error"] = err.Error()
+				} else if result.Success {
+					item["logged_in"] = true
+					item["reason"] = "browser_session"
+					item["title"] = result.ImagePath
+				} else {
+					errMsg := strings.TrimSpace(result.Error)
+					if errMsg == "" {
+						errMsg = strings.TrimSpace(result.ErrorCode)
+					}
+					item["logged_in"] = false
+					item["reason"] = "bridge_check_failed"
+					item["error"] = errMsg
+				}
+			} else {
+				item["logged_in"] = false
+				item["reason"] = "unsupported_engine"
+			}
+			results = append(results, item)
+		}
+	} else {
+		// No browser session → just check if cookies are configured
+		if s.config != nil {
+			s.configMutex.Lock()
+			for _, engine := range engines {
+				var cookieSet bool
+				loginURL := ""
+				if s.screenshotMgr != nil {
+					loginURL = s.screenshotMgr.EngineLoginURL(engine)
+				}
+				switch engine {
+				case "fofa":
+					cookieSet = hasCookies(s.config.Engines.Fofa.Cookies)
+				case "hunter":
+					cookieSet = hasCookies(s.config.Engines.Hunter.Cookies)
+				case "quake":
+					cookieSet = hasCookies(s.config.Engines.Quake.Cookies)
+				case "zoomeye":
+					cookieSet = hasCookies(s.config.Engines.Zoomeye.Cookies)
+				}
+				reason := "no_session"
+				if cookieSet {
+					reason = "cookie_configured"
+				}
+				results = append(results, map[string]interface{}{
+					"engine":     engine,
+					"logged_in":  false,
+					"reason":     reason,
+					"login_url":  loginURL,
+					"cdp_connected": cdpConnected,
+					"ext_paired": extPaired,
+				})
+			}
+			s.configMutex.Unlock()
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       true,
+		"cdp_connected": cdpConnected,
+		"ext_paired":    extPaired,
+		"engines":       results,
+	})
 }

@@ -15,13 +15,16 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/unimap-icp-hunter/project/internal/adapter"
+	"github.com/unimap-icp-hunter/project/internal/alerting"
 	"github.com/unimap-icp-hunter/project/internal/appversion"
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/distributed"
 	"github.com/unimap-icp-hunter/project/internal/logger"
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 	"github.com/unimap-icp-hunter/project/internal/model"
 	"github.com/unimap-icp-hunter/project/internal/proxypool"
 	"github.com/unimap-icp-hunter/project/internal/requestid"
+	"github.com/unimap-icp-hunter/project/internal/scheduler"
 	"github.com/unimap-icp-hunter/project/internal/screenshot"
 	"github.com/unimap-icp-hunter/project/internal/service"
 )
@@ -55,40 +58,34 @@ type ConnectionManager struct {
 
 // Server Web服务器
 type Server struct {
-	port                 int
-	httpServer           *http.Server
-	templates            *template.Template
-	service              *service.UnifiedService
-	queryApp             *service.QueryAppService
-	monitorApp           *service.MonitorAppService
-	tamperApp            *service.TamperAppService
-	screenshotApp        *service.ScreenshotAppService
-	orchestrator         *adapter.EngineOrchestrator
-	upgrader             websocket.Upgrader
-	connManager          *ConnectionManager
-	queryStatus          map[string]*QueryStatus
-	queryMutex           sync.RWMutex
-	configMutex          sync.Mutex
-	webRoot              string
-	staticVersion        string
-	screenshotMgr        *screenshot.Manager
-	config               *config.Config
-	configManager        *config.Manager
-	chromeCmd            *os.Process
-	chromeCmdMu          sync.Mutex
-	bridgeService        *screenshot.BridgeService
-	bridgeMock           *bridgeMockClient
-	bridgeTokens         map[string]int64
-	bridgeCallbackNonces map[string]int64
-	bridgeLastErr        string
-	bridgeLastAt         int64
-	bridgeTokenLastSeen  map[string]int64
-	proxyPool            *proxypool.Pool
-	nodeRegistry         *distributed.Registry
-	nodeTaskQueue        *distributed.TaskQueue
-	distributedEnabled   bool
-	shutdownCtx          context.Context
-	shutdownCancel       context.CancelFunc
+	port             int
+	httpServer       *http.Server
+	templates        *template.Template
+	service          *service.UnifiedService
+	queryApp         *service.QueryAppService
+	monitorApp       *service.MonitorAppService
+	tamperApp        *service.TamperAppService
+	screenshotApp    *service.ScreenshotAppService
+	orchestrator     *adapter.EngineOrchestrator
+	upgrader         websocket.Upgrader
+	connManager      *ConnectionManager
+	queryStatus      map[string]*QueryStatus
+	queryMutex       sync.RWMutex
+	configMutex      sync.Mutex
+	webRoot          string
+	staticVersion    string
+	screenshotMgr    *screenshot.Manager
+	screenshotRouter *screenshot.ScreenshotRouter
+	config           *config.Config
+	configManager    *config.Manager
+	chromeCmd        *os.Process
+	chromeCmdMu      sync.Mutex
+	bridge           *BridgeState
+	proxyPool        *proxypool.Pool
+	distributed      *DistributedState
+	scheduler        *scheduler.Scheduler
+	shutdownCtx      context.Context
+	shutdownCancel   context.CancelFunc
 }
 
 // NewServer 创建Web服务器
@@ -215,56 +212,172 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 
 	heartbeatTimeout := 30 * time.Second
 	maxReassign := 1
-	distributedEnabled := false
 	if cfg != nil {
 		heartbeatTimeout = time.Duration(cfg.Distributed.HeartbeatTimeoutSeconds) * time.Second
 		if heartbeatTimeout <= 0 {
 			heartbeatTimeout = 30 * time.Second
 		}
 		maxReassign = cfg.Distributed.MaxReassignAttempts
-		distributedEnabled = cfg.Distributed.Enabled
 	}
 
 	nodeRegistry := distributed.NewRegistry(heartbeatTimeout)
 	nodeTaskQueue := distributed.NewTaskQueue()
+	nodeRegistry.SetTaskQueue(nodeTaskQueue)
 	nodeTaskQueue.SetDefaultMaxReassign(maxReassign)
+
+	// 初始化分布式调度器
+	if cfg != nil && cfg.Distributed.Scheduler.Strategy != "" {
+		strategy := distributed.SchedulerStrategy(cfg.Distributed.Scheduler.Strategy)
+		scheduler := distributed.NewSchedulerFromStrategy(strategy)
+		nodeTaskQueue.SetScheduler(scheduler)
+	}
 
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 
-	srv := &Server{
-		port:                 port,
-		templates:            templates,
-		service:              unifiedSvc,
-		queryApp:             service.NewQueryAppService(unifiedSvc, orchestrator),
-		monitorApp:           service.NewMonitorAppService(proxyPool),
-		tamperApp:            service.NewTamperAppService("./hash_store"),
-		screenshotApp:        screenshotApp,
-		orchestrator:         orchestrator,
-		upgrader:             upgrader,
-		connManager:          &ConnectionManager{connections: make(map[string]*managedConn)},
-		queryStatus:          make(map[string]*QueryStatus),
-		webRoot:              webRoot,
-		staticVersion:        strconv.FormatInt(time.Now().Unix(), 10),
-		screenshotMgr:        screenshotMgr,
-		config:               cfg,
-		configManager:        cfgManager,
-		bridgeTokens:         make(map[string]int64),
-		bridgeTokenLastSeen:  make(map[string]int64),
-		bridgeCallbackNonces: make(map[string]int64),
-		proxyPool:            proxyPool,
-		nodeRegistry:         nodeRegistry,
-		nodeTaskQueue:        nodeTaskQueue,
-		distributedEnabled:   distributedEnabled,
-		shutdownCtx:          shutdownCtx,
-		shutdownCancel:       shutdownCancel,
+	// 初始化告警管理器（仅用于 tamperApp 构造参数）
+	alertManager := alerting.NewManager()
+
+	// 注册日志告警渠道
+	logChannel := alerting.NewLogChannel(true)
+	alertManager.RegisterChannel(logChannel)
+
+	// 注册 Webhook 告警渠道（从配置读取）
+	if cfg != nil && cfg.Alerting.Webhook.Enabled && cfg.Alerting.Webhook.URL != "" {
+		headers := make(map[string]string)
+		if cfg.Alerting.Webhook.AuthToken != "" {
+			headers["Authorization"] = "Bearer " + cfg.Alerting.Webhook.AuthToken
+		}
+		webhookChannel := alerting.NewWebhookChannel(cfg.Alerting.Webhook.URL, headers, true)
+		alertManager.RegisterChannel(webhookChannel)
 	}
 
-	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Screenshot.Engine), "extension") {
+	srv := &Server{
+		port:        port,
+		templates:   templates,
+		service:     unifiedSvc,
+		queryApp:    service.NewQueryAppService(unifiedSvc, orchestrator),
+		monitorApp:  service.NewMonitorAppService(proxyPool),
+		tamperApp:   service.NewTamperAppService("./hash_store", alertManager),
+		screenshotApp: screenshotApp,
+		orchestrator: orchestrator,
+		upgrader:    upgrader,
+		connManager: &ConnectionManager{connections: make(map[string]*managedConn)},
+		queryStatus: make(map[string]*QueryStatus),
+		webRoot:     webRoot,
+		staticVersion: strconv.FormatInt(time.Now().Unix(), 10),
+		screenshotMgr: screenshotMgr,
+		config:      cfg,
+		configManager: cfgManager,
+		bridge: &BridgeState{
+			Tokens:         make(map[string]int64),
+			LastSeen:       make(map[string]int64),
+			CallbackNonces: make(map[string]int64),
+		},
+		proxyPool: proxyPool,
+		distributed: &DistributedState{
+			NodeRegistry:  nodeRegistry,
+			NodeTaskQueue: nodeTaskQueue,
+		},
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
+	}
+
+	// 初始化定时任务调度器
+	maxHistory := 500
+	if cfg != nil && cfg.Scheduler.MaxHistory > 0 {
+		maxHistory = cfg.Scheduler.MaxHistory
+	}
+	storePath := "./data/scheduler_tasks.json"
+	historyPath := "./data/scheduler_history.json"
+	sched := scheduler.NewScheduler(storePath, historyPath, maxHistory)
+
+	// 注册8种任务处理器
+	sched.RegisterHandler(scheduler.NewQueryRunner(srv.queryApp))
+	sched.RegisterHandler(scheduler.NewSearchScreenshotRunner(screenshotApp, screenshotMgr))
+	sched.RegisterHandler(scheduler.NewBatchScreenshotRunner(screenshotApp, screenshotMgr))
+	sched.RegisterHandler(scheduler.NewTamperCheckRunner(srv.tamperApp, nil))
+	sched.RegisterHandler(scheduler.NewURLReachabilityRunner(srv.monitorApp))
+	sched.RegisterHandler(scheduler.NewCookieVerifyRunner(screenshotApp, screenshotMgr))
+	sched.RegisterHandler(scheduler.NewLoginStatusCheckRunner(screenshotMgr))
+	sched.RegisterHandler(scheduler.NewDistributedSubmitRunner(nodeTaskQueue))
+
+	// 加载持久化的任务
+	if err := sched.Load(); err != nil {
+		logger.Warnf("Failed to load scheduled tasks: %v", err)
+	}
+
+	srv.scheduler = sched
+
+	// 截图模式初始化
+	screenshotMode := "cdp"
+	if cfg != nil {
+		screenshotMode = strings.ToLower(strings.TrimSpace(cfg.Screenshot.Mode))
+		if screenshotMode == "" {
+			screenshotMode = "cdp"
+		}
+	}
+
+	if screenshotMode == "auto" {
+		// 双模式高可用：确保 CDP provider 存在
+		cdpProvider := screenshotProvider
+		if cdpProvider == nil && screenshotMgr != nil {
+			cdpProvider = screenshot.NewCDPProvider(screenshotMgr)
+		}
+
+		// 始终创建 BridgeService
+		extMaxConcurrency := 5
+		extTaskTimeout := 30
+		if cfg != nil {
+			extMaxConcurrency = cfg.Screenshot.Extension.MaxConcurrency
+			extTaskTimeout = cfg.Screenshot.Extension.TaskTimeoutSeconds
+		}
+		mockClient := newBridgeMockClient()
+		bridgeSvc := screenshot.NewBridgeService(mockClient, extMaxConcurrency, time.Duration(extTaskTimeout)*time.Second)
+		bridgeSvc.Start(shutdownCtx)
+		srv.bridge.Mock = mockClient
+		srv.bridge.Service = bridgeSvc
+		screenshotApp.SetBridgeService(bridgeSvc)
+
+		// 创建 ScreenshotRouter
+		fallback := true
+		priority := screenshot.ScreenshotMode("cdp")
+		if cfg != nil {
+			if cfg.Screenshot.Fallback != nil {
+				fallback = *cfg.Screenshot.Fallback
+			}
+			priority = screenshot.ScreenshotMode(strings.ToLower(strings.TrimSpace(cfg.Screenshot.Priority)))
+			if priority == "" {
+				priority = screenshot.ModeCDP
+			}
+		}
+
+		routerCfg := screenshot.RouterConfig{
+			Priority:      priority,
+			Fallback:      fallback,
+			ProbeInterval: 30 * time.Second,
+			ProbeTimeout:  5 * time.Second,
+		}
+
+		router := screenshot.NewScreenshotRouter(routerCfg, cdpProvider, bridgeSvc, screenshotMgr)
+		router.SetMetricsHooks(
+			func(from, to screenshot.ScreenshotMode) {
+				metrics.IncScreenshotModeSwitch(string(from), string(to))
+			},
+			func(mode string, healthy bool) {
+				metrics.IncScreenshotHealthCheck(mode, healthy)
+			},
+		)
+		router.Start(shutdownCtx)
+		srv.screenshotRouter = router
+
+		logger.Infof("Screenshot router initialized: mode=auto, priority=%s, fallback=%v", priority, fallback)
+	} else if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Screenshot.Engine), "extension") {
+		// 传统 extension 单模式
 		mockClient := newBridgeMockClient()
 		bridgeSvc := screenshot.NewBridgeService(mockClient, cfg.Screenshot.Extension.MaxConcurrency, time.Duration(cfg.Screenshot.Extension.TaskTimeoutSeconds)*time.Second)
 		bridgeSvc.Start(context.Background())
-		srv.bridgeMock = mockClient
-		srv.bridgeService = bridgeSvc
+		srv.bridge.Mock = mockClient
+		srv.bridge.Service = bridgeSvc
 		screenshotApp.SetBridgeService(bridgeSvc)
 	}
 
@@ -398,33 +511,41 @@ func (s *Server) Start() error {
 	handler = requestIDMiddleware(handler)
 	handler = requestSizeLimitMiddleware(maxBodyBytes)(handler)
 	handler = corsMiddleware(allowedOrigins, allowedMethods, allowedHeaders, exposedHeaders, allowCredentials, maxAge)(handler)
+
+	// Auth middleware (only when enabled and admin token is configured)
+	if s.config != nil && s.config.Web.Auth.Enabled && s.config.Web.Auth.AdminToken != "" {
+		handler = s.adminAuthMiddleware()(handler)
+		logger.Infof("Web auth enabled: admin token authentication active")
+	}
+
 	handler = metricsMiddleware(handler)
+	handler = auditMiddleware(handler)
 
 	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isWebSocket := strings.Contains(r.Header.Get("Connection"), "Upgrade") &&
 			strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-		
+
 		if isWebSocket && r.URL.Path == "/api/ws" {
 			s.handleWebSocket(w, r)
 			return
 		}
-		
+
 		isBridgeAPI := strings.HasPrefix(r.URL.Path, "/api/screenshot/bridge/")
 		if isBridgeAPI {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		
+
 		handler.ServeHTTP(w, r)
 	})
 
-	addr := fmt.Sprintf(":%d", s.port)
+	addr := fmt.Sprintf("%s:%d", s.bindAddr(), s.port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: rootHandler,
 	}
 
-	logger.Infof("Web server started at http://localhost%s", addr)
+	logger.Infof("Web server started at http://%s:%d", s.bindAddr(), s.port)
 	logger.Infof("Registered %d routes", len(router.GetRoutes()))
 	logger.Infof("Web security config loaded: cors_origins=%d rate_limit_enabled=%t max_body_bytes=%d",
 		len(allowedOrigins), rateLimitEnabled, maxBodyBytes)
@@ -433,7 +554,11 @@ func (s *Server) Start() error {
 
 func allowedOriginsFromConfig(cfg *config.Config) []string {
 	if cfg == nil || len(cfg.Web.CORS.AllowedOrigins) == 0 {
-		return []string{"http://localhost:8448", "http://127.0.0.1:8448"}
+		port := 8448
+		if cfg != nil && cfg.Web.Port != 0 {
+			port = cfg.Web.Port
+		}
+		return []string{fmt.Sprintf("http://localhost:%d", port), fmt.Sprintf("http://127.0.0.1:%d", port)}
 	}
 	origins := make([]string, 0, len(cfg.Web.CORS.AllowedOrigins))
 	for _, origin := range cfg.Web.CORS.AllowedOrigins {
@@ -444,7 +569,11 @@ func allowedOriginsFromConfig(cfg *config.Config) []string {
 		origins = append(origins, origin)
 	}
 	if len(origins) == 0 {
-		return []string{"http://localhost:8448", "http://127.0.0.1:8448"}
+		port := 8448
+		if cfg != nil && cfg.Web.Port != 0 {
+			port = cfg.Web.Port
+		}
+		return []string{fmt.Sprintf("http://localhost:%d", port), fmt.Sprintf("http://127.0.0.1:%d", port)}
 	}
 	return origins
 }
@@ -462,8 +591,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.shutdownCancel()
 	}
 
+	// 停止分布式组件
+	if s.distributed != nil && s.distributed.NodeRegistry != nil {
+		s.distributed.NodeRegistry.Stop()
+	}
+	if s.distributed != nil && s.distributed.NodeTaskQueue != nil {
+		s.distributed.NodeTaskQueue.Stop()
+	}
+
+	// 停止定时任务调度器
+	if s.scheduler != nil {
+		s.scheduler.Stop()
+	}
+
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("web server shutdown error: %w", err)
+	}
+
+	// 停止截图Router（停止健康探测goroutine）
+	if s.screenshotRouter != nil {
+		s.screenshotRouter.Stop()
 	}
 
 	// 关闭Chrome进程
@@ -494,6 +641,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	logger.Info("Web server shutdown completed")
 	return nil
+}
+
+// bindAddr returns the configured bind address, defaulting to "0.0.0.0".
+func (s *Server) bindAddr() string {
+	if s.config != nil && s.config.Web.BindAddress != "" {
+		return s.config.Web.BindAddress
+	}
+	return "0.0.0.0"
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -2,11 +2,14 @@ package tamper
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,8 +20,10 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp"
+	"github.com/unimap-icp-hunter/project/internal/alerting"
 	"github.com/unimap-icp-hunter/project/internal/logger"
-	"github.com/unimap-icp-hunter/project/internal/util/workerpool"
+	"github.com/unimap-icp-hunter/project/internal/utils"
+	"github.com/unimap-icp-hunter/project/internal/utils/workerpool"
 )
 
 const (
@@ -42,8 +47,11 @@ const (
 	SegmentForms       = "forms"
 	SegmentFullContent = "full_content"
 
-	DetectionModeRelaxed = "relaxed"
-	DetectionModeStrict  = "strict"
+	DetectionModeRelaxed  = "relaxed"
+	DetectionModeStrict   = "strict"
+	DetectionModeSecurity = "security"
+	DetectionModeBalanced = "balanced"
+	DetectionModePrecise  = "precise"
 
 	PerformanceModeFast          = "fast"
 	PerformanceModeBalanced      = "balanced"
@@ -77,6 +85,108 @@ var (
 	reCSRFToken      = regexp.MustCompile(`(?i)csrf[^"]*_token["']?\s*[:=]\s*["'][^"']*["']`)
 )
 
+var (
+	maliciousScriptKeywords = []string{
+		"eval(",
+		"document.write(",
+		"Function(",
+		"atob(",
+		"btoa(",
+		"unescape(",
+		"decodeURIComponent(",
+		"String.fromCharCode",
+		"crypto",
+		"miner",
+		"coin-hive",
+		"coinhive",
+		"cryptonight",
+	}
+
+	suspiciousDomainKeywords = []string{
+		"xxx",
+		"porn",
+		"sex",
+		"adult",
+		"casino",
+		"gambling",
+		"bet",
+		"lottery",
+		"crypto",
+		"bitcoin",
+		"mining",
+		"coin-hive",
+		"coinhive",
+		"cryptonight",
+	}
+
+	suspiciousPathKeywords = []string{
+		"shell",
+		"backdoor",
+		"webshell",
+		"hacked",
+		"deface",
+		"phishing",
+		"fake",
+		"login",
+		"admin",
+	}
+
+	hiddenIframePattern = regexp.MustCompile(`(?i)<iframe[^>]*style\s*=\s*["'][^"']*(display\s*:\s*none|visibility\s*:\s*hidden|width\s*:\s*0|height\s*:\s*0)[^"']*["']`)
+
+	// 危险的事件处理器模式
+	dangerousEventPattern = regexp.MustCompile(`(?i)on(?:error|load|mouseover|click|keyup|keydown|submit)\s*=\s*["'][^"']*(?:eval\(|document\.write\(|Function\(|atob\(|btoa\(|unescape\(|decodeURIComponent\(|String\.fromCharCode\(|crypto|miner|coin-hive|coinhive|cryptonight)[^"']*["']`)
+)
+
+func detectMaliciousContent(html string) []string {
+	var flags []string
+	htmlLower := strings.ToLower(html)
+
+	// 检测恶意脚本关键词
+	for _, keyword := range maliciousScriptKeywords {
+		if strings.Contains(htmlLower, strings.ToLower(keyword)) {
+			flags = append(flags, fmt.Sprintf("suspicious_script: %s", keyword))
+		}
+	}
+
+	// 检测可疑域名关键词（需要多个关键词同时出现才标记）
+	domainMatches := 0
+	for _, keyword := range suspiciousDomainKeywords {
+		if strings.Contains(htmlLower, strings.ToLower(keyword)) {
+			domainMatches++
+			// 只有当多个域名关键词同时出现时才标记
+			if domainMatches >= 2 {
+				flags = append(flags, fmt.Sprintf("suspicious_domain_keywords: multiple matches"))
+				break
+			}
+		}
+	}
+
+	// 检测可疑路径关键词（需要多个关键词同时出现才标记）
+	pathMatches := 0
+	for _, keyword := range suspiciousPathKeywords {
+		if strings.Contains(htmlLower, strings.ToLower(keyword)) {
+			pathMatches++
+			// 只有当多个路径关键词同时出现时才标记
+			if pathMatches >= 2 {
+				flags = append(flags, fmt.Sprintf("suspicious_path_keywords: multiple matches"))
+				break
+			}
+		}
+	}
+
+	// 检测隐藏的iframe（这是一个强信号）
+	if hiddenIframePattern.MatchString(html) {
+		flags = append(flags, "hidden_iframe_detected")
+	}
+
+	// 检测危险的事件处理器（包含恶意代码的事件）
+	if dangerousEventPattern.MatchString(html) {
+		flags = append(flags, "dangerous_event_handler")
+	}
+
+	return flags
+}
+
 type SegmentHash struct {
 	Name     string `json:"name"`
 	Hash     string `json:"hash"`
@@ -89,10 +199,12 @@ type PageHashResult struct {
 	URL           string        `json:"url"`
 	Title         string        `json:"title"`
 	FullHash      string        `json:"full_hash"`
+	SimpleMD5Hash string        `json:"simple_md5_hash"`
 	SegmentHashes []SegmentHash `json:"segment_hashes"`
 	Timestamp     int64         `json:"timestamp"`
 	HTMLLength    int           `json:"html_length"`
 	Status        string        `json:"status"`
+	RawHTML       string        `json:"-"` // 不序列化到JSON，仅用于内存检测
 }
 
 type TamperCheckResult struct {
@@ -100,11 +212,12 @@ type TamperCheckResult struct {
 	CurrentHash      *PageHashResult `json:"current_hash"`
 	BaselineHash     *PageHashResult `json:"baseline_hash,omitempty"`
 	Tampered         bool            `json:"tampered"`
-	Status           string          `json:"status"` // no_baseline | unreachable | tampered | normal
+	Status           string          `json:"status"` // no_baseline | unreachable | tampered | normal | suspicious
 	ErrorType        string          `json:"error_type,omitempty"`
 	ErrorMessage     string          `json:"error_message,omitempty"`
 	TamperedSegments []string        `json:"tampered_segments,omitempty"`
 	Changes          []SegmentChange `json:"changes,omitempty"`
+	SuspiciousFlags  []string        `json:"suspicious_flags,omitempty"` // 可疑内容标记
 	Timestamp        int64           `json:"timestamp"`
 }
 
@@ -132,6 +245,7 @@ type Detector struct {
 	allocCancel     context.CancelFunc
 	detectionMode   string
 	performanceMode string
+	alertManager    *alerting.Manager
 	cache           map[string]*cacheEntry
 	cacheMu         sync.RWMutex
 	mu              sync.Mutex
@@ -141,6 +255,7 @@ type DetectorConfig struct {
 	BaseDir         string
 	DetectionMode   string
 	PerformanceMode string
+	AlertManager    *alerting.Manager
 }
 
 func NewHashStorage(baseDir string) *HashStorage {
@@ -161,7 +276,7 @@ func (s *HashStorage) SaveBaseline(url string, result *PageHashResult) error {
 	safeFilename := sanitizeFilenameForStorage(url)
 	filePath := filepath.Join(s.baseDir, safeFilename+".json")
 
-	data, err := json.MarshalIndent(result, "", "  ")
+	data, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("failed to marshal hash result: %w", err)
 	}
@@ -253,16 +368,25 @@ func NewDetector(cfg DetectorConfig) *Detector {
 		storage:         storage,
 		detectionMode:   normalizeDetectionMode(cfg.DetectionMode),
 		performanceMode: normalizePerformanceMode(cfg.PerformanceMode),
+		alertManager:    cfg.AlertManager,
 		cache:           make(map[string]*cacheEntry),
 	}
 }
 
 func normalizeDetectionMode(raw string) string {
 	mode := strings.ToLower(strings.TrimSpace(raw))
-	if mode == DetectionModeStrict {
+	switch mode {
+	case DetectionModeStrict:
 		return DetectionModeStrict
+	case DetectionModeSecurity:
+		return DetectionModeSecurity
+	case DetectionModeBalanced:
+		return DetectionModeBalanced
+	case DetectionModePrecise:
+		return DetectionModePrecise
+	default:
+		return DetectionModeRelaxed
 	}
-	return DetectionModeRelaxed
 }
 
 func normalizePerformanceMode(raw string) string {
@@ -301,6 +425,20 @@ func (d *Detector) ComputePageHash(ctx context.Context, targetURL string) (*Page
 
 	var html string
 	var title string
+
+	if d.performanceMode == PerformanceModeFast {
+		result, err := d.computeHashWithHTTP(ctx, targetURL)
+		if err == nil {
+			d.cacheMu.Lock()
+			d.cache[cacheKey] = &cacheEntry{
+				result:    result,
+				timestamp: time.Now(),
+			}
+			d.cacheMu.Unlock()
+			return result, nil
+		}
+		logger.CtxWarnf(ctx, "Fast mode failed, falling back to chromedp: %v", err)
+	}
 
 	runCtx := ctx
 	runCancel := func() {}
@@ -341,6 +479,51 @@ func (d *Detector) ComputePageHash(ctx context.Context, targetURL string) (*Page
 	return result, err
 }
 
+func (d *Detector) computeHashWithHTTP(ctx context.Context, targetURL string) (*PageHashResult, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	client := utils.DefaultHTTPClient()
+
+	req, err := http.NewRequestWithContext(timeoutCtx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch page: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	html := string(bodyBytes)
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse HTML: %w", err)
+	}
+
+	title := doc.Find("title").Text()
+	if title == "" {
+		title = targetURL
+	}
+
+	return d.ComputeHashFromHTML(targetURL, title, html)
+}
+
 func (d *Detector) ComputeHashFromHTML(url, title, html string) (*PageHashResult, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
@@ -353,14 +536,33 @@ func (d *Detector) ComputeHashFromHTML(url, title, html string) (*PageHashResult
 		Timestamp:  time.Now().Unix(),
 		HTMLLength: len(html),
 		Status:     "success",
+		RawHTML:    html,
 	}
 
 	segmentHashes := d.computeSegmentHashes(doc, html)
 	result.SegmentHashes = segmentHashes
 
 	result.FullHash = d.computeFullHash(segmentHashes)
+	result.SimpleMD5Hash = computeSimpleMD5Hash(html)
 
 	return result, nil
+}
+
+func computeSimpleMD5Hash(html string) string {
+	headerEnd := strings.Index(strings.ToLower(html), "</head>")
+	if headerEnd == -1 {
+		headerEnd = strings.Index(html, "<body")
+		if headerEnd == -1 {
+			headerEnd = len(html) / 2
+		}
+	}
+
+	headerPart := html[:headerEnd]
+	bodyPart := html[headerEnd:]
+
+	combined := headerPart + "\r\n\r\n" + bodyPart
+	hash := md5.Sum([]byte(combined))
+	return hex.EncodeToString(hash[:])
 }
 
 type segmentTask struct {
@@ -792,19 +994,105 @@ func (d *Detector) CheckTampering(ctx context.Context, url string) (*TamperCheck
 		Timestamp:    time.Now().Unix(),
 	}
 
-	// 确定检测类型：对高动态片段降权，避免将常规动态内容误判为篡改。
 	checkType := "normal"
-	tamperedSegments, changes := d.findChangedSegments(currentHash, baseline)
-	result.TamperedSegments = tamperedSegments
-	result.Changes = changes
 
-	if len(changes) > 0 {
-		if d.isMeaningfulTamper(changes) {
+	suspiciousFlags := detectMaliciousContent(currentHash.RawHTML)
+	result.SuspiciousFlags = suspiciousFlags
+
+	// 根据检测模式决定是否基于恶意内容判定篡改
+	if len(suspiciousFlags) > 0 {
+		// 根据检测模式确定是否判定为篡改
+		shouldMarkAsTampered := false
+
+		switch d.detectionMode {
+		case DetectionModeStrict:
+			// 严格模式：只要有可疑内容就标记为篡改
+			shouldMarkAsTampered = true
+		case DetectionModeSecurity:
+			// 安全模式：需要多个可疑特征或强信号才标记为篡改
+			strongSignals := 0
+			for _, flag := range suspiciousFlags {
+				if flag == "hidden_iframe_detected" || flag == "dangerous_event_handler" {
+					strongSignals++
+				}
+			}
+			// 强信号或者多个可疑特征
+			shouldMarkAsTampered = strongSignals > 0 || len(suspiciousFlags) >= 2
+		case DetectionModePrecise:
+			// 精确模式：只在有强信号时才标记为篡改
+			for _, flag := range suspiciousFlags {
+				if flag == "hidden_iframe_detected" || flag == "dangerous_event_handler" {
+					shouldMarkAsTampered = true
+					break
+				}
+			}
+		case DetectionModeBalanced:
+			// 平衡模式：需要多个可疑特征才标记为篡改
+			shouldMarkAsTampered = len(suspiciousFlags) >= 2
+		default: // DetectionModeRelaxed
+			// 宽松模式：只在有强信号时才标记为篡改
+			for _, flag := range suspiciousFlags {
+				if flag == "hidden_iframe_detected" || flag == "dangerous_event_handler" {
+					shouldMarkAsTampered = true
+					break
+				}
+			}
+		}
+
+		if shouldMarkAsTampered {
 			result.Tampered = true
-			result.Status = "tampered"
-			checkType = "tampered"
-		} else {
-			checkType = "normal_dynamic"
+			result.Status = "suspicious"
+			result.TamperedSegments = []string{"malicious_content"}
+			checkType = "suspicious"
+
+			// 触发恶意内容告警
+			if d.alertManager != nil {
+				details := map[string]interface{}{
+					"flags":          suspiciousFlags,
+					"detection_mode": d.detectionMode,
+				}
+				d.alertManager.SendCritical(alerting.AlertTypeTamper,
+					"检测到恶意内容",
+					fmt.Sprintf("URL %s 检测到恶意内容", url),
+					details,
+					"tamper_detector",
+					url)
+			}
+		}
+	} else {
+		simpleMD5Changed := false
+		if baseline.SimpleMD5Hash != "" && currentHash.SimpleMD5Hash != "" {
+			simpleMD5Changed = baseline.SimpleMD5Hash != currentHash.SimpleMD5Hash
+		}
+
+		tamperedSegments, changes := d.findChangedSegments(currentHash, baseline)
+		result.TamperedSegments = tamperedSegments
+		result.Changes = changes
+
+		if simpleMD5Changed || len(changes) > 0 {
+			if simpleMD5Changed || d.isMeaningfulTamper(changes) {
+				result.Tampered = true
+				result.Status = "tampered"
+				checkType = "tampered"
+
+				// 触发篡改告警
+				if d.alertManager != nil {
+					details := map[string]interface{}{
+						"segments":           tamperedSegments,
+						"changes":            len(changes),
+						"detection_mode":     d.detectionMode,
+						"simple_md5_changed": simpleMD5Changed,
+					}
+					d.alertManager.SendWarning(alerting.AlertTypeTamper,
+						"检测到网页篡改",
+						fmt.Sprintf("URL %s 检测到 %d 个分段被修改", url, len(tamperedSegments)),
+						details,
+						"tamper_detector",
+						url)
+				}
+			} else {
+				checkType = "normal_dynamic"
+			}
 		}
 	}
 
@@ -897,29 +1185,75 @@ func (d *Detector) isMeaningfulTamper(changes []SegmentChange) bool {
 		return false
 	}
 
-	if d.detectionMode == DetectionModeStrict {
+	switch d.detectionMode {
+	case DetectionModeStrict:
 		return true
+
+	case DetectionModeSecurity:
+		// 安全模式：只关注安全相关的篡改
+		for _, change := range changes {
+			if change.Segment == SegmentScripts ||
+				change.Segment == SegmentForms ||
+				change.Segment == SegmentHead {
+				return true
+			}
+		}
+		return false
+
+	case DetectionModePrecise:
+		// 精确模式：只当核心内容发生变化时才判定
+		criticalChanges := 0
+		for _, change := range changes {
+			if isCriticalStableSegment(change.Segment) {
+				criticalChanges++
+			}
+		}
+		return criticalChanges > 0
+
+	case DetectionModeBalanced:
+		// 平衡模式：稳定分段变化或核心分段变化
+		stableModifiedCount := 0
+		criticalChanges := 0
+
+		for _, change := range changes {
+			if !d.isStableSegment(change.Segment) {
+				continue
+			}
+
+			if change.ChangeType == "added" || change.ChangeType == "removed" {
+				return true
+			}
+
+			stableModifiedCount++
+			if isCriticalStableSegment(change.Segment) {
+				criticalChanges++
+			}
+		}
+
+		// 平衡模式：单个核心分段变化或多个稳定分段变化
+		return criticalChanges > 0 || stableModifiedCount >= 2
+
+	default: // DetectionModeRelaxed
+		// 宽松模式：仅当稳定分段出现新增/删除才判定为结构性变化
+		stableModifiedCount := 0
+		for _, change := range changes {
+			if !d.isStableSegment(change.Segment) {
+				continue
+			}
+
+			if change.ChangeType == "added" || change.ChangeType == "removed" {
+				return true
+			}
+
+			stableModifiedCount++
+			if isCriticalStableSegment(change.Segment) {
+				return true
+			}
+		}
+
+		// 宽松模式下，单个非核心稳定分段变化通常属于页面动态内容，不立即判为篡改
+		return stableModifiedCount >= 2
 	}
-
-	stableModifiedCount := 0
-	for _, change := range changes {
-		if !d.isStableSegment(change.Segment) {
-			continue
-		}
-
-		// 宽松模式下，仅当稳定分段出现新增/删除才判定为结构性变化。
-		if change.ChangeType == "added" || change.ChangeType == "removed" {
-			return true
-		}
-
-		stableModifiedCount++
-		if isCriticalStableSegment(change.Segment) {
-			return true
-		}
-	}
-
-	// 宽松模式下，单个非核心稳定分段变化通常属于页面动态内容，不立即判为篡改。
-	return stableModifiedCount >= 2
 }
 
 func isCriticalStableSegment(segment string) bool {
@@ -1237,7 +1571,7 @@ func (s *HashStorage) SaveCheckRecord(url string, record *CheckRecord) error {
 	filename := fmt.Sprintf("%s_%s.json", record.ID, record.CheckType)
 	filePath := filepath.Join(recordsDir, filename)
 
-	data, err := json.MarshalIndent(record, "", "  ")
+	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to marshal check record: %w", err)
 	}

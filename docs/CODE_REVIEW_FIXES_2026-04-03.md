@@ -2,7 +2,7 @@
 
 **日期**: 2026-04-03
 **检查范围**: 全项目代码审查
-**修复状态**: 8项已修复，2项待处理
+**修复状态**: 9项已修复，1项待处理
 **Git提交**:
 - `8ddba48` fix: resolve extension screenshot permission error, memory leak, and goroutine leaks
 - `5bc3982` feat(distributed): implement snapshot persistence, scheduler, and node cleanup
@@ -229,12 +229,16 @@ if err := s.templates.ExecuteTemplate(w, "index.html", data); err != nil {
 
 ---
 
-### 2. SSRF风险 (中优先级) ⏳ 待修复
+### 2. SSRF风险 (中优先级) ✅ 已修复
 
 **位置**: `web/screenshot_handlers.go`
 **问题**: 截图端点接受任意URL进行截图，无白名单验证，可被用于探测内网服务
 **影响**: 安全风险，可被利用进行内网端口扫描、访问内部服务
-**建议修复**: 添加URL验证，禁止内网地址
+**修复结果**: 已补充内网/回环/链路本地地址拦截，并在多个截图入口统一复用校验逻辑。
+
+**验证证据**:
+- `isPrivateOrInternalIP()` 已用于目标 URL、批量截图、任务派发等入口
+- 私网、回环、链路本地地址会被拒绝
 
 ```go
 // 建议添加URL验证函数

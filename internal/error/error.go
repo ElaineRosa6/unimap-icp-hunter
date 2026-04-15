@@ -1,4 +1,4 @@
-package error
+package unierror
 
 import (
 	"fmt"
@@ -22,6 +22,56 @@ const (
 	ErrorTypeBusiness ErrorType = "business"
 	// ErrorTypeValidation 验证错误
 	ErrorTypeValidation ErrorType = "validation"
+)
+
+// 错误码定义
+const (
+	// 网络错误 (1000-1999)
+	ErrNetworkTimeout          = 1001
+	ErrNetworkConnection       = 1002
+	ErrNetworkDNSResolution    = 1003
+	ErrNetworkProxyFailure     = 1004
+	ErrNetworkSSLHandshake     = 1005
+	ErrNetworkTooManyRedirects = 1006
+
+	// API错误 (2000-2999)
+	ErrAPIUnauthorized   = 2001
+	ErrAPIForbidden      = 2002
+	ErrAPINotFound       = 2003
+	ErrAPIInternalServer = 2004
+	ErrAPIRateLimit      = 2005
+	ErrAPIBadRequest     = 2006
+	ErrAPITimeout        = 2007
+
+	// 配置错误 (3000-3999)
+	ErrConfigInvalid      = 3001
+	ErrConfigMissing      = 3002
+	ErrConfigParse        = 3003
+	ErrConfigValidation   = 3004
+	ErrConfigFileNotFound = 3005
+	ErrConfigPermission   = 3006
+
+	// 运行时错误 (4000-4999)
+	ErrRuntimeOutOfMemory       = 4001
+	ErrRuntimeDeadlock          = 4002
+	ErrRuntimePanic             = 4003
+	ErrRuntimeResourceExhausted = 4004
+	ErrRuntimeConcurrency       = 4005
+
+	// 业务逻辑错误 (5000-5999)
+	ErrBusinessAlreadyExists   = 5001
+	ErrBusinessNotFound        = 5002
+	ErrBusinessConflict        = 5003
+	ErrBusinessInvalidState    = 5004
+	ErrBusinessOperationFailed = 5005
+
+	// 验证错误 (6000-6999)
+	ErrValidationRequired = 6001
+	ErrValidationFormat   = 6002
+	ErrValidationRange    = 6003
+	ErrValidationUnique   = 6004
+	ErrValidationLength   = 6005
+	ErrValidationPattern  = 6006
 )
 
 // UnimapError 统一错误结构
@@ -57,10 +107,10 @@ func New(errType ErrorType, code int, message string, args ...interface{}) *Unim
 	}
 
 	return &UnimapError{
-		Type:    errType,
-		Code:    code,
-		Message: message,
-		Details: details,
+		Type:       errType,
+		Code:       code,
+		Message:    message,
+		Details:    details,
 		StackTrace: getStackTrace(),
 	}
 }
@@ -114,12 +164,64 @@ func Validation(code int, message string, args ...interface{}) *UnimapError {
 	return New(ErrorTypeValidation, code, message, args...)
 }
 
+// 便捷的错误创建函数（使用预定义错误码）
+
+// NetworkTimeout 创建网络超时错误
+func NetworkTimeout(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeNetwork, ErrNetworkTimeout, message, args...)
+}
+
+// NetworkConnection 创建网络连接错误
+func NetworkConnection(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeNetwork, ErrNetworkConnection, message, args...)
+}
+
+// APIUnauthorized 创建API未授权错误
+func APIUnauthorized(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeAPI, ErrAPIUnauthorized, message, args...)
+}
+
+// APIForbidden 创建API禁止访问错误
+func APIForbidden(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeAPI, ErrAPIForbidden, message, args...)
+}
+
+// APIRateLimit 创建API速率限制错误
+func APIRateLimit(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeAPI, ErrAPIRateLimit, message, args...)
+}
+
+// ConfigInvalid 创建配置无效错误
+func ConfigInvalid(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeConfig, ErrConfigInvalid, message, args...)
+}
+
+// ConfigMissing 创建配置缺失错误
+func ConfigMissing(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeConfig, ErrConfigMissing, message, args...)
+}
+
+// BusinessNotFound 创建业务实体未找到错误
+func BusinessNotFound(message string, args ...interface{}) *UnimapError {
+	return New(ErrorTypeBusiness, ErrBusinessNotFound, message, args...)
+}
+
+// ValidationRequired 创建验证必填错误
+func ValidationRequired(field string) *UnimapError {
+	return New(ErrorTypeValidation, ErrValidationRequired, "Field %s is required", field)
+}
+
+// ValidationFormat 创建验证格式错误
+func ValidationFormat(field string, format string) *UnimapError {
+	return New(ErrorTypeValidation, ErrValidationFormat, "Field %s must match format: %s", field, format)
+}
+
 // getStackTrace 获取堆栈信息
 func getStackTrace() string {
 	var buf [4096]byte
 	n := runtime.Stack(buf[:], false)
 	stack := string(buf[:n])
-	
+
 	// 过滤掉错误处理相关的堆栈帧
 	lines := strings.Split(stack, "\n")
 	var filtered []string
@@ -128,7 +230,7 @@ func getStackTrace() string {
 			filtered = append(filtered, line)
 		}
 	}
-	
+
 	return strings.Join(filtered, "\n")
 }
 

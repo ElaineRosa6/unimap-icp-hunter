@@ -52,11 +52,14 @@ func (s *ShutdownManager) RegisterHandler(handler ShutdownHandler) {
 // Start 启动信号监听
 func (s *ShutdownManager) Start() {
 	// 注册要监听的信号
-	signal.Notify(s.signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(s.signals, syscall.SIGINT, syscall.SIGTERM)
+	registerSIGHUP(s)
 
-	// 在 goroutine 中监听信号
 	go s.listen()
 }
+
+// registerSIGHUP registers SIGHUP on Unix systems (no-op on Windows).
+var registerSIGHUP = func(s *ShutdownManager) {}
 
 // listen 监听系统信号
 func (s *ShutdownManager) listen() {

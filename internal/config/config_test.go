@@ -247,3 +247,79 @@ func TestResolveEnvWithComplexValues(t *testing.T) {
 		assert.Equal(t, tc.expected, result, "Failed for input: %s", tc.input)
 	}
 }
+
+func TestClone_NilReceiver(t *testing.T) {
+	var c *Config
+	cloned := c.Clone()
+	assert.Nil(t, cloned)
+}
+
+func TestClone_DeepCopySlices(t *testing.T) {
+	mgr := NewManager("test.yaml")
+	var cfg Config
+	mgr.applyDefaults(&cfg)
+	cfg.Engines.Quake.Cookies = []Cookie{{Name: "session", Value: "abc", Domain: "example.com"}}
+	cfg.Web.CORS.AllowedOrigins = []string{"http://a.com", "http://b.com"}
+	cfg.Network.ProxyPool.Proxies = []string{"http://proxy1", "http://proxy2"}
+
+	cloned := cfg.Clone()
+
+	assert.Equal(t, cfg.Engines.Quake.Cookies, cloned.Engines.Quake.Cookies)
+	assert.Equal(t, cfg.Web.CORS.AllowedOrigins, cloned.Web.CORS.AllowedOrigins)
+	assert.Equal(t, cfg.Network.ProxyPool.Proxies, cloned.Network.ProxyPool.Proxies)
+
+	cloned.Engines.Quake.Cookies[0].Value = "modified"
+	cloned.Web.CORS.AllowedOrigins[0] = "http://hacked.com"
+	assert.NotEqual(t, cfg.Engines.Quake.Cookies[0].Value, cloned.Engines.Quake.Cookies[0].Value)
+	assert.NotEqual(t, cfg.Web.CORS.AllowedOrigins[0], cloned.Web.CORS.AllowedOrigins[0])
+}
+
+func TestClone_DeepCopyMaps(t *testing.T) {
+	mgr := NewManager("test.yaml")
+	var cfg Config
+	mgr.applyDefaults(&cfg)
+	cfg.Distributed.NodeAuthTokens = map[string]string{"node1": "token1", "node2": "token2"}
+	cfg.Cache.Engines = map[string]EngineCacheConfig{"quake": {Enabled: true, TTL: 600}}
+
+	cloned := cfg.Clone()
+
+	assert.Equal(t, cfg.Distributed.NodeAuthTokens, cloned.Distributed.NodeAuthTokens)
+	assert.Equal(t, cfg.Cache.Engines, cloned.Cache.Engines)
+
+	cloned.Distributed.NodeAuthTokens["node1"] = "hacked"
+	assert.NotEqual(t, cfg.Distributed.NodeAuthTokens["node1"], cloned.Distributed.NodeAuthTokens["node1"])
+}
+
+func TestClone_DeepCopyPointers(t *testing.T) {
+	mgr := NewManager("test.yaml")
+	var cfg Config
+	mgr.applyDefaults(&cfg)
+	fb := true
+	hl := false
+	cfg.Screenshot.Fallback = &fb
+	cfg.Screenshot.Headless = &hl
+
+	cloned := cfg.Clone()
+
+	assert.Equal(t, *cfg.Screenshot.Fallback, *cloned.Screenshot.Fallback)
+	assert.Equal(t, *cfg.Screenshot.Headless, *cloned.Screenshot.Headless)
+
+	fbClone := false
+	cloned.Screenshot.Fallback = &fbClone
+	assert.NotEqual(t, *cfg.Screenshot.Fallback, *cloned.Screenshot.Fallback)
+}
+
+func TestClone_NilVsEmptySlice(t *testing.T) {
+	// Use a raw Config (no defaults) to test nil slice preservation
+	var cfg Config
+	cfg.Network.ProxyPool.Proxies = nil
+
+	cloned := cfg.Clone()
+	assert.Nil(t, cloned.Network.ProxyPool.Proxies)
+
+	// Empty slice should stay empty
+	cfg.Network.ProxyPool.Proxies = []string{}
+	cloned2 := cfg.Clone()
+	assert.NotNil(t, cloned2.Network.ProxyPool.Proxies)
+	assert.Empty(t, cloned2.Network.ProxyPool.Proxies)
+}

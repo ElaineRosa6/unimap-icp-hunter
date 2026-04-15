@@ -43,8 +43,20 @@ func main() {
 	// 从服务中获取编排器
 	orchestrator := svc.GetOrchestrator()
 
+	// 从配置读取端口和绑定地址
+	port := 8448
+	bindAddr := "0.0.0.0"
+	if cfg != nil {
+		if cfg.Web.Port != 0 {
+			port = cfg.Web.Port
+		}
+		if cfg.Web.BindAddress != "" {
+			bindAddr = cfg.Web.BindAddress
+		}
+	}
+
 	// 创建Web服务器
-	server, err := web.NewServer(8448, svc, orchestrator, cfg, cfgManager)
+	server, err := web.NewServer(port, svc, orchestrator, cfg, cfgManager)
 	if err != nil {
 		logger.Errorf("Failed to initialize Web server: %v", err)
 		os.Exit(1)
@@ -69,7 +81,7 @@ func main() {
 
 	// 启动Web服务器（在goroutine中运行，不阻塞）
 	go func() {
-		fmt.Printf("Starting Web server %s on :8448...\n", appversion.Short())
+		fmt.Printf("Starting Web server %s on %s:%d...\n", appversion.Short(), bindAddr, port)
 		if err := server.Start(); err != nil {
 			logger.Errorf("Web server error: %v", err)
 			shutdownManager.Shutdown()
