@@ -9,6 +9,7 @@ output/
 /unimap-api
 /icp-hunter
 /unimap-gui
+/unimap-web
 
 # Configs with secrets
 configs/config.yaml
