@@ -107,6 +107,8 @@ func TestHandleImportCookieJSON_MissingParams(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/cookies/import/fofa", nil)
+	req.Host = "localhost:8448"
+	req.Header.Set("Origin", "http://localhost:8448")
 	w := httptest.NewRecorder()
 	s.handleImportCookieJSON(w, req)
 
@@ -125,6 +127,8 @@ func TestHandleImportCookieJSON_InvalidEngine(t *testing.T) {
 
 	form := "engine=unknown&cookie_json=%5B%7B%22name%22%3A%22token%22%2C%22value%22%3A%22abc%22%7D%5D"
 	req := httptest.NewRequest(http.MethodPost, "/api/cookies/import/unknown", bytes.NewBufferString(form))
+	req.Host = "localhost:8448"
+	req.Header.Set("Origin", "http://localhost:8448")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleImportCookieJSON(w, req)
@@ -145,6 +149,8 @@ func TestHandleImportCookieJSON_Success(t *testing.T) {
 	// Valid cookie JSON for fofa
 	form := "engine=fofa&cookie_json=%5B%7B%22name%22%3A%22token%22%2C%22value%22%3A%22abc123%22%2C%22domain%22%3A%22.fofa.info%22%7D%5D"
 	req := httptest.NewRequest(http.MethodPost, "/api/cookies/import/fofa", bytes.NewBufferString(form))
+	req.Host = "localhost:8448"
+	req.Header.Set("Origin", "http://localhost:8448")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleImportCookieJSON(w, req)
@@ -173,6 +179,8 @@ func TestHandleImportCookieJSON_ExtensionMode(t *testing.T) {
 
 	form := "engine=fofa&cookie_json=%5B%7B%22name%22%3A%22token%22%2C%22value%22%3A%22abc123%22%2C%22domain%22%3A%22.fofa.info%22%7D%5D"
 	req := httptest.NewRequest(http.MethodPost, "/api/cookies/import/fofa", bytes.NewBufferString(form))
+	req.Host = "localhost:8448"
+	req.Header.Set("Origin", "http://localhost:8448")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleImportCookieJSON(w, req)
@@ -193,6 +201,8 @@ func TestHandleSaveCookies_CDPMode(t *testing.T) {
 
 	form := "cookie_fofa=token=abc"
 	req := httptest.NewRequest(http.MethodPost, "/api/cookies", bytes.NewBufferString(form))
+	req.Host = "localhost:8448"
+	req.Header.Set("Origin", "http://localhost:8448")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleSaveCookies(w, req)
@@ -213,6 +223,8 @@ func TestHandleSaveCookies_ExtensionMode(t *testing.T) {
 
 	form := "cookie_fofa=token=abc"
 	req := httptest.NewRequest(http.MethodPost, "/api/cookies", bytes.NewBufferString(form))
+	req.Host = "localhost:8448"
+	req.Header.Set("Origin", "http://localhost:8448")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleSaveCookies(w, req)

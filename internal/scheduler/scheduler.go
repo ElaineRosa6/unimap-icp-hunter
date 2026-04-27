@@ -2,15 +2,23 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
+	"net"
+	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+
+	"github.com/unimap-icp-hunter/project/internal/metrics"
 )
 
 // TaskType identifies the type of scheduled task.
@@ -84,6 +92,108 @@ func TaskTypeLabel(t TaskType) string {
 	return string(t)
 }
 
+// DefaultTemplates returns a set of pre-defined task templates.
+func DefaultTemplates() []TaskTemplate {
+	return []TaskTemplate{
+		{
+			ID:          "tmpl_daily_tamper_check",
+			Name:        "每日篡改检测",
+			Description: "每天凌晨 2 点对所有重要 URL 进行篡改检测",
+			Type:        TaskTamperCheck,
+			CronExpr:    "0 0 2 * * *",
+			Payload:     map[string]interface{}{"mode": "full"},
+			TimeoutSec:  3600,
+			MaxRetries:  2,
+			Tags:        []string{"security", "daily"},
+		},
+		{
+			ID:          "tmpl_weekly_export",
+			Name:        "每周数据导出",
+			Description: "每周日午夜导出本周查询数据",
+			Type:        TaskExport,
+			CronExpr:    "0 0 0 * * 0",
+			Payload:     map[string]interface{}{"format": "json"},
+			TimeoutSec:  1800,
+			MaxRetries:  1,
+			Tags:        []string{"export", "weekly"},
+		},
+		{
+			ID:          "tmpl_hourly_quota_check",
+			Name:        "每小时配额检查",
+			Description: "每小时检查各引擎 API 配额状态",
+			Type:        TaskQuotaMonitor,
+			CronExpr:    "0 0 * * * *",
+			Payload:     map[string]interface{}{"low_threshold": 10},
+			TimeoutSec:  300,
+			MaxRetries:  0,
+			Tags:        []string{"monitoring", "hourly"},
+		},
+		{
+			ID:          "tmpl_daily_screenshot_cleanup",
+			Name:        "每日截图清理",
+			Description: "每天凌晨 3 点清理 30 天前的截图",
+			Type:        TaskScreenshotCleanup,
+			CronExpr:    "0 0 3 * * *",
+			Payload:     map[string]interface{}{"max_age_days": 30},
+			TimeoutSec:  600,
+			MaxRetries:  1,
+			Tags:        []string{"cleanup", "daily"},
+		},
+		{
+			ID:          "tmpl_weekly_baseline_refresh",
+			Name:        "每周基线刷新",
+			Description: "每周日凌晨刷新篡改检测基线",
+			Type:        TaskBaselineRefresh,
+			CronExpr:    "0 0 4 * * 0",
+			Payload:     map[string]interface{}{},
+			TimeoutSec:  1800,
+			MaxRetries:  1,
+			Tags:        []string{"security", "weekly"},
+		},
+		{
+			ID:          "tmpl_daily_cookie_verify",
+			Name:        "每日 Cookie 验证",
+			Description: "每天早上 8 点验证各引擎 Cookie 有效性",
+			Type:        TaskCookieVerify,
+			CronExpr:    "0 0 8 * * *",
+			Payload:     map[string]interface{}{},
+			TimeoutSec:  600,
+			MaxRetries:  2,
+			Tags:        []string{"auth", "daily"},
+		},
+	}
+}
+
+// CreateTaskFromTemplate creates a new task from a template.
+func (s *Scheduler) CreateTaskFromTemplate(templateID string, name string, cronExpr string) (*ScheduledTask, error) {
+	var tmpl *TaskTemplate
+	for _, t := range DefaultTemplates() {
+		if t.ID == templateID {
+			tmpl = &t
+			break
+		}
+	}
+	if tmpl == nil {
+		return nil, fmt.Errorf("template %s not found", templateID)
+	}
+
+	task := &ScheduledTask{
+		Name:       name,
+		Type:       tmpl.Type,
+		Enabled:    true,
+		CronExpr:   cronExpr,
+		Payload:    tmpl.Payload,
+		TimeoutSec: tmpl.TimeoutSec,
+		MaxRetries: tmpl.MaxRetries,
+	}
+
+	if err := s.AddTask(task); err != nil {
+		return nil, fmt.Errorf("failed to create task from template: %w", err)
+	}
+
+	return task, nil
+}
+
 // ScheduledTask represents a user-configured scheduled task.
 type ScheduledTask struct {
 	ID         string                 `json:"id"`
@@ -97,6 +207,42 @@ type ScheduledTask struct {
 	LastRunAt  *time.Time             `json:"last_run_at,omitempty"`
 	NextRunAt  *time.Time             `json:"next_run_at,omitempty"`
 	CreatedAt  time.Time              `json:"created_at"`
+
+	// 高级功能字段（阶段五新增）
+	DependsOn     []string          `json:"depends_on,omitempty"`       // 依赖的任务 ID 列表
+	ExecutionWindow *ExecutionWindow `json:"execution_window,omitempty"` // 执行窗口配置
+	Notifications   *NotificationConfig `json:"notifications,omitempty"`  // 通知配置
+}
+
+// ExecutionWindow defines when a task is allowed to run.
+type ExecutionWindow struct {
+	StartHour   int      `json:"start_hour"`    // 0-23
+	EndHour     int      `json:"end_hour"`      // 0-23
+	Weekdays    []int    `json:"weekdays"`      // 0=Sunday, 1=Monday, ..., 6=Saturday
+	Timezone    string   `json:"timezone"`      // IANA timezone name (e.g., "Asia/Shanghai")
+}
+
+// NotificationConfig defines notification settings for task events.
+type NotificationConfig struct {
+	OnSuccess bool     `json:"on_success"`
+	OnFailure bool     `json:"on_failure"`
+	OnTimeout bool     `json:"on_timeout"`
+	Channels  []string `json:"channels"` // "webhook", "email", "log"
+	WebhookURL string  `json:"webhook_url,omitempty"`
+	Recipients []string `json:"recipients,omitempty"` // email addresses
+}
+
+// TaskTemplate is a pre-defined task configuration that can be used to quickly create tasks.
+type TaskTemplate struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Type        TaskType               `json:"type"`
+	CronExpr    string                 `json:"cron_expr"`
+	Payload     map[string]interface{} `json:"payload"`
+	TimeoutSec  int                    `json:"timeout_seconds"`
+	MaxRetries  int                    `json:"max_retries"`
+	Tags        []string               `json:"tags"`
 }
 
 // ExecutionRecord stores the result of a task execution.
@@ -131,7 +277,6 @@ type Scheduler struct {
 	stopped    bool
 	mu         sync.RWMutex
 	maxHistory int
-	idCounter  int64 // monotonic counter for unique task IDs
 }
 
 // NewScheduler creates a new Scheduler. If storePath is non-empty, tasks are
@@ -178,8 +323,8 @@ func (s *Scheduler) Load() error {
 			}
 		}
 	}
-	s.rebuildIDCounterFromTasks()
 	s.history = history
+	s.updateMetrics()
 	return nil
 }
 
@@ -189,6 +334,15 @@ func (s *Scheduler) Save() error {
 		return nil
 	}
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.saveLocked()
+}
+
+// saveLocked persists tasks and history. Caller must hold the mutex (write or read).
+func (s *Scheduler) saveLocked() error {
+	if s.store == nil {
+		return nil
+	}
 	tasks := make([]*ScheduledTask, 0, len(s.tasks))
 	for _, t := range s.tasks {
 		cp := *t
@@ -210,7 +364,6 @@ func (s *Scheduler) Save() error {
 	}
 	history := make([]ExecutionRecord, len(s.history))
 	copy(history, s.history)
-	s.mu.RUnlock()
 
 	return s.store.Save(tasks, history)
 }
@@ -220,6 +373,7 @@ func (s *Scheduler) RegisterHandler(h TaskHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[h.Type()] = h
+	metrics.SetSchedulerTasksRegistered(string(h.Type()), 1)
 }
 
 // AddTask adds a new scheduled task and schedules it in cron.
@@ -249,12 +403,24 @@ func (s *Scheduler) AddTask(task *ScheduledTask) error {
 		return fmt.Errorf("unknown task type: %s", task.Type)
 	}
 
+	// Validate webhook URL if configured
+	if task.Notifications != nil {
+		if err := validateWebhookURL(task.Notifications.WebhookURL); err != nil {
+			return err
+		}
+	}
+
+	// Check for cyclic dependencies
+	if s.hasCyclicDependencyLocked(task.ID, task.DependsOn) {
+		return fmt.Errorf("task %s has cyclic dependencies", task.ID)
+	}
+
 	s.tasks[task.ID] = task
 	if err := s.scheduleTask(task); err != nil {
 		delete(s.tasks, task.ID)
 		return fmt.Errorf("failed to schedule task: %w", err)
 	}
-	s.saveAsync()
+	s.saveLocked()
 	return nil
 }
 
@@ -284,6 +450,20 @@ func (s *Scheduler) UpdateTask(task *ScheduledTask) error {
 		}
 	}
 
+	// Validate webhook URL if configured
+	if task.Notifications != nil {
+		if err := validateWebhookURL(task.Notifications.WebhookURL); err != nil {
+			return err
+		}
+	}
+
+	// Check for cyclic dependencies if dependencies changed
+	if !s.equalStringSlices(existing.DependsOn, task.DependsOn) {
+		if s.hasCyclicDependencyLocked(task.ID, task.DependsOn) {
+			return fmt.Errorf("task %s has cyclic dependencies", task.ID)
+		}
+	}
+
 	// Remove old cron entry
 	if entryID, ok := s.cronIDs[task.ID]; ok {
 		s.cron.Remove(entryID)
@@ -298,13 +478,16 @@ func (s *Scheduler) UpdateTask(task *ScheduledTask) error {
 	existing.Payload = task.Payload
 	existing.TimeoutSec = task.TimeoutSec
 	existing.MaxRetries = task.MaxRetries
+	existing.Notifications = task.Notifications
+	existing.DependsOn = task.DependsOn
+	existing.ExecutionWindow = task.ExecutionWindow
 
 	if existing.Enabled {
 		if err := s.scheduleTask(existing); err != nil {
 			return fmt.Errorf("failed to schedule task: %w", err)
 		}
 	}
-	s.saveAsync()
+	s.saveLocked()
 	return nil
 }
 
@@ -321,7 +504,7 @@ func (s *Scheduler) DeleteTask(id string) error {
 		return fmt.Errorf("task %s not found", id)
 	}
 	delete(s.tasks, id)
-	s.saveAsync()
+	s.Save()
 	return nil
 }
 
@@ -338,7 +521,7 @@ func (s *Scheduler) EnableTask(id string) error {
 		task.Enabled = false
 		return fmt.Errorf("failed to schedule task: %w", err)
 	}
-	s.saveAsync()
+	s.Save()
 	return nil
 }
 
@@ -355,7 +538,7 @@ func (s *Scheduler) DisableTask(id string) error {
 		s.cron.Remove(entryID)
 		delete(s.cronIDs, id)
 	}
-	s.saveAsync()
+	s.Save()
 	return nil
 }
 
@@ -443,6 +626,96 @@ func (s *Scheduler) GetHistory(limit int, taskType string, status string) []Exec
 	return result
 }
 
+// validateWebhookURL validates a webhook URL to prevent SSRF.
+func validateWebhookURL(webhookURL string) error {
+	return ValidateWebhookURLPublic(webhookURL)
+}
+
+// ValidateWebhookURLPublic validates a webhook URL to prevent SSRF.
+func ValidateWebhookURLPublic(webhookURL string) error {
+	if webhookURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(webhookURL)
+	if err != nil {
+		return fmt.Errorf("invalid webhook URL: %v", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("webhook URL must use https scheme")
+	}
+	host := parsed.Hostname()
+	// Check for private/internal IPs
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	lowerHost := strings.ToLower(host)
+	if lowerHost == "localhost" || lowerHost == "127.0.0.1" || lowerHost == "::1" || lowerHost == "0.0.0.0" {
+		return fmt.Errorf("webhook URL cannot point to localhost/loopback address")
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("webhook URL cannot point to private/internal address")
+		}
+	}
+	return nil
+}
+
+// hasCyclicDependency checks for cyclic dependencies in a task's dependency chain.
+func (s *Scheduler) hasCyclicDependencyLocked(taskID string, dependsOn []string) bool {
+	visited := make(map[string]bool)
+
+	var dfs func(string) bool
+	dfs = func(current string) bool {
+		if visited[current] {
+			return current == taskID
+		}
+		visited[current] = true
+
+		task, ok := s.tasks[current]
+		if !ok {
+			return false
+		}
+
+		for _, depID := range task.DependsOn {
+			if dfs(depID) {
+				return true
+			}
+		}
+
+		delete(visited, current)
+		return false
+	}
+
+	for _, depID := range dependsOn {
+		if dfs(depID) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hasCyclicDependency checks for cyclic dependencies in a task's dependency chain.
+func (s *Scheduler) hasCyclicDependency(taskID string, dependsOn []string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.hasCyclicDependencyLocked(taskID, dependsOn)
+}
+
+// equalStringSlices checks if two string slices are equal.
+func (s *Scheduler) equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // normalizeCronExpr converts a 5-field cron (min hour dom month dow) to a
 // 6-field expression (sec min hour dom month dow) by prepending "0".
 // The scheduler is initialized with cron.WithSeconds() which requires 6 fields.
@@ -489,10 +762,27 @@ func (s *Scheduler) scheduleTask(task *ScheduledTask) error {
 // executeTask runs a single task execution with optional retries.
 func (s *Scheduler) executeTask(task *ScheduledTask, handler TaskHandler, timeoutSec int, maxRetries int) {
 	now := time.Now()
+	taskType := string(task.Type)
+	var elapsed time.Duration
+
+	// 检查依赖链
+	if !s.areDependenciesMet(task) {
+		log.Printf("[scheduler] task %s (%s) skipped: dependencies not met", task.ID, task.Name)
+		s.recordSkippedExecution(task, "dependencies_not_met", "dependency tasks not yet successful")
+		return
+	}
+
+	// 检查执行窗口
+	if task.ExecutionWindow != nil && !s.isWithinExecutionWindow(task.ExecutionWindow) {
+		log.Printf("[scheduler] task %s (%s) skipped: outside execution window", task.ID, task.Name)
+		s.recordSkippedExecution(task, "outside_window", "current time outside execution window")
+		return
+	}
+
 	record := ExecutionRecord{
 		TaskID:     task.ID,
 		TaskName:   task.Name,
-		TaskType:   string(task.Type),
+		TaskType:   taskType,
 		StartedAt:  now.Format(time.RFC3339),
 		RetryCount: 0,
 	}
@@ -500,6 +790,7 @@ func (s *Scheduler) executeTask(task *ScheduledTask, handler TaskHandler, timeou
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			record.RetryCount = attempt
+			metrics.IncSchedulerTaskRetry(taskType)
 			time.Sleep(time.Duration(attempt*2) * time.Second) // simple backoff
 		}
 
@@ -507,7 +798,7 @@ func (s *Scheduler) executeTask(task *ScheduledTask, handler TaskHandler, timeou
 		result, err := handler.Execute(ctx, task.Payload)
 		cancel()
 
-		elapsed := time.Since(now)
+		elapsed = time.Since(now)
 		record.FinishedAt = time.Now().Format(time.RFC3339)
 		record.DurationMs = elapsed.Milliseconds()
 
@@ -527,6 +818,10 @@ func (s *Scheduler) executeTask(task *ScheduledTask, handler TaskHandler, timeou
 		break
 	}
 
+	// Record metrics
+	metrics.IncSchedulerTaskExecution(taskType, record.Status)
+	metrics.ObserveSchedulerTaskExecutionDuration(taskType, elapsed)
+
 	// Update task state
 	s.mu.Lock()
 	if t, ok := s.tasks[task.ID]; ok {
@@ -542,6 +837,201 @@ func (s *Scheduler) executeTask(task *ScheduledTask, handler TaskHandler, timeou
 		s.history = s.history[len(s.history)-s.maxHistory:]
 	}
 	s.mu.Unlock()
+
+	s.updateMetrics()
+
+	// 发送通知
+	s.sendNotification(task, record)
+}
+
+func (s *Scheduler) updateMetrics() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	enabledCount := 0
+	for _, t := range s.tasks {
+		if t.Enabled {
+			enabledCount++
+		}
+	}
+	metrics.SetSchedulerTasksEnabled(enabledCount)
+}
+
+// areDependenciesMet checks if all dependency tasks have succeeded in their last execution.
+func (s *Scheduler) areDependenciesMet(task *ScheduledTask) bool {
+	if len(task.DependsOn) == 0 {
+		return true
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, depID := range task.DependsOn {
+		_, exists := s.tasks[depID]
+		if !exists {
+			log.Printf("[scheduler] dependency task %s not found for task %s", depID, task.ID)
+			return false
+		}
+
+		// Find last execution record for this dependency
+		lastRecord := s.findLastExecutionRecord(depID)
+		if lastRecord == nil || lastRecord.Status != "success" {
+			log.Printf("[scheduler] dependency task %s last status: %v (need success)", depID, lastRecord)
+			return false
+		}
+	}
+	return true
+}
+
+// findLastExecutionRecord finds the most recent execution record for a task.
+func (s *Scheduler) findLastExecutionRecord(taskID string) *ExecutionRecord {
+	for i := len(s.history) - 1; i >= 0; i-- {
+		if s.history[i].TaskID == taskID {
+			return &s.history[i]
+		}
+	}
+	return nil
+}
+
+// isWithinExecutionWindow checks if the current time is within the allowed execution window.
+func (s *Scheduler) isWithinExecutionWindow(window *ExecutionWindow) bool {
+	now := time.Now()
+	if window.Timezone != "" {
+		loc, err := time.LoadLocation(window.Timezone)
+		if err == nil {
+			now = now.In(loc)
+		}
+	}
+
+	// Check weekday constraint
+	if len(window.Weekdays) > 0 {
+		currentWeekday := int(now.Weekday())
+		found := false
+		for _, wd := range window.Weekdays {
+			if wd == currentWeekday {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	// Check hour constraint
+	currentHour := now.Hour()
+	if window.StartHour <= window.EndHour {
+		// Normal range (e.g., 9-17 means 9am to 5pm)
+		return currentHour >= window.StartHour && currentHour < window.EndHour
+	}
+	// Overnight range (e.g., 22-6 means 10pm to 6am next day)
+	return currentHour >= window.StartHour || currentHour < window.EndHour
+}
+
+// recordSkippedExecution creates a record for a skipped task execution.
+func (s *Scheduler) recordSkippedExecution(task *ScheduledTask, status string, reason string) {
+	now := time.Now()
+	record := ExecutionRecord{
+		TaskID:     task.ID,
+		TaskName:   task.Name,
+		TaskType:   string(task.Type),
+		StartedAt:  now.Format(time.RFC3339),
+		FinishedAt: now.Format(time.RFC3339),
+		DurationMs: 0,
+		Status:     "skipped",
+		Error:      reason,
+	}
+
+	s.mu.Lock()
+	s.history = append(s.history, record)
+	if len(s.history) > s.maxHistory {
+		s.history = s.history[len(s.history)-s.maxHistory:]
+	}
+	s.mu.Unlock()
+
+	metrics.IncSchedulerTaskExecution(string(task.Type), "skipped")
+}
+
+// sendNotification sends notifications based on task configuration and execution result.
+func (s *Scheduler) sendNotification(task *ScheduledTask, record ExecutionRecord) {
+	if task.Notifications == nil {
+		return
+	}
+
+	shouldNotify := false
+	switch record.Status {
+	case "success":
+		shouldNotify = task.Notifications.OnSuccess
+	case "failed":
+		shouldNotify = task.Notifications.OnFailure
+	case "timeout":
+		shouldNotify = task.Notifications.OnTimeout
+	}
+
+	if !shouldNotify || len(task.Notifications.Channels) == 0 {
+		return
+	}
+
+	notification := map[string]interface{}{
+		"task_id":   task.ID,
+		"task_name": task.Name,
+		"task_type": task.Type,
+		"status":    record.Status,
+		"result":    record.Result,
+		"error":     record.Error,
+		"duration":  record.DurationMs,
+		"timestamp": record.FinishedAt,
+	}
+
+	for _, channel := range task.Notifications.Channels {
+		switch channel {
+		case "log":
+			log.Printf("[scheduler] notification: task %s (%s) %s - %s", task.Name, task.Type, record.Status, record.Result)
+		case "webhook":
+			if task.Notifications.WebhookURL != "" {
+				s.sendWebhookNotification(task.Notifications.WebhookURL, notification)
+			}
+		case "email":
+			// Email notification would require SMTP configuration
+			// Placeholder for future implementation
+			log.Printf("[scheduler] email notification not yet implemented for task %s", task.ID)
+		}
+	}
+}
+
+// sendWebhookNotification sends a webhook notification.
+func (s *Scheduler) sendWebhookNotification(webhookURL string, payload map[string]interface{}) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		jsonData, err := json.Marshal(payload)
+		if err != nil {
+			log.Printf("[scheduler] failed to marshal webhook payload: %v", err)
+			return
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", webhookURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			log.Printf("[scheduler] failed to create webhook request: %v", err)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "UniMap-Scheduler/1.0")
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[scheduler] failed to send webhook to %s: %v", webhookURL, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("[scheduler] webhook to %s returned non-success status: %d", webhookURL, resp.StatusCode)
+		}
+	}()
 }
 
 func (s *Scheduler) getNextRunTime(taskID string) time.Time {
@@ -575,25 +1065,143 @@ func (s *Scheduler) Stop() {
 
 // generateID creates a short unique ID using a monotonic counter.
 func (s *Scheduler) generateID() string {
-	s.idCounter++
-	return fmt.Sprintf("task_%d", s.idCounter)
+	return uuid.New().String()
 }
 
-func (s *Scheduler) rebuildIDCounterFromTasks() {
-	maxID := int64(0)
+// TaskExecutionStats holds statistical analysis of task execution history.
+type TaskExecutionStats struct {
+	TaskID         string  `json:"task_id"`
+	TaskName       string  `json:"task_name"`
+	TaskType       string  `json:"task_type"`
+	TotalRuns      int     `json:"total_runs"`
+	SuccessCount   int     `json:"success_count"`
+	FailedCount    int     `json:"failed_count"`
+	TimeoutCount   int     `json:"timeout_count"`
+	SkippedCount   int     `json:"skipped_count"`
+	SuccessRate    float64 `json:"success_rate"`
+	AvgDurationMs  float64 `json:"avg_duration_ms"`
+	MaxDurationMs  int64   `json:"max_duration_ms"`
+	MinDurationMs  int64   `json:"min_duration_ms"`
+	P50DurationMs  int64   `json:"p50_duration_ms"`
+	P95DurationMs  int64   `json:"p95_duration_ms"`
+	TotalRetries   int     `json:"total_retries"`
+	LastSuccessAt  string  `json:"last_success_at,omitempty"`
+	LastFailureAt  string  `json:"last_failure_at,omitempty"`
+}
+
+// GetTaskExecutionStats analyzes execution history for a specific task.
+func (s *Scheduler) GetTaskExecutionStats(taskID string) *TaskExecutionStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var task *ScheduledTask
+	if t, ok := s.tasks[taskID]; ok {
+		task = t
+	}
+
+	stats := &TaskExecutionStats{
+		TaskID:   taskID,
+		MinDurationMs: -1,
+	}
+	if task != nil {
+		stats.TaskName = task.Name
+		stats.TaskType = string(task.Type)
+	}
+
+	var durations []int64
+	for _, record := range s.history {
+		if record.TaskID != taskID {
+			continue
+		}
+
+		stats.TotalRuns++
+		durations = append(durations, record.DurationMs)
+
+		switch record.Status {
+		case "success":
+			stats.SuccessCount++
+			stats.LastSuccessAt = record.FinishedAt
+		case "failed":
+			stats.FailedCount++
+			stats.LastFailureAt = record.FinishedAt
+		case "timeout":
+			stats.TimeoutCount++
+			stats.LastFailureAt = record.FinishedAt
+		case "skipped":
+			stats.SkippedCount++
+		}
+
+		stats.TotalRetries += record.RetryCount
+
+		if record.DurationMs > stats.MaxDurationMs {
+			stats.MaxDurationMs = record.DurationMs
+		}
+		if stats.MinDurationMs < 0 || record.DurationMs < stats.MinDurationMs {
+			stats.MinDurationMs = record.DurationMs
+		}
+	}
+
+	if stats.TotalRuns > 0 {
+		stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalRuns) * 100
+
+		// Calculate average duration
+		var totalDuration int64
+		for _, d := range durations {
+			totalDuration += d
+		}
+		stats.AvgDurationMs = float64(totalDuration) / float64(len(durations))
+
+		// Sort durations for percentile calculation
+		sortInt64(durations)
+		if len(durations) > 0 {
+			stats.MinDurationMs = durations[0]
+			stats.MaxDurationMs = durations[len(durations)-1]
+			stats.P50DurationMs = durations[len(durations)*50/100]
+			stats.P95DurationMs = durations[len(durations)*95/100]
+		}
+	}
+
+	return stats
+}
+
+// GetAllTasksStats returns execution stats for all tasks.
+func (s *Scheduler) GetAllTasksStats() []*TaskExecutionStats {
+	s.mu.RLock()
+	taskIDs := make([]string, 0, len(s.tasks))
 	for id := range s.tasks {
-		if !strings.HasPrefix(id, "task_") {
-			continue
-		}
-		n, err := strconv.ParseInt(strings.TrimPrefix(id, "task_"), 10, 64)
-		if err != nil || n <= 0 {
-			continue
-		}
-		if n > maxID {
-			maxID = n
-		}
+		taskIDs = append(taskIDs, id)
 	}
-	if maxID > s.idCounter {
-		s.idCounter = maxID
+	s.mu.RUnlock()
+
+	stats := make([]*TaskExecutionStats, 0, len(taskIDs))
+	for _, id := range taskIDs {
+		stats = append(stats, s.GetTaskExecutionStats(id))
 	}
+	return stats
+}
+
+// GetRecentExecutions returns the most recent execution records.
+func (s *Scheduler) GetRecentExecutions(limit int) []ExecutionRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > len(s.history) {
+		limit = len(s.history)
+	}
+
+	start := len(s.history) - limit
+	if start < 0 {
+		start = 0
+	}
+
+	result := make([]ExecutionRecord, limit)
+	copy(result, s.history[start:])
+	return result
+}
+
+// sortInt64 sorts a slice of int64 in ascending order.
+func sortInt64(s []int64) {
+	sort.Slice(s, func(i, j int) bool {
+		return s[i] < s[j]
+	})
 }
