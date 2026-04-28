@@ -257,6 +257,10 @@ func (s *Server) startCDPChrome(baseURL string) error {
 	debugAddr := "127.0.0.1"
 	if s.config != nil {
 		if addr := strings.TrimSpace(s.config.Screenshot.ChromeRemoteDebugAddress); addr != "" {
+			if addr != "127.0.0.1" && addr != "localhost" && addr != "::1" {
+				logger.Warnf("ChromeRemoteDebugAddress=%s is not a loopback address; forcing to 127.0.0.1 for security", addr)
+				addr = "127.0.0.1"
+			}
 			debugAddr = addr
 		}
 	}

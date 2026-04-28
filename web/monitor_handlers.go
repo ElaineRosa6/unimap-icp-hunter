@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -17,7 +18,7 @@ var reURLPattern = regexp.MustCompile(`^(https?://)?([\w.-]+)(:\d+)?(/.*)?$`)
 
 // handleScreenshot 处理截图请求
 func (s *Server) handleMonitorPage(w http.ResponseWriter, r *http.Request) {
-	if !s.renderTemplate(w, http.StatusInternalServerError, "monitor.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "monitor.html", map[string]interface{}{
 		"staticVersion": s.staticVersion,
 	}) {
 		return
@@ -101,6 +102,18 @@ func (s *Server) handleURLReachability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 检查所有URL是否指向内网地址
+	for _, urlStr := range req.URLs {
+		parsed, err := url.Parse(urlStr)
+		if err != nil {
+			continue
+		}
+		if isPrivateOrInternalIP(parsed.Hostname()) {
+			writeAPIError(w, http.StatusForbidden, "blocked_url", "target url resolves to private/internal address", nil)
+			return
+		}
+	}
+
 	if s.monitorApp == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "monitor_service_unavailable", "monitor app service not initialized", nil)
 		return
@@ -138,6 +151,18 @@ func (s *Server) handleURLPortScan(w http.ResponseWriter, r *http.Request) {
 	if len(req.URLs) == 0 {
 		writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
 		return
+	}
+
+	// 检查所有URL是否指向内网地址
+	for _, urlStr := range req.URLs {
+		parsed, err := url.Parse(urlStr)
+		if err != nil {
+			continue
+		}
+		if isPrivateOrInternalIP(parsed.Hostname()) {
+			writeAPIError(w, http.StatusForbidden, "blocked_url", "target url resolves to private/internal address", nil)
+			return
+		}
 	}
 
 	if s.monitorApp == nil {

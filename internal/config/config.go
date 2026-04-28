@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -689,6 +691,14 @@ func (m *Manager) applyDefaults(config *Config) {
 		config.Web.RequestLimits.MaxMultipartMemory = 10 * 1024 * 1024
 	}
 
+	// 默认启用 Web 认证：如果未配置 admin_token，生成安全随机 token
+	if strings.TrimSpace(config.Web.Auth.AdminToken) == "" {
+		config.Web.Auth.AdminToken = generateSecureToken(32)
+		config.Web.Auth.Enabled = true
+	} else if !config.Web.Auth.Enabled {
+		config.Web.Auth.Enabled = true
+	}
+
 	// 默认定时任务配置
 	if !config.Scheduler.Enabled {
 		config.Scheduler.Enabled = true
@@ -1123,4 +1133,24 @@ func (m *Manager) GetRedisPrefix() string {
 		return "unimap:"
 	}
 	return prefix
+}
+
+// generateSecureToken generates a cryptographically secure random token
+// of the specified length using URL-safe base64 encoding.
+func generateSecureToken(length int) string {
+	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	token := make([]byte, length)
+	for i := range token {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			// Fall back to a simple hex token if crypto/rand fails (extremely unlikely)
+			b := make([]byte, length/2)
+			if _, err := rand.Read(b); err == nil {
+				return fmt.Sprintf("%x", b)
+			}
+			return "fallback-token-" + fmt.Sprintf("%d", os.Getpid())
+		}
+		token[i] = charset[n.Int64()]
+	}
+	return string(token)
 }

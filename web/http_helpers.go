@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -137,6 +138,17 @@ func isOriginAllowed(origin, host string, allowedOrigins []string) bool {
 func isTrustedRequest(r *http.Request, allowedOrigins []string) bool {
 	origin := r.Header.Get("Origin")
 	referer := r.Header.Get("Referer")
+
+	// 对状态变更操作（POST, PUT, PATCH, DELETE）要求必须有 Origin 或 Referer
+	isStateChange := r.Method == http.MethodPost ||
+		r.Method == http.MethodPut ||
+		r.Method == http.MethodPatch ||
+		r.Method == http.MethodDelete
+
+	if isStateChange && strings.TrimSpace(origin) == "" && strings.TrimSpace(referer) == "" {
+		return false
+	}
+
 	if strings.TrimSpace(origin) == "" && strings.TrimSpace(referer) == "" {
 		// Keep compatibility for non-browser clients.
 		return true
@@ -169,6 +181,29 @@ func requestSizeLimitMiddleware(maxBodyBytes int64) func(http.Handler) http.Hand
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// isPrivateOrInternalIP 检查主机名是否为私有/回环/内部地址
+func isPrivateOrInternalIP(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	// 去除端口
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	// 检查常见主机名
+	lower := strings.ToLower(host)
+	if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "0.0.0.0" {
+		return true
+	}
+	// 解析 IP
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
 func corsMiddleware(allowedOrigins, allowedMethods, allowedHeaders, exposedHeaders []string, allowCredentials bool, maxAge int) func(http.Handler) http.Handler {

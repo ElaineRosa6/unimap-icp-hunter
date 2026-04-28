@@ -428,12 +428,6 @@ func (s *Server) issueBridgeToken(ttlSeconds int) (string, int64, error) {
 	}
 	s.bridge.Tokens[token] = expireAt
 	s.bridge.LastSeen[token] = time.Now().Unix()
-	for tk, exp := range s.bridge.Tokens {
-		if exp <= time.Now().Unix() {
-			delete(s.bridge.Tokens, tk)
-			delete(s.bridge.LastSeen, tk)
-		}
-	}
 	s.bridge.mu.Unlock()
 
 	return token, expireAt, nil

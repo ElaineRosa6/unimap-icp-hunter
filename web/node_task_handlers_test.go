@@ -156,3 +156,67 @@ func TestNodeTaskEnqueue_AdminToken(t *testing.T) {
 		t.Fatalf("expected 200 with admin token, got %d, body=%s", authW.Code, authW.Body.String())
 	}
 }
+
+// ============================================================
+// handleNodeTaskGet tests
+// ============================================================
+
+func TestHandleNodeTaskGet_DistributedDisabled(t *testing.T) {
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: &config.Config{}}
+	req := httptest.NewRequest(http.MethodGet, "/api/nodes/task/task-1", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	s.handleNodeTaskGet(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when distributed disabled, got %d", w.Code)
+	}
+}
+
+func TestHandleNodeTaskGet_NotFound(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Distributed.Enabled = true
+	cfg.Distributed.AdminToken = "admin-token"
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: cfg}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/nodes/task/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	s.handleNodeTaskGet(w, req)
+
+	if w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 404 or 400 for nonexistent task, got %d", w.Code)
+	}
+}
+
+// ============================================================
+// handleNodeTaskDelete tests
+// ============================================================
+
+func TestHandleNodeTaskDelete_DistributedDisabled(t *testing.T) {
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: &config.Config{}}
+	req := httptest.NewRequest(http.MethodDelete, "/api/nodes/task/task-1", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	s.handleNodeTaskDelete(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when distributed disabled, got %d", w.Code)
+	}
+}
+
+func TestHandleNodeTaskDelete_NotFound(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Distributed.Enabled = true
+	cfg.Distributed.AdminToken = "admin-token"
+	s := &Server{distributed: &DistributedState{NodeTaskQueue: distributed.NewTaskQueue()}, config: cfg}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/nodes/task/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	s.handleNodeTaskDelete(w, req)
+
+	if w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 404 for nonexistent task, got %d", w.Code)
+	}
+}

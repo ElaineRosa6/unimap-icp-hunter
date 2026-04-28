@@ -17,7 +17,9 @@
       "Bash(netstat -ano)",
       "Bash(awk '{print $5}')",
       "Bash(xargs -I {} taskkill //F //PID {})",
-      "Bash(go tool:*)"
+      "Bash(go tool:*)",
+      "Bash(sort -t: -k2 -n)",
+      "Bash(git *)"
     ]
   }
 }

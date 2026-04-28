@@ -126,7 +126,7 @@ Quake: [输入 Quake API Key]
 
 ### 获取 API Key
 
-如果您还没有 API Key，请参考 [README_LIGHT.md](README_LIGHT.md) 中的"获取 API Key"章节。
+如果您还没有 API Key，请参考 [README.md](README.md) 中的"获取 API Key"章节。
 
 ## 执行查询
 
@@ -475,9 +475,7 @@ port IN ["21", "22", "23", "3389", "5900"]
 
 如果遇到问题或需要帮助：
 
-1. 查看 [README_LIGHT.md](README_LIGHT.md) 获取更多信息
-2. 提交 Issue: https://github.com/ElaineRosa6/unimap-icp-hunter/issues
-3. 查看项目文档和示例
+1. 查看项目文档和示例
 
 ---
 

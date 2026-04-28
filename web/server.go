@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,7 +18,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/unimap-icp-hunter/project/internal/adapter"
 	"github.com/unimap-icp-hunter/project/internal/alerting"
-	"github.com/unimap-icp-hunter/project/internal/appversion"
 	"github.com/unimap-icp-hunter/project/internal/config"
 	"github.com/unimap-icp-hunter/project/internal/distributed"
 	"github.com/unimap-icp-hunter/project/internal/logger"
@@ -252,21 +253,21 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 	}
 
 	srv := &Server{
-		port:        port,
-		templates:   templates,
-		service:     unifiedSvc,
-		queryApp:    service.NewQueryAppService(unifiedSvc, orchestrator),
-		monitorApp:  service.NewMonitorAppService(proxyPool),
-		tamperApp:   service.NewTamperAppService("./hash_store", alertManager),
+		port:          port,
+		templates:     templates,
+		service:       unifiedSvc,
+		queryApp:      service.NewQueryAppService(unifiedSvc, orchestrator),
+		monitorApp:    service.NewMonitorAppService(proxyPool),
+		tamperApp:     service.NewTamperAppService("./hash_store", alertManager),
 		screenshotApp: screenshotApp,
-		orchestrator: orchestrator,
-		upgrader:    upgrader,
-		connManager: &ConnectionManager{connections: make(map[string]*managedConn)},
-		queryStatus: make(map[string]*QueryStatus),
-		webRoot:     webRoot,
+		orchestrator:  orchestrator,
+		upgrader:      upgrader,
+		connManager:   &ConnectionManager{connections: make(map[string]*managedConn)},
+		queryStatus:   make(map[string]*QueryStatus),
+		webRoot:       webRoot,
 		staticVersion: strconv.FormatInt(time.Now().Unix(), 10),
 		screenshotMgr: screenshotMgr,
-		config:      cfg,
+		config:        cfg,
 		configManager: cfgManager,
 		bridge: &BridgeState{
 			Tokens:         make(map[string]int64),
@@ -461,20 +462,36 @@ func isWebRoot(dir string) bool {
 	return true
 }
 
+type cspNonceKey struct{}
+
+func cspNonceFromContext(ctx context.Context) string {
+	if v := ctx.Value(cspNonceKey{}); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+func generateCSPNonce() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
+}
+
 // securityMiddleware 添加安全响应头的中间件
 func securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 防止点击劫持
+		nonce := generateCSPNonce()
+		ctx := context.WithValue(r.Context(), cspNonceKey{}, nonce)
+		r = r.WithContext(ctx)
+
 		w.Header().Set("X-Frame-Options", "DENY")
-		// 防止MIME类型嗅探
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		// XSS保护
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
-		// 内容安全策略
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;")
-		// 引用策略
+		w.Header().Set("Content-Security-Policy",
+			fmt.Sprintf("default-src 'self'; script-src 'self' 'nonce-%s' 'unsafe-hashes' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;", nonce))
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		// 权限策略
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 
 		next.ServeHTTP(w, r)
@@ -528,10 +545,16 @@ func (s *Server) Start() error {
 	handler = requestSizeLimitMiddleware(maxBodyBytes)(handler)
 	handler = corsMiddleware(allowedOrigins, allowedMethods, allowedHeaders, exposedHeaders, allowCredentials, maxAge)(handler)
 
-	// Auth middleware (only when enabled and admin token is configured)
+	// Auth middleware — always enabled (auto-generated token if not configured)
 	if s.config != nil && s.config.Web.Auth.Enabled && s.config.Web.Auth.AdminToken != "" {
 		handler = s.adminAuthMiddleware()(handler)
 		logger.Infof("Web auth enabled: admin token authentication active")
+	} else {
+		// Fallback: should not be reached with default config (auth is auto-enabled)
+		bindAddr := s.bindAddr()
+		if bindAddr != "127.0.0.1" && bindAddr != "localhost" {
+			logger.Warnf("⚠️  WARNING: Admin auth is DISABLED and server is bound to %s (non-loopback). All API endpoints are publicly accessible!", bindAddr)
+		}
 	}
 
 	handler = metricsMiddleware(handler)
@@ -552,6 +575,7 @@ func (s *Server) Start() error {
 			return
 		}
 
+		// Metrics endpoint should go through all middleware including auth
 		handler.ServeHTTP(w, r)
 	})
 
@@ -560,6 +584,9 @@ func (s *Server) Start() error {
 		Addr:    addr,
 		Handler: rootHandler,
 	}
+
+	go s.cleanupStaleQueries()
+	go s.cleanupStaleBridgeTokens()
 
 	logger.Infof("Web server started at http://%s:%d", s.bindAddr(), s.port)
 	logger.Infof("Registered %d routes", len(router.GetRoutes()))
@@ -659,26 +686,73 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// bindAddr returns the configured bind address, defaulting to "0.0.0.0".
+// bindAddr returns the configured bind address, defaulting to "127.0.0.1".
 func (s *Server) bindAddr() string {
 	if s.config != nil && s.config.Web.BindAddress != "" {
 		return s.config.Web.BindAddress
 	}
-	return "0.0.0.0"
+	return "127.0.0.1"
+}
+
+func (s *Server) cleanupStaleQueries() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.queryMutex.Lock()
+			now := time.Now()
+			maxAge := 1 * time.Hour
+			for id, status := range s.queryStatus {
+				if now.Sub(status.StartTime) > maxAge {
+					delete(s.queryStatus, id)
+				}
+			}
+			s.queryMutex.Unlock()
+		case <-s.shutdownCtx.Done():
+			return
+		}
+	}
+}
+
+func (s *Server) cleanupStaleBridgeTokens() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.bridge.mu.Lock()
+			now := time.Now().Unix()
+			if s.bridge.Tokens != nil {
+				for token, exp := range s.bridge.Tokens {
+					if exp <= now {
+						delete(s.bridge.Tokens, token)
+						delete(s.bridge.LastSeen, token)
+					}
+				}
+			}
+			if s.bridge.CallbackNonces != nil {
+				for key, exp := range s.bridge.CallbackNonces {
+					if exp <= now {
+						delete(s.bridge.CallbackNonces, key)
+					}
+				}
+			}
+			s.bridge.mu.Unlock()
+		case <-s.shutdownCtx.Done():
+			return
+		}
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	health := map[string]interface{}{
-		"status":  "ok",
-		"version": appversion.Full(),
-		"time":    time.Now().UTC().Format(time.RFC3339),
-		"engines": s.orchestrator.ListAdapters(),
-	}
-
-	if s.service != nil {
-		health["plugins"] = s.service.HealthCheck()
+		"status": "ok",
+		"time":   time.Now().UTC().Format(time.RFC3339),
 	}
 
 	_ = json.NewEncoder(w).Encode(health)

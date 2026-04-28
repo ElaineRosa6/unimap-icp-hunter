@@ -135,7 +135,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		zoomeyeCookies = s.config.Engines.Zoomeye.Cookies
 		proxyServer = strings.TrimSpace(s.config.Screenshot.ProxyServer)
 	}
-	if !s.renderTemplate(w, http.StatusInternalServerError, "index.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "index.html", map[string]interface{}{
 		"engines":          engines,
 		"staticVersion":    s.staticVersion,
 		"proxyServer":      proxyServer,
@@ -161,7 +161,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	query := strings.TrimSpace(r.FormValue("query"))
 	if err := validateQueryInput(query); err != nil {
-		if !s.renderTemplate(w, http.StatusInternalServerError, "error.html", map[string]interface{}{
+		if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "error.html", map[string]interface{}{
 			"error": err.Error(),
 		}) {
 			return
@@ -183,7 +183,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(engines) == 0 {
-		if !s.renderTemplate(w, http.StatusInternalServerError, "error.html", map[string]interface{}{
+		if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "error.html", map[string]interface{}{
 			"error": "No engines configured/registered. Please set API keys in configs/config.yaml and enable at least one engine.",
 		}) {
 			return
@@ -201,7 +201,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.service.Query(r.Context(), req)
 	if err != nil {
-		if !s.renderTemplate(w, http.StatusInternalServerError, "error.html", map[string]interface{}{
+		if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "error.html", map[string]interface{}{
 			"error":   fmt.Sprintf("Query failed: %v", err),
 			"query":   query,
 			"engines": engines,
@@ -212,7 +212,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 渲染结果页面
-	if !s.renderTemplate(w, http.StatusInternalServerError, "results.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "results.html", map[string]interface{}{
 		"query":         query,
 		"engines":       engines,
 		"assets":        resp.Assets,
@@ -234,7 +234,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 渲染结果页面
-	if !s.renderTemplate(w, http.StatusInternalServerError, "results.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "results.html", map[string]interface{}{
 		"query":         query,
 		"engines":       engines,
 		"assets":        []model.UnifiedAsset{},
@@ -270,7 +270,7 @@ func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !s.renderTemplate(w, http.StatusInternalServerError, "quota.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "quota.html", map[string]interface{}{
 		"engines":       engines,
 		"quotaInfo":     quotaInfo,
 		"errorInfo":     errorInfo,

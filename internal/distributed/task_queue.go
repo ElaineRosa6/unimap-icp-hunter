@@ -2,6 +2,7 @@ package distributed
 
 import (
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -643,12 +644,10 @@ func (q *TaskQueue) calculateRetryDelay(attempt int) time.Duration {
 	delay := baseDelay * time.Duration(1<<uint(attempt))
 
 	// 添加随机抖动（±20%）
-	// 使用时间戳作为随机源
-	now := time.Now()
-	jitterFactor := float64(now.UnixNano()%100) / 100.0 // 0.0-1.0
+	jitterFactor := rand.Float64() // 0.0-1.0
 	jitter := time.Duration(float64(delay) * 0.2 * jitterFactor)
 
-	if now.UnixNano()%2 == 0 {
+	if rand.Intn(2) == 0 {
 		delay += jitter
 	} else {
 		delay -= jitter

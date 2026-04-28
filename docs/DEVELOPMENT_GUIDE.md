@@ -257,7 +257,7 @@ feat(tamper): 添加历史记录导出功能
 - **USAGE.md**：使用说明
 - **DEVELOPMENT_GUIDE.md**：开发规范
 - **API.md**：API 文档
-- **TAMPER_DETECTION_OPTIMIZATION.md**：篡改检测优化文档
+- **TAMPER_DETECTION_FEATURE.md**：篡改检测优化文档
 
 ### 8.2 文档格式
 

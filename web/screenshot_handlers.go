@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -120,29 +119,6 @@ func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeFile(w, r, absFullPath)
-}
-
-// isPrivateOrInternalIP 检查主机名是否为私有/回环/内部地址
-func isPrivateOrInternalIP(host string) bool {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return false
-	}
-	// 去除端口
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	// 检查常见主机名
-	lower := strings.ToLower(host)
-	if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "0.0.0.0" {
-		return true
-	}
-	// 解析 IP
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
 // handleScreenshot 处理截图请求
@@ -574,7 +550,7 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 
 // handleBatchScreenshotPage 处理批量截图页面
 func (s *Server) handleBatchScreenshotPage(w http.ResponseWriter, r *http.Request) {
-	if !s.renderTemplate(w, http.StatusInternalServerError, "batch-screenshot.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "batch-screenshot.html", map[string]interface{}{
 		"staticVersion": s.staticVersion,
 	}) {
 		return

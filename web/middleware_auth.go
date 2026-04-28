@@ -39,12 +39,21 @@ func (s *Server) adminAuthMiddleware() func(http.Handler) http.Handler {
 // isPublicPath returns true for paths that do not require authentication.
 func (s *Server) isPublicPath(path string) bool {
 	publicPrefixes := []string{
-		"/health",
 		"/static/",
 		"/screenshots/",
 	}
 	for _, prefix := range publicPrefixes {
 		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	publicExact := []string{
+		"/health",
+		"/health/ready",
+		"/health/live",
+	}
+	for _, p := range publicExact {
+		if path == p {
 			return true
 		}
 	}

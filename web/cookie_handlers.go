@@ -364,23 +364,45 @@ func (s *Server) handleCookieLoginStatus(w http.ResponseWriter, r *http.Request)
 	results := make([]map[string]interface{}, 0, len(engines))
 
 	if cdpConnected {
-		// CDP connected → check each engine by opening its page in the same browser
+		// CDP connected → do NOT open pages in the user's browser to avoid
+		// interfering with their browsing session. Just report connection status
+		// and whether cookies are configured.
 		for _, engine := range engines {
-			status, err := s.screenshotMgr.CheckEngineLoginStatus(r.Context(), engine, query)
+			loginURL := ""
+			if s.screenshotMgr != nil {
+				loginURL = s.screenshotMgr.EngineLoginURL(engine)
+			}
+
+			// Check if cookies are configured for this engine
+			var cookieSet bool
+			if s.config != nil {
+				s.configMutex.Lock()
+				switch engine {
+				case "fofa":
+					cookieSet = hasCookies(s.config.Engines.Fofa.Cookies)
+				case "hunter":
+					cookieSet = hasCookies(s.config.Engines.Hunter.Cookies)
+				case "quake":
+					cookieSet = hasCookies(s.config.Engines.Quake.Cookies)
+				case "zoomeye":
+					cookieSet = hasCookies(s.config.Engines.Zoomeye.Cookies)
+				}
+				s.configMutex.Unlock()
+			}
+
+			reason := "no_session"
+			if cookieSet {
+				reason = "cookie_configured"
+			}
+
 			item := map[string]interface{}{
-				"engine":     status.Engine,
-				"logged_in":  status.LoggedIn,
-				"reason":     status.Reason,
-				"title":      status.Title,
-				"login_url":  status.LoginURL,
+				"engine":        engine,
+				"logged_in":     false,
+				"reason":        reason,
+				"title":         "",
+				"login_url":     loginURL,
 				"cdp_connected": cdpConnected,
-				"ext_paired": extPaired,
-			}
-			if status.Error != "" {
-				item["error"] = status.Error
-			}
-			if err != nil {
-				item["error"] = err.Error()
+				"ext_paired":    extPaired,
 			}
 			results = append(results, item)
 		}

@@ -2,6 +2,31 @@
 
 ---
 
+## [2026-04-25] 生产就绪闭环 — 分布式故障转移证据归档
+
+> **分支**: `release/major-upgrade-vNEXT`
+> **变更类型**: 文档归档 + 生产就绪闭环
+> **涉及模块**: distributed（故障转移）、PRODUCTION_READINESS_PLAN.md
+
+### 分布式故障转移证据归档（P0-3）
+
+- **新增证据文件**: `docs/evidence/2026-04-25-failover-e2e.md`
+- **覆盖 5 个测试场景**:
+  1. `TestFailover_NodeGoesOffline_ReleasesTasks` — 节点离线 → 任务释放 → 健康节点重新领取
+  2. `TestFailover_HandleNodeFailure_WithHealthyNodes` — 3 节点场景下单节点故障
+  3. `TestFailover_MaxReassignExceeded_MarkedFailed` — 超过 MaxReassign 限制标记为 FAILED
+  4. `TestFailover_NoHealthyNodes_ReturnsError` — 无健康节点时优雅报错
+  5. `TestFailover_Deregister_ReleasesTasks` — 节点注销释放任务
+- **验证结果**: 5/5 通过，`-race` 检测 0 数据竞争
+- **生产就绪状态**: 从 "⚠️ 证据归档待补充" 更新为 "✅ 全部完成，证据归档完整"
+
+### 文档更新
+
+- `docs/PRODUCTION_READINESS_PLAN.md` — P0-3 更新为已完成，新增"第四部分续"章节
+- 评估总览状态、最后更新日期同步更新
+
+---
+
 ## [2026-04-15] 测试修复闭环 + 覆盖率提升 + 未测试包覆盖
 
 > **分支**: `release/major-upgrade-vNEXT`
@@ -63,7 +88,7 @@
 |--------|------|
 | `go build ./...` | 0 错误 |
 | `go vet ./...` | 0 警告 |
-| `go test -race ./...` | **31 packages, 0 failures, 0 races** |
+| `go test -race ./...` | 通过（0 failures, 0 races；该次记录 scope=31 packages） |
 | 本轮修复/新增测试 | 234 个 |
 
 ---

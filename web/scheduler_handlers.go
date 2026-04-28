@@ -11,12 +11,37 @@ import (
 	"github.com/unimap-icp-hunter/project/internal/scheduler"
 )
 
+const maxPayloadKeys = 50
+const maxPayloadSizeBytes = 64 * 1024
+
 func writeSchedulerJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error": msg,
 	})
+}
+
+func validateTaskPayload(payload map[string]interface{}) error {
+	if payload == nil {
+		return nil
+	}
+	if len(payload) > maxPayloadKeys {
+		return fmt.Errorf("payload exceeds maximum of %d keys", maxPayloadKeys)
+	}
+	serialized, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payload serialization failed: %v", err)
+	}
+	if len(serialized) > maxPayloadSizeBytes {
+		return fmt.Errorf("payload exceeds maximum size of %d bytes", maxPayloadSizeBytes)
+	}
+	if webhookURL, ok := payload["webhook_url"].(string); ok && webhookURL != "" {
+		if err := scheduler.ValidateWebhookURLPublic(webhookURL); err != nil {
+			return fmt.Errorf("payload webhook_url invalid: %v", err)
+		}
+	}
+	return nil
 }
 
 // handleSchedulerPage renders the scheduler management page.
@@ -32,7 +57,7 @@ func (s *Server) handleSchedulerPage(w http.ResponseWriter, r *http.Request) {
 		taskTypeLabels[s] = scheduler.TaskTypeLabel(tt)
 	}
 
-	if !s.renderTemplate(w, http.StatusInternalServerError, "scheduler.html", map[string]interface{}{
+	if !s.renderTemplateWithNonce(r, w, http.StatusInternalServerError, "scheduler.html", map[string]interface{}{
 		"Version":        s.staticVersion,
 		"TaskTypes":      taskTypes,
 		"TaskTypeLabels": taskTypeLabels,
@@ -61,8 +86,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		MaxRetries int                    `json:"max_retries"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSchedulerJSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -83,6 +107,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Payload:    req.Payload,
 		TimeoutSec: req.TimeoutSec,
 		MaxRetries: req.MaxRetries,
+	}
+
+	if err := validateTaskPayload(req.Payload); err != nil {
+		writeSchedulerJSONError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := s.scheduler.AddTask(task); err != nil {
@@ -153,8 +182,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		MaxRetries int                    `json:"max_retries"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSchedulerJSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -172,6 +200,11 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		Payload:    req.Payload,
 		TimeoutSec: req.TimeoutSec,
 		MaxRetries: req.MaxRetries,
+	}
+
+	if err := validateTaskPayload(req.Payload); err != nil {
+		writeSchedulerJSONError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := s.scheduler.UpdateTask(task); err != nil {
@@ -197,8 +230,7 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSchedulerJSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -230,8 +262,7 @@ func (s *Server) handleRunTaskNow(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSchedulerJSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -262,8 +293,7 @@ func (s *Server) handleEnableTask(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSchedulerJSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -294,8 +324,7 @@ func (s *Server) handleDisableTask(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSchedulerJSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 

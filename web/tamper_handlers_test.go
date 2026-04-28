@@ -1,11 +1,13 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,5 +127,157 @@ func TestHandleTamperBaselineDeleteByQueryParam(t *testing.T) {
 		t.Fatalf("list baselines after delete failed: %v", err)
 	} else if len(urls) != 0 {
 		t.Fatalf("expected 0 baselines after delete, got %d", len(urls))
+	}
+}
+
+// ============================================================
+// handleTamperCheck supplementary tests
+// ============================================================
+
+func TestHandleTamperCheck_WrongMethod(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/tamper/check", nil)
+	w := httptest.NewRecorder()
+	s.handleTamperCheck(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleTamperCheck_InvalidJSON(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/api/tamper/check", strings.NewReader("not-json"))
+	w := httptest.NewRecorder()
+	s.handleTamperCheck(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleTamperCheck_EmptyURLs(t *testing.T) {
+	s := &Server{}
+	body := strings.NewReader(`{"urls":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/tamper/check", body)
+	w := httptest.NewRecorder()
+	s.handleTamperCheck(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty URLs, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "no_urls_provided") {
+		t.Fatalf("expected 'no_urls_provided' in body, got %q", w.Body.String())
+	}
+}
+
+// ============================================================
+// handleTamperBaseline supplementary tests
+// ============================================================
+
+func TestHandleTamperBaseline_WrongMethod(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/tamper/baseline", nil)
+	w := httptest.NewRecorder()
+	s.handleTamperBaseline(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleTamperBaseline_EmptyURLs(t *testing.T) {
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store", nil)}
+	body := strings.NewReader(`{"urls":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/tamper/baseline", body)
+	w := httptest.NewRecorder()
+	s.handleTamperBaseline(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// ============================================================
+// handleTamperBaselineList tests
+// ============================================================
+
+func TestHandleTamperBaselineList_WrongMethod(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/api/tamper/baseline/list", nil)
+	w := httptest.NewRecorder()
+	s.handleTamperBaselineList(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleTamperBaselineList_Empty(t *testing.T) {
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store", nil)}
+	req := httptest.NewRequest(http.MethodGet, "/api/tamper/baseline/list", nil)
+	w := httptest.NewRecorder()
+	s.handleTamperBaselineList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// ============================================================
+// handleTamperHistory tests
+// ============================================================
+
+func TestHandleTamperHistory_WrongMethod(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/api/tamper/history", nil)
+	w := httptest.NewRecorder()
+	s.handleTamperHistory(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleTamperHistory_Empty(t *testing.T) {
+	s := &Server{tamperApp: service.NewTamperAppService("./hash_store", nil)}
+	req := httptest.NewRequest(http.MethodGet, "/api/tamper/history", nil)
+	w := httptest.NewRecorder()
+	s.handleTamperHistory(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// ============================================================
+// newTamperDetector tests
+// ============================================================
+
+func TestNewTamperDetector_NilMgr(t *testing.T) {
+	s := &Server{}
+	ctx := context.Background()
+	detector, cleanup, err := s.newTamperDetector(ctx, "normal")
+	if err != nil {
+		t.Fatalf("expected no error with nil screenshotMgr, got %v", err)
+	}
+	if detector == nil {
+		t.Fatal("expected non-nil detector")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup")
+	}
+	cleanup()
+}
+
+// ============================================================
+// tamperAllocatorFactory tests
+// ============================================================
+
+func TestTamperAllocatorFactory_NilMgr(t *testing.T) {
+	s := &Server{}
+	factory := s.tamperAllocatorFactory("")
+	if factory != nil {
+		t.Fatal("expected nil factory when screenshotMgr is nil")
 	}
 }

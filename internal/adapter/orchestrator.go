@@ -46,14 +46,18 @@ const (
 
 // CircuitBreaker 简单熔断器
 type CircuitBreaker struct {
-	State            CircuitState
-	Failures         int
-	LastFailure      time.Time
-	Threshold        int
-	ResetDuration    time.Duration
+	mu             sync.Mutex
+	State          CircuitState
+	Failures       int
+	LastFailure    time.Time
+	Threshold      int
+	ResetDuration  time.Duration
 }
 
 func (cb *CircuitBreaker) AllowRequest() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
 	if cb.State == CircuitClosed {
 		return true
 	}
@@ -69,16 +73,36 @@ func (cb *CircuitBreaker) AllowRequest() bool {
 }
 
 func (cb *CircuitBreaker) RecordSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
 	cb.State = CircuitClosed
 	cb.Failures = 0
 }
 
 func (cb *CircuitBreaker) RecordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
 	cb.Failures++
 	cb.LastFailure = time.Now()
 	if cb.Failures >= cb.Threshold {
 		cb.State = CircuitOpen
 	}
+}
+
+// GetState returns current state safely
+func (cb *CircuitBreaker) GetState() CircuitState {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.State
+}
+
+// GetStats returns all stats for monitoring safely
+func (cb *CircuitBreaker) GetStats() (state CircuitState, failures int, threshold int, lastFailure time.Time, resetDuration time.Duration) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.State, cb.Failures, cb.Threshold, cb.LastFailure, cb.ResetDuration
 }
 
 // EngineOrchestrator 引擎编排器
@@ -218,7 +242,7 @@ func (o *EngineOrchestrator) GetCircuitState(engineName string) CircuitState {
 	if !exists {
 		return CircuitClosed
 	}
-	return cb.State
+	return cb.GetState()
 }
 
 // IsEngineCircuited 检查引擎是否被熔断（true = 应跳过）
@@ -229,7 +253,8 @@ func (o *EngineOrchestrator) IsEngineCircuited(engineName string) bool {
 	if !exists {
 		return false
 	}
-	return cb.State == CircuitOpen && time.Since(cb.LastFailure) <= cb.ResetDuration
+	state, _, _, lastFailure, resetDuration := cb.GetStats()
+	return state == CircuitOpen && time.Since(lastFailure) <= resetDuration
 }
 
 // RecordEngineSuccess 记录引擎成功（关闭熔断器）
@@ -255,9 +280,11 @@ func (o *EngineOrchestrator) RecordEngineFailure(engineName string) {
 			ResetDuration: DefaultCircuitBreakerDuration,
 		}
 	}
-	o.circuitBreakers[name].RecordFailure()
-	if o.circuitBreakers[name].State == CircuitOpen {
-		logger.Warnf("Circuit breaker opened for engine %s after %d consecutive failures", engineName, o.circuitBreakers[name].Threshold)
+	cb := o.circuitBreakers[name]
+	cb.RecordFailure()
+	state, _, threshold, _, _ := cb.GetStats()
+	if state == CircuitOpen {
+		logger.Warnf("Circuit breaker opened for engine %s after %d consecutive failures", engineName, threshold)
 	}
 }
 
@@ -267,12 +294,13 @@ func (o *EngineOrchestrator) GetCircuitBreakerStats() map[string]map[string]inte
 	defer o.mutex.RUnlock()
 	stats := make(map[string]map[string]interface{})
 	for name, cb := range o.circuitBreakers {
+		state, failures, threshold, lastFailure, resetDuration := cb.GetStats()
 		stats[name] = map[string]interface{}{
-			"state":         string(cb.State),
-			"failures":      cb.Failures,
-			"threshold":     cb.Threshold,
-			"last_failure":  cb.LastFailure,
-			"reset_duration": cb.ResetDuration,
+			"state":         string(state),
+			"failures":      failures,
+			"threshold":     threshold,
+			"last_failure":  lastFailure,
+			"reset_duration": resetDuration,
 		}
 	}
 	return stats

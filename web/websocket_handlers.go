@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"os"
@@ -137,7 +138,7 @@ func (s *Server) validateWebSocketRequest(r *http.Request) bool {
 			logger.Warn("WebSocket connection rejected: missing token")
 			return false
 		}
-		if token != configToken {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(configToken)) != 1 {
 			logger.Warn("WebSocket connection rejected: invalid token")
 			return false
 		}

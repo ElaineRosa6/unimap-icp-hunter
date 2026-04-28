@@ -1,0 +1,45 @@
+{
+  "baseUrl": "http://localhost:8448",
+  "concurrency": 5,
+  "requestsPerConcurrency": 20,
+  "requestsPerEndpoint": 100,
+  "generatedAt": "2026-04-24T15:37:11.0709559+08:00",
+  "results": [
+    {
+      "endpoint": "/health",
+      "total": 100,
+      "success": 100,
+      "fail": 0,
+      "p50Ms": 5.74,
+      "p99Ms": 152.176,
+      "maxMs": 153.053,
+      "statusCodes": {
+        "200": 100
+      }
+    },
+    {
+      "endpoint": "/health/ready",
+      "total": 100,
+      "success": 100,
+      "fail": 0,
+      "p50Ms": 5.658,
+      "p99Ms": 136.779,
+      "maxMs": 145.809,
+      "statusCodes": {
+        "200": 100
+      }
+    },
+    {
+      "endpoint": "/query?query=port%3A80&engines=fofa&type=ip",
+      "total": 100,
+      "success": 100,
+      "fail": 0,
+      "p50Ms": 8.454,
+      "p99Ms": 95.133,
+      "maxMs": 100.27,
+      "statusCodes": {
+        "200": 100
+      }
+    }
+  ]
+}

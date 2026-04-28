@@ -102,4 +102,4 @@ go test ./...
 1. README.md
 2. QUICKSTART.md（本文）
 3. USAGE.md
-4. PROJECT_FULL_REVIEW_2026-03-20.md
+4. ARCHITECTURE.md（了解架构设计）

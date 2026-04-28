@@ -290,6 +290,47 @@ var (
 		},
 		[]string{"mode", "result"},
 	)
+
+	// 调度器指标
+	schedulerTaskExecutionTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unimap_scheduler_task_execution_total",
+			Help: "Total number of scheduled task executions by task type and status.",
+		},
+		[]string{"task_type", "status"},
+	)
+
+	schedulerTaskExecutionDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "unimap_scheduler_task_execution_duration_seconds",
+			Help: "Scheduled task execution duration in seconds.",
+			Buckets: []float64{1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0},
+		},
+		[]string{"task_type"},
+	)
+
+	schedulerTasksRegisteredGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "unimap_scheduler_tasks_registered",
+			Help: "Current number of registered scheduled tasks by type.",
+		},
+		[]string{"task_type"},
+	)
+
+	schedulerTasksEnabledGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "unimap_scheduler_tasks_enabled",
+			Help: "Current number of enabled scheduled tasks.",
+		},
+	)
+
+	schedulerTaskRetriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unimap_scheduler_task_retries_total",
+			Help: "Total number of task retries by task type.",
+		},
+		[]string{"task_type"},
+	)
 )
 
 func init() {
@@ -348,6 +389,13 @@ func init() {
 	prometheus.MustRegister(screenshotModeSwitchesTotal)
 	prometheus.MustRegister(screenshotCurrentMode)
 	prometheus.MustRegister(screenshotHealthCheckTotal)
+
+	// 调度器指标
+	prometheus.MustRegister(schedulerTaskExecutionTotal)
+	prometheus.MustRegister(schedulerTaskExecutionDurationSeconds)
+	prometheus.MustRegister(schedulerTasksRegisteredGauge)
+	prometheus.MustRegister(schedulerTasksEnabledGauge)
+	prometheus.MustRegister(schedulerTaskRetriesTotal)
 }
 
 // HTTP 指标函数
@@ -540,5 +588,41 @@ func IncScreenshotHealthCheck(mode string, healthy bool) {
 		r = "healthy"
 	}
 	screenshotHealthCheckTotal.WithLabelValues(mode, r).Inc()
+}
+
+// 调度器指标函数
+func IncSchedulerTaskExecution(taskType string, status string) {
+	if taskType == "" {
+		taskType = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	schedulerTaskExecutionTotal.WithLabelValues(taskType, status).Inc()
+}
+
+func ObserveSchedulerTaskExecutionDuration(taskType string, duration time.Duration) {
+	if taskType == "" {
+		taskType = "unknown"
+	}
+	schedulerTaskExecutionDurationSeconds.WithLabelValues(taskType).Observe(duration.Seconds())
+}
+
+func SetSchedulerTasksRegistered(taskType string, count int) {
+	if taskType == "" {
+		taskType = "unknown"
+	}
+	schedulerTasksRegisteredGauge.WithLabelValues(taskType).Set(float64(count))
+}
+
+func SetSchedulerTasksEnabled(count int) {
+	schedulerTasksEnabledGauge.Set(float64(count))
+}
+
+func IncSchedulerTaskRetry(taskType string) {
+	if taskType == "" {
+		taskType = "unknown"
+	}
+	schedulerTaskRetriesTotal.WithLabelValues(taskType).Inc()
 }
 
