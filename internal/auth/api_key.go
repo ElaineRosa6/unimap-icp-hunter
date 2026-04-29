@@ -84,8 +84,8 @@ func (m *APIKeyManager) GenerateAPIKey(description string, permissions []string,
 
 // ValidateAPIKey 验证API密钥
 func (m *APIKeyManager) ValidateAPIKey(key string) (*APIKey, error) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
+	m.mutex.Lock() // Write lock because we may modify status
+	defer m.mutex.Unlock()
 
 	apiKey, exists := m.keys[key]
 	if !exists {
@@ -101,6 +101,7 @@ func (m *APIKeyManager) ValidateAPIKey(key string) (*APIKey, error) {
 	if !apiKey.ExpiresAt.IsZero() && time.Now().After(apiKey.ExpiresAt) {
 		// 更新状态为过期
 		apiKey.Status = "expired"
+		m.saveToStorage() // Persist the status change
 		return nil, unierror.APIUnauthorized("API key has expired")
 	}
 

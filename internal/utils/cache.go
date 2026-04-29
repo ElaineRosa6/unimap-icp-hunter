@@ -74,6 +74,9 @@ type cacheItem struct {
 
 // NewMemoryCache 创建内存缓存
 func NewMemoryCache(maxSize int, cleanupInterval time.Duration) *MemoryCache {
+	if maxSize <= 0 {
+		maxSize = 10000 // Default max entries to prevent unbounded growth
+	}
 	cache := &MemoryCache{
 		cache:           make(map[string]cacheItem),
 		maxSize:         maxSize,

@@ -98,7 +98,7 @@ func TestWebhookChannel_Send_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ch := NewWebhookChannel(srv.URL, nil, true)
+	ch := NewWebhookChannelForTest(srv.URL, nil, true)
 	alert := Alert{
 		ID:        "test-1",
 		Level:     AlertLevelWarning,
@@ -128,7 +128,7 @@ func TestWebhookChannel_Send_WithHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ch := NewWebhookChannel(srv.URL, map[string]string{"Authorization": "Bearer secret"}, true)
+	ch := NewWebhookChannelForTest(srv.URL, map[string]string{"Authorization": "Bearer secret"}, true)
 	alert := Alert{ID: "1", Level: AlertLevelInfo, Type: AlertTypeSystem, Title: "t", Message: "m", Timestamp: time.Now()}
 	if err := ch.Send(alert); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -144,7 +144,7 @@ func TestWebhookChannel_Send_BadStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ch := NewWebhookChannel(srv.URL, nil, true)
+	ch := NewWebhookChannelForTest(srv.URL, nil, true)
 	alert := Alert{ID: "1", Level: AlertLevelInfo, Type: AlertTypeSystem, Title: "t", Message: "m", Timestamp: time.Now()}
 	err := ch.Send(alert)
 	if err == nil {

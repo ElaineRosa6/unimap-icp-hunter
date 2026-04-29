@@ -2,6 +2,65 @@
 
 ---
 
+## [2026-04-29] 第二轮安全修复 — 24 项 Code Review 修复闭环
+
+> **分支**: `release/major-upgrade-vNEXT`
+> **变更类型**: 安全修复 + 代码质量提升
+> **涉及模块**: web、internal/config、internal/alerting、internal/auth、internal/utils、internal/backup、cmd/unimap-cli
+
+### 一、认证与授权 (3 项)
+
+- **WebSocket 认证绕过修复** — WebSocket 连接路由到受认证中间件保护的路径，Bridge API 通过完整中间件链 (`web/server.go`)
+- **Admin Token 自动输出** — loopback 地址启动时打印生成的 token，非 loopback fail-closed (`internal/config/config.go`)
+- **移除 query 参数认证** — `admin_token` query 参数移除，仅保留 `X-Admin-Token` header 防日志泄露 (`web/middleware_auth.go`)
+
+### 二、SSRF 防护 (2 项)
+
+- **Webhook URL SSRF 防护** — `NewWebhookChannel` 添加 scheme 校验、回环/私有 IP 拦截、DNS 解析验证 (`internal/alerting/channels.go`)
+- **DNS Rebinding 防护** — 对 hostname 进行 DNS 解析并检查返回的 IP 地址
+
+### 三、并发安全 (3 项)
+
+- **APIKeyManager 竞态修复** — `ValidateAPIKey` 改为写锁 (`internal/auth/api_key.go`)
+- **缓存策略线程安全** — `DefaultCacheStrategy` 添加 `sync.RWMutex` (`internal/utils/cache_strategy.go`)
+- **Chrome 进程退出清理** — `s.chromeCmd` 置 nil 支持自动恢复 (`web/cdp_handlers.go`)
+
+### 四、资源管理 (3 项)
+
+- **篡改检测并发限制** — `maxTamperConcurrency = 20`, `maxTamperURLs = 500` (`web/tamper_handlers.go`)
+- **内存缓存默认上限** — `maxSize` 默认 10000 (`internal/utils/cache.go`)
+- **CSV 文件防覆盖** — `os.O_CREATE|os.O_EXCL` (`cmd/unimap-cli/main.go`)
+
+### 五、备份系统 (3 项)
+
+- **Tar 相对路径** — `filepath.Rel` 替代绝对路径 (`internal/backup/backup.go`)
+- **移除 configs 默认备份** — 防止敏感配置泄露 (`web/backup_handlers.go`)
+- **备份配置回退与错误报告** — 默认值 + 完善错误收集 (`internal/backup/backup.go`)
+
+### 六、错误处理与输入验证 (3 项)
+
+- **错误信息脱敏** — `sanitizeError()` 过滤 stack trace (`web/http_helpers.go`, `web/screenshot_handlers.go`)
+- **限流 XFF 伪造防护** — 仅信任来自私有/内部地址的 `X-Forwarded-For` (`web/middleware_ratelimit.go`)
+- **默认绑定 localhost** — `BindAddress` 默认 `127.0.0.1` (`internal/config/config.go`)
+
+### 七、测试适配 (7 项)
+
+- **Webhook 测试构造函数** — `NewWebhookChannelForTest` 绕过 SSRF 验证 (`internal/alerting/channels.go`)
+- **collectFiles 签名变更** — 更新 4 个调用点 (`internal/backup/backup_test.go`)
+- **fail-closed 测试期望更新** — `TestIsPrivateOrInternalIP_InvalidIP` (`web/screenshot_helpers_test.go`)
+- **Query 认证测试更新** — `TestAdminAuthMiddleware_ValidQuery_Passes` 改用 header (`web/middleware_auth_test.go`)
+- **CORS 预检请求处理** — 完善 OPTIONS 处理 (`web/http_helpers.go`)
+- **CLI 路径校验** — CSV 路径存在性检查 (`cmd/unimap-cli/main.go`)
+- **备份错误处理** — 部分失败正确报告 (`internal/backup/backup.go`)
+
+### 验证结果
+
+- ✅ `go build ./...` — 构建成功
+- ✅ `go vet ./...` — 静态检查通过
+- ✅ `go test -race ./...` — 32 个测试包通过，0 数据竞争
+
+---
+
 ## [2026-04-25] 生产就绪闭环 — 分布式故障转移证据归档
 
 > **分支**: `release/major-upgrade-vNEXT`

@@ -41,7 +41,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 
 	result, err := backup.Backup(cfg)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "backup_failed", err.Error(), nil)
+		writeAPIError(w, http.StatusInternalServerError, "backup_failed", "backup failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -70,7 +70,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 
 	backups, err := backup.ListBackups(backupDir, backupPrefix)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error(), nil)
+		writeAPIError(w, http.StatusInternalServerError, "list_failed", "list backups failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -115,10 +115,8 @@ func (s *Server) buildBackupSources() []string {
 		sources = append(sources, "./data")
 	}
 
-	// 包含配置文件
-	if dirExists("./configs") {
-		sources = append(sources, "./configs")
-	}
+	// 注意：不包含 ./configs，避免泄露敏感配置（API keys、tokens）
+	// 如需备份配置，请手动添加到自定义源
 
 	return sources
 }

@@ -504,8 +504,7 @@ func (s *Scheduler) DeleteTask(id string) error {
 		return fmt.Errorf("task %s not found", id)
 	}
 	delete(s.tasks, id)
-	s.Save()
-	return nil
+	return s.saveLocked()
 }
 
 // EnableTask enables a task and schedules it.
@@ -521,8 +520,7 @@ func (s *Scheduler) EnableTask(id string) error {
 		task.Enabled = false
 		return fmt.Errorf("failed to schedule task: %w", err)
 	}
-	s.Save()
-	return nil
+	return s.saveLocked()
 }
 
 // DisableTask disables a task and removes it from cron.
@@ -538,8 +536,7 @@ func (s *Scheduler) DisableTask(id string) error {
 		s.cron.Remove(entryID)
 		delete(s.cronIDs, id)
 	}
-	s.Save()
-	return nil
+	return s.saveLocked()
 }
 
 // RunTaskNow executes a task immediately, regardless of its enabled state.

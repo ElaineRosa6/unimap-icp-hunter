@@ -7,7 +7,7 @@ import (
 )
 
 // adminAuthMiddleware returns a middleware that requires X-Admin-Token header
-// (or admin_token query parameter) for all requests except public paths.
+// for all requests except public paths.
 func (s *Server) adminAuthMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -17,11 +17,8 @@ func (s *Server) adminAuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Extract token from header or query
+			// Extract token from header only (query parameter removed for security)
 			token := r.Header.Get("X-Admin-Token")
-			if token == "" {
-				token = r.URL.Query().Get("admin_token")
-			}
 
 			adminToken := s.adminToken()
 			if adminToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(adminToken)) != 1 {

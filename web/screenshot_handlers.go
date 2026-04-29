@@ -197,7 +197,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -246,7 +246,7 @@ func (s *Server) handleSearchEngineScreenshot(w http.ResponseWriter, r *http.Req
 		logger.Errorf("Failed to capture search engine screenshot: %v", err)
 		metrics.IncScreenshotRequest("search_engine", "error")
 		metrics.ObserveScreenshotDuration("search_engine", time.Since(startTime))
-		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -339,7 +339,7 @@ func (s *Server) handleTargetScreenshot(w http.ResponseWriter, r *http.Request) 
 			writeAPIError(w, http.StatusBadRequest, "missing_parameters", "missing url or ip parameter", nil)
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "screenshot_failed", "screenshot failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -430,7 +430,7 @@ func (s *Server) handleBatchScreenshot(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := s.screenshotApp.CaptureBatch(r.Context(), s.screenshotMgr, appReq)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -494,7 +494,7 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 			case strings.Contains(errText, "too many"):
 				writeAPIError(w, http.StatusBadRequest, "too_many_urls", "too many URLs", map[string]int{"max": 100})
 			default:
-				writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
+				writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", sanitizeError(err.Error()))
 			}
 			return
 		}
@@ -529,7 +529,7 @@ func (s *Server) handleBatchURLsScreenshot(w http.ResponseWriter, r *http.Reques
 			case strings.Contains(errText, "too many"):
 				writeAPIError(w, http.StatusBadRequest, "too_many_urls", "too many URLs", map[string]int{"max": 100})
 			default:
-				writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", err.Error())
+				writeAPIError(w, http.StatusInternalServerError, "batch_screenshot_failed", "batch screenshot failed", sanitizeError(err.Error()))
 			}
 			return
 		}
@@ -597,7 +597,7 @@ func (s *Server) handleScreenshotBatches(w http.ResponseWriter, r *http.Request)
 
 	batches, err := s.screenshotApp.ListBatches()
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "list_batches_failed", "list screenshot batches failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "list_batches_failed", "list screenshot batches failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -628,7 +628,7 @@ func (s *Server) handleScreenshotBatchFiles(w http.ResponseWriter, r *http.Reque
 		case strings.Contains(errText, "not found"):
 			writeAPIError(w, http.StatusNotFound, "batch_not_found", "batch not found", nil)
 		default:
-			writeAPIError(w, http.StatusInternalServerError, "list_batch_files_failed", "list batch files failed", err.Error())
+			writeAPIError(w, http.StatusInternalServerError, "list_batch_files_failed", "list batch files failed", sanitizeError(err.Error()))
 		}
 		return
 	}
@@ -660,7 +660,7 @@ func (s *Server) handleScreenshotBatchDelete(w http.ResponseWriter, r *http.Requ
 		case strings.Contains(errText, "not found"):
 			writeAPIError(w, http.StatusNotFound, "batch_not_found", "batch not found", nil)
 		default:
-			writeAPIError(w, http.StatusInternalServerError, "delete_batch_failed", "delete batch failed", err.Error())
+			writeAPIError(w, http.StatusInternalServerError, "delete_batch_failed", "delete batch failed", sanitizeError(err.Error()))
 		}
 		return
 	}
@@ -698,7 +698,7 @@ func (s *Server) handleScreenshotFileDelete(w http.ResponseWriter, r *http.Reque
 		case strings.Contains(errText, "not found"):
 			writeAPIError(w, http.StatusNotFound, "file_not_found", "file not found", nil)
 		default:
-			writeAPIError(w, http.StatusInternalServerError, "delete_file_failed", "delete file failed", err.Error())
+			writeAPIError(w, http.StatusInternalServerError, "delete_file_failed", "delete file failed", sanitizeError(err.Error()))
 		}
 		return
 	}

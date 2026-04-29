@@ -42,7 +42,7 @@ func TestAlerting_WebhookEndToEnd(t *testing.T) {
 
 	// 2. 创建告警管理器，注册 Webhook 渠道
 	mgr := alerting.NewManager()
-	webhook := alerting.NewWebhookChannel(mockServer.URL, nil, true)
+	webhook := alerting.NewWebhookChannelForTest(mockServer.URL, nil, true)
 	mgr.RegisterChannel(webhook)
 
 	// 3. 触发篡改检测告警
@@ -143,7 +143,7 @@ func TestAlerting_WebhookWithAuthHeader(t *testing.T) {
 	defer mockServer.Close()
 
 	mgr := alerting.NewManager()
-	webhook := alerting.NewWebhookChannel(mockServer.URL, map[string]string{
+	webhook := alerting.NewWebhookChannelForTest(mockServer.URL, map[string]string{
 		"Authorization": "Bearer test-token-123",
 	}, true)
 	mgr.RegisterChannel(webhook)

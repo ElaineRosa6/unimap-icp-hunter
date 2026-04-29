@@ -80,7 +80,7 @@ func (s *Server) handleScreenshotBridgePair(w http.ResponseWriter, r *http.Reque
 	token, expireAt, err := s.issueBridgeToken(ttl)
 	if err != nil {
 		s.setBridgeLastError("bridge_internal_error: failed to issue bridge token")
-		writeAPIError(w, http.StatusInternalServerError, "bridge_internal_error", "failed to issue bridge token", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "bridge_internal_error", "failed to issue bridge token", sanitizeError(err.Error()))
 		return
 	}
 	s.clearBridgeLastError()
@@ -125,7 +125,7 @@ func (s *Server) handleScreenshotBridgeRotateToken(w http.ResponseWriter, r *htt
 	newToken, expireAt, err := s.issueBridgeToken(ttl)
 	if err != nil {
 		s.setBridgeLastError("bridge_internal_error: failed to rotate bridge token")
-		writeAPIError(w, http.StatusInternalServerError, "bridge_internal_error", "failed to rotate bridge token", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "bridge_internal_error", "failed to rotate bridge token", sanitizeError(err.Error()))
 		return
 	}
 
@@ -163,10 +163,16 @@ func (s *Server) handleScreenshotBridgeMockResult(w http.ResponseWriter, r *http
 		return
 	}
 
+	maxBodyBytes := int64(10 * 1024 * 1024)
+	if s.config != nil && s.config.Web.RequestLimits.MaxBodyBytes > 0 {
+		maxBodyBytes = s.config.Web.RequestLimits.MaxBodyBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
 	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.setBridgeLastError("invalid_bridge_result: failed to read bridge result payload")
-		writeAPIError(w, http.StatusBadRequest, "invalid_bridge_result", "failed to read bridge result payload", nil)
+		s.setBridgeLastError("invalid_bridge_result: request body too large")
+		writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds configured limit", nil)
 		return
 	}
 	if err := s.validateBridgeCallbackSignatureIfRequired(r, rawBody, token); err != nil {

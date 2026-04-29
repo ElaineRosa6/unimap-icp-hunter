@@ -662,7 +662,7 @@ func (m *Manager) applyDefaults(config *Config) {
 		config.Web.Port = 8448
 	}
 	if config.Web.BindAddress == "" {
-		config.Web.BindAddress = "0.0.0.0"
+		config.Web.BindAddress = "127.0.0.1"
 	}
 	if len(config.Web.CORS.AllowedOrigins) == 0 {
 		config.Web.CORS.AllowedOrigins = []string{"http://localhost:8448", "http://127.0.0.1:8448"}
@@ -693,8 +693,16 @@ func (m *Manager) applyDefaults(config *Config) {
 
 	// 默认启用 Web 认证：如果未配置 admin_token，生成安全随机 token
 	if strings.TrimSpace(config.Web.Auth.AdminToken) == "" {
-		config.Web.Auth.AdminToken = generateSecureToken(32)
-		config.Web.Auth.Enabled = true
+		if config.Web.BindAddress != "127.0.0.1" && config.Web.BindAddress != "localhost" {
+			config.Web.Auth.AdminToken = generateSecureToken(32)
+			config.Web.Auth.Enabled = true
+			// Non-loopback binding requires explicit admin_token — token generated but must be set via config
+		} else {
+			token := generateSecureToken(32)
+			config.Web.Auth.AdminToken = token
+			config.Web.Auth.Enabled = true
+			fmt.Printf("[config] Generated development admin token (bind=%s): %s\n", config.Web.BindAddress, token)
+		}
 	} else if !config.Web.Auth.Enabled {
 		config.Web.Auth.Enabled = true
 	}

@@ -185,7 +185,7 @@ func TestCleanupOldBackups(t *testing.T) {
 }
 
 func TestCollectFiles_NonExistent(t *testing.T) {
-	_, err := collectFiles("/nonexistent/path")
+	_, _, err := collectFiles("/nonexistent/path")
 	if err == nil {
 		t.Fatal("expected error for non-existent path")
 	}
@@ -193,7 +193,7 @@ func TestCollectFiles_NonExistent(t *testing.T) {
 
 func TestCollectFiles_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	files, err := collectFiles(dir)
+	files, _, err := collectFiles(dir)
 	if err != nil {
 		t.Fatalf("collectFiles() error: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestCollectFiles_WithFiles(t *testing.T) {
 	os.MkdirAll(subDir, 0755)
 	os.WriteFile(filepath.Join(subDir, "c.txt"), []byte("c"), 0644)
 
-	files, err := collectFiles(dir)
+	files, _, err := collectFiles(dir)
 	if err != nil {
 		t.Fatalf("collectFiles() error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestCollectFiles_SingleFile(t *testing.T) {
 	file := filepath.Join(dir, "single.txt")
 	os.WriteFile(file, []byte("single"), 0644)
 
-	files, err := collectFiles(file)
+	files, _, err := collectFiles(file)
 	if err != nil {
 		t.Fatalf("collectFiles() error: %v", err)
 	}

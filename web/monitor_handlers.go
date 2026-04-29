@@ -67,7 +67,7 @@ func (s *Server) handleImportURLs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "file_parse_failed", "failed to parse file", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "file_parse_failed", "failed to parse file", sanitizeError(err.Error()))
 		return
 	}
 
@@ -121,7 +121,7 @@ func (s *Server) handleURLReachability(w http.ResponseWriter, r *http.Request) {
 
 	response, err := s.monitorApp.CheckURLReachability(r.Context(), req.URLs, req.Concurrency)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "reachability_check_failed", "url reachability check failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "reachability_check_failed", "url reachability check failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -172,7 +172,7 @@ func (s *Server) handleURLPortScan(w http.ResponseWriter, r *http.Request) {
 
 	response, err := s.monitorApp.ScanURLPorts(r.Context(), req.URLs, req.Ports, req.Concurrency)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "url_port_scan_failed", "url port scan failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "url_port_scan_failed", "url port scan failed", sanitizeError(err.Error()))
 		return
 	}
 

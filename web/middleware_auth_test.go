@@ -67,25 +67,6 @@ func TestAdminAuthMiddleware_ValidHeader_Passes(t *testing.T) {
 	}
 }
 
-func TestAdminAuthMiddleware_ValidQuery_Passes(t *testing.T) {
-	s := &Server{config: &config.Config{}}
-	s.config.Web.Auth.Enabled = true
-	s.config.Web.Auth.AdminToken = "secret-token"
-
-	mw := s.adminAuthMiddleware()
-	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/dashboard?admin_token=secret-token", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-}
-
 func TestAdminAuthMiddleware_PublicPath_SkipsAuth(t *testing.T) {
 	s := &Server{config: &config.Config{}}
 	s.config.Web.Auth.Enabled = true

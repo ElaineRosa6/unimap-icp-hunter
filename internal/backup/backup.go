@@ -65,15 +65,21 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
 
-	// 收集所有要备份的文件
-	var files []string
+	// 收集所有要备份的文件（带基础目录信息）
+	type fileWithBase struct {
+		path   string
+		baseDir string
+	}
+	var files []fileWithBase
 	for _, src := range cfg.Sources {
-		srcFiles, err := collectFiles(src)
+		srcFiles, baseDir, err := collectFiles(src)
 		if err != nil {
 			logger.Warnf("Backup source %s: %v", src, err)
 			continue
 		}
-		files = append(files, srcFiles...)
+		for _, f := range srcFiles {
+			files = append(files, fileWithBase{path: f, baseDir: baseDir})
+		}
 	}
 
 	if len(files) == 0 {
@@ -81,9 +87,9 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 	}
 
 	// 写入 tar
-	for _, file := range files {
-		if err := addFileToTar(tw, file); err != nil {
-			logger.Warnf("Failed to add %s to backup: %v", file, err)
+	for _, f := range files {
+		if err := addFileToTar(tw, f.path, f.baseDir); err != nil {
+			logger.Warnf("Failed to add %s to backup: %v", f.path, err)
 		}
 	}
 
@@ -151,15 +157,15 @@ func ListBackups(outputDir, prefix string) ([]BackupResult, error) {
 	return results, nil
 }
 
-// collectFiles 递归收集目录下的所有文件
-func collectFiles(path string) ([]string, error) {
+// collectFiles 递归收集目录下的所有文件，返回文件列表和基础目录
+func collectFiles(path string) ([]string, string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if !info.IsDir() {
-		return []string{path}, nil
+		return []string{path}, filepath.Dir(path), nil
 	}
 
 	var files []string
@@ -172,23 +178,33 @@ func collectFiles(path string) ([]string, error) {
 		}
 		return nil
 	})
-	return files, err
+	return files, path, err
 }
 
 // addFileToTar 将文件添加到 tar
-func addFileToTar(tw *tar.Writer, path string) error {
+func addFileToTar(tw *tar.Writer, path string, baseDir string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
+	}
+
+	// 使用相对于 baseDir 的路径，避免泄露目录结构
+	relPath, err := filepath.Rel(baseDir, path)
+	if err != nil {
+		relPath = filepath.Base(path)
+	}
+	// 清理路径，防止路径遍历攻击
+	relPath = filepath.Clean(relPath)
+	if strings.HasPrefix(relPath, "..") {
+		relPath = filepath.Base(path)
 	}
 
 	header, err := tar.FileInfoHeader(info, "")
 	if err != nil {
 		return err
 	}
+	header.Name = relPath
 
-	// 使用相对路径
-	header.Name = path
 	if err := tw.WriteHeader(header); err != nil {
 		return err
 	}

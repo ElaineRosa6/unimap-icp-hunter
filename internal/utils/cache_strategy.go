@@ -474,6 +474,7 @@ func (s *DynamicCacheStrategy) unlock() {
 type DefaultCacheStrategy struct {
 	baseDuration time.Duration
 	stats        CacheStrategyStats
+	mu           sync.RWMutex
 }
 
 // NewDefaultCacheStrategy 创建默认缓存策略
@@ -494,6 +495,8 @@ func (s *DefaultCacheStrategy) GetCacheDuration(engineName, query string, page, 
 
 // RecordQuery 记录查询信息
 func (s *DefaultCacheStrategy) RecordQuery(engineName, query string, page, pageSize int, duration time.Duration, success bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.stats.TotalQueries++
 	s.stats.TotalDuration += duration
 	if s.stats.TotalQueries > 0 {
@@ -504,6 +507,8 @@ func (s *DefaultCacheStrategy) RecordQuery(engineName, query string, page, pageS
 
 // GetStats 获取策略统计信息
 func (s *DefaultCacheStrategy) GetStats() CacheStrategyStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.stats
 }
 

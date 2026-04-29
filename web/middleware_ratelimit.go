@@ -213,15 +213,17 @@ func stringInt(n int64) string {
 
 // getClientIP 获取客户端真实 IP
 func getClientIP(r *http.Request) string {
-	// 检查 X-Forwarded-For 头
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// 取第一个 IP
-		for i, c := range xff {
-			if c == ',' {
-				return strings.TrimSpace(xff[:i])
+	// Only trust X-Forwarded-For when the immediate connection is a known proxy
+	if isPrivateOrInternalHost(r.Context(), r.RemoteAddr) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Take the first IP (original client)
+			for i, c := range xff {
+				if c == ',' {
+					return strings.TrimSpace(xff[:i])
+				}
 			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 
 	// 检查 X-Real-IP 头

@@ -61,6 +61,17 @@ func (s *Server) handleTamperCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit concurrency and URL count to prevent resource exhaustion
+	const maxTamperConcurrency = 20
+	const maxTamperURLs = 500
+	if len(req.URLs) > maxTamperURLs {
+		writeAPIError(w, http.StatusBadRequest, "too_many_urls", fmt.Sprintf("maximum %d URLs allowed", maxTamperURLs), nil)
+		return
+	}
+	if req.Concurrency <= 0 || req.Concurrency > maxTamperConcurrency {
+		req.Concurrency = maxTamperConcurrency
+	}
+
 	proxy := s.selectRequestProxy()
 	resp, err := s.tamperApp.Check(r.Context(), service.TamperCheckRequest{
 		URLs:        req.URLs,
@@ -73,7 +84,7 @@ func (s *Server) handleTamperCheck(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "tamper_check_failed", "tamper check failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "tamper_check_failed", "tamper check failed", sanitizeError(err.Error()))
 		return
 	}
 	s.reportRequestProxy(proxy, true)
@@ -102,6 +113,17 @@ func (s *Server) handleTamperBaseline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit concurrency and URL count to prevent resource exhaustion
+	const maxTamperConcurrency = 20
+	const maxTamperURLs = 500
+	if len(req.URLs) > maxTamperURLs {
+		writeAPIError(w, http.StatusBadRequest, "too_many_urls", fmt.Sprintf("maximum %d URLs allowed", maxTamperURLs), nil)
+		return
+	}
+	if req.Concurrency <= 0 || req.Concurrency > maxTamperConcurrency {
+		req.Concurrency = maxTamperConcurrency
+	}
+
 	proxy := s.selectRequestProxy()
 	resp, err := s.tamperApp.SetBaseline(r.Context(), service.TamperBaselineRequest{
 		URLs:        req.URLs,
@@ -113,7 +135,7 @@ func (s *Server) handleTamperBaseline(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "no_urls_provided", "no URLs provided", nil)
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "set_baseline_failed", "set baseline failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "set_baseline_failed", "set baseline failed", sanitizeError(err.Error()))
 		return
 	}
 	s.reportRequestProxy(proxy, true)
@@ -134,7 +156,7 @@ func (s *Server) handleTamperBaselineList(w http.ResponseWriter, r *http.Request
 
 	urls, err := s.tamperApp.ListBaselines()
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "list_baselines_failed", "list baselines failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "list_baselines_failed", "list baselines failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -159,7 +181,7 @@ func (s *Server) handleTamperBaselineDelete(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := s.tamperApp.DeleteBaseline(urlValue); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "delete_baseline_failed", "delete baseline failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "delete_baseline_failed", "delete baseline failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -197,7 +219,7 @@ func (s *Server) handleTamperHistory(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.tamperApp.QueryHistory(filter)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "list_history_failed", "list history failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "list_history_failed", "list history failed", sanitizeError(err.Error()))
 		return
 	}
 
@@ -223,7 +245,7 @@ func (s *Server) handleTamperHistoryDelete(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := s.tamperApp.DeleteCheckRecords(urlValue); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "delete_history_failed", "delete history failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "delete_history_failed", "delete history failed", sanitizeError(err.Error()))
 		return
 	}
 

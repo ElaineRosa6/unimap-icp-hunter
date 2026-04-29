@@ -37,7 +37,7 @@ func TestManager_SendWarning_TamperWebhookE2E(t *testing.T) {
 	defer srv.Close()
 
 	manager := NewManager()
-	manager.RegisterChannel(NewWebhookChannel(srv.URL, map[string]string{
+	manager.RegisterChannel(NewWebhookChannelForTest(srv.URL, map[string]string{
 		"X-Test-Channel": "tamper-e2e",
 	}, true))
 

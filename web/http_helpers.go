@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -183,9 +184,9 @@ func requestSizeLimitMiddleware(maxBodyBytes int64) func(http.Handler) http.Hand
 	}
 }
 
-// isPrivateOrInternalIP 检查主机名是否为私有/回环/内部地址
-func isPrivateOrInternalIP(host string) bool {
-	host = strings.TrimSpace(host)
+// isPrivateOrInternalHost 检查主机名是否为私有/回环/内部地址，对域名做 DNS 解析
+func isPrivateOrInternalHost(ctx context.Context, host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
 	if host == "" {
 		return false
 	}
@@ -198,12 +199,34 @@ func isPrivateOrInternalIP(host string) bool {
 	if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "0.0.0.0" {
 		return true
 	}
-	// 解析 IP
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil {
-		return false
+	// 如果是字面 IP，直接检查
+	if ip := net.ParseIP(host); ip != nil {
+		return isBlockedIP(ip)
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+	// 对域名做 DNS 解析，所有解析结果都必须是公网 IP
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return true // DNS 解析失败视为不安全
+	}
+	for _, addr := range ips {
+		if isBlockedIP(addr.IP) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
+}
+
+// isPrivateOrInternalIP 兼容旧接口，内部委托给 isPrivateOrInternalHost
+func isPrivateOrInternalIP(host string) bool {
+	return isPrivateOrInternalHost(context.Background(), host)
 }
 
 func corsMiddleware(allowedOrigins, allowedMethods, allowedHeaders, exposedHeaders []string, allowCredentials bool, maxAge int) func(http.Handler) http.Handler {
@@ -256,4 +279,25 @@ func corsMiddleware(allowedOrigins, allowedMethods, allowedHeaders, exposedHeade
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// sanitizeError removes internal details from error messages before returning to client
+func sanitizeError(err string) string {
+	if err == "" {
+		return ""
+	}
+	// Strip common internal patterns: file paths, stack traces, connection strings
+	sanitized := err
+	// Remove Go stack trace patterns
+	if idx := strings.Index(sanitized, "\ngoroutine "); idx != -1 {
+		sanitized = sanitized[:idx]
+	}
+	if idx := strings.Index(sanitized, "\nruntime."); idx != -1 {
+		sanitized = sanitized[:idx]
+	}
+	// Truncate very long errors
+	if len(sanitized) > 500 {
+		sanitized = sanitized[:500] + "..."
+	}
+	return sanitized
 }

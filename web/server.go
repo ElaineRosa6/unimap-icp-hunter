@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -520,7 +521,7 @@ func (s *Server) Start() error {
 
 	allowedOrigins := allowedOriginsFromConfig(s.config)
 	allowedMethods := []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	allowedHeaders := []string{"Content-Type", "Authorization", "X-Requested-With", "X-WebSocket-Token", requestid.HeaderName}
+	allowedHeaders := []string{"Content-Type", "Authorization", "X-Admin-Token", "X-Requested-With", "X-WebSocket-Token", requestid.HeaderName}
 	exposedHeaders := []string{requestid.HeaderName}
 	allowCredentials := true
 	maxAge := 600
@@ -565,17 +566,24 @@ func (s *Server) Start() error {
 			strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 
 		if isWebSocket && r.URL.Path == "/api/ws" {
+			// WebSocket must pass admin auth (same middleware chain as regular requests)
+			if s.adminToken() != "" && !s.isPublicPath(r.URL.Path) {
+				token := r.Header.Get("X-Admin-Token")
+				if token == "" {
+					token = extractBearerToken(r.Header.Get("Authorization"))
+				}
+				if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken())) != 1 {
+					writeJSON(w, http.StatusUnauthorized, map[string]string{
+						"error": "unauthorized: valid admin token required",
+					})
+					return
+				}
+			}
 			s.handleWebSocket(w, r)
 			return
 		}
 
-		isBridgeAPI := strings.HasPrefix(r.URL.Path, "/api/screenshot/bridge/")
-		if isBridgeAPI {
-			mux.ServeHTTP(w, r)
-			return
-		}
-
-		// Metrics endpoint should go through all middleware including auth
+		// Bridge API goes through the full middleware chain (auth, ratelimit, audit, metrics)
 		handler.ServeHTTP(w, r)
 	})
 

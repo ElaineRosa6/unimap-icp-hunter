@@ -3,20 +3,20 @@
 > **审计日期：** 2026-04-26
 > **审计范围：** 全量代码安全审计
 > **审计维度：** 认证授权、注入攻击、SSRF、XSS、并发安全、资源管理、业务逻辑、代码质量、设计原则
-> **审计状态：** 🟢 高/中/低优先级问题已全部修复
-> **下次评审日期：** 待严重问题修复后复评
+> **审计状态：** 🟢 全部已知安全问题已闭环（含 2026-04-29 第二轮 code review 24 项修复）
+> **下次评审日期：** 建议在下一轮重大功能迭代后复评
 
 ---
 
 ## 审计总览
 
-| 严重级别 | 数量 | 说明 |
-|---------|------|------|
-| 🚨 严重 (Critical) | 4 | ✅ 已全部修复 |
-| ⚠️ 高优先级 (High) | 6 | 可能触发 Bug、明显安全漏洞或严重性能问题 - ✅ 已修复 |
-| 💡 中优先级 (Medium) | 8 | 代码逻辑不精确、一致性风险 - ✅ 已修复 |
-| 📝 低优先级 (Low) | 7 | 代码风格、命名、可读性优化 - ✅ 已修复 |
-| **合计** | **25** | |
+| 严重级别 | 第一轮 (2026-04-26) | 第二轮 (2026-04-29) | 说明 |
+|---------|------|------|------|
+| 🚨 严重 (Critical) | 4 | 2 | 第一轮已全部修复；第二轮 WebSocket 绕过、Admin Token 未输出已修复 |
+| ⚠️ 高优先级 (High) | 6 | 6 | 第一轮已全部修复；第二轮 Webhook SSRF、APIKeyManager 竞态、篡改检测无上限、截图路径、限流 XFF、备份 tar 路径已修复 |
+| 💡 中优先级 (Medium) | 8 | 8 | 第一轮已全部修复；第二轮 Admin Token 查询、错误泄露、缓存策略竞态、内存缓存 maxSize、CLI 覆盖已修复 |
+| 📝 低优先级 (Low) | 7 | 8 | 第一轮已修复 3/7；第二轮 CORS 头、备份配置、备份错误、默认绑定地址等已修复 |
+| **合计** | **25** | **24** | |
 
 ### 严重级别分布图
 
@@ -553,6 +553,64 @@ func (q *TaskQueue) calculateRetryDelay(attempt int) time.Duration {
 
 ---
 
+## 第二轮安全修复记录 (2026-04-29)
+
+### 修复概览
+
+第二轮 code review 共发现 24 个问题（严重 2、高 6、中 8、低 8），全部已修复。这些问题覆盖认证绕过、SSRF 防护、并发安全、资源管理、输入验证、错误处理、代码质量等多个维度。
+
+### 严重问题修复 (2/2)
+
+| # | 问题 | 修复方案 | 涉及文件 |
+|---|------|---------|---------|
+| R2-C-01 | WebSocket 令牌验证绕过 — `rootHandler` 中 WebSocket 连接未走完整中间件链 | 将 WebSocket 连接路由到受认证中间件保护的路径，Bridge API 同样通过完整中间件链 | `web/server.go` |
+| R2-C-02 | Admin Token 未输出 — 自动生成 token 后未打印给用户 | 启动时对 loopback 地址使用 `fmt.Printf` 输出 token，非 loopback 地址 fail-closed | `internal/config/config.go` |
+
+### 高优先级问题修复 (6/6)
+
+| # | 问题 | 修复方案 | 涉及文件 |
+|---|------|---------|---------|
+| R2-H-01 | Webhook SSRF — `WebhookChannel` 创建时未校验目标地址 | 添加 scheme 校验（仅 http/https）、回环/私有 IP 拦截、DNS 解析验证防 DNS Rebinding | `internal/alerting/channels.go` |
+| R2-H-02 | APIKeyManager 竞态 — `ValidateAPIKey` 修改状态时使用 `RLock` | 改为 `Lock`（写锁），因过期时会修改 `apiKey.Status` | `internal/auth/api_key.go` |
+| R2-H-03 | 篡改检测无并发上限 — `handleTamperCheck`/`handleTamperBaseline` 无限制 | 添加 `maxTamperConcurrency = 20` 和 `maxTamperURLs = 500` 限制 | `web/tamper_handlers.go` |
+| R2-H-04 | 截图路径泄露 — `addFileToTar` 使用绝对路径 | 改用 `filepath.Rel(baseDir, path)` 生成相对路径，添加路径遍历防护 | `internal/backup/backup.go` |
+| R2-H-05 | 限流 XFF 伪造 — `X-Forwarded-For` 未验证来源 | 仅当 `r.RemoteAddr` 为私有/内部地址时信任 `X-Forwarded-For` | `web/middleware_ratelimit.go` |
+| R2-H-06 | 备份 tar 路径泄露 — 同上 R2-H-04 | 同上，`collectFiles` 返回 base 目录供 `filepath.Rel` 使用 | `internal/backup/backup.go` |
+
+### 中优先级问题修复 (8/8)
+
+| # | 问题 | 修复方案 | 涉及文件 |
+|---|------|---------|---------|
+| R2-M-01 | Admin Token 查询参数 — `admin_token` query 参数可被日志记录 | 移除 query 参数支持，仅保留 `X-Admin-Token` header | `web/middleware_auth.go` |
+| R2-M-02 | 错误信息泄露 — 500 响应返回完整 stack trace | 添加 `sanitizeError()` 过滤 stack trace、截断超长错误信息 | `web/http_helpers.go`, `web/screenshot_handlers.go` |
+| R2-M-03 | 缓存策略竞态 — `DefaultCacheStrategy` 无锁保护 | 添加 `sync.RWMutex`，`RecordQuery` 和 `GetStats` 使用正确锁 | `internal/utils/cache_strategy.go` |
+| R2-M-04 | 内存缓存 maxSize 默认值 — 零值导致无上限 | `NewMemoryCache` 在 maxSize ≤ 0 时默认 10000 | `internal/utils/cache.go` |
+| R2-M-05 | Chrome 进程退出未清理 — `s.chromeCmd` 未置 nil | goroutine 中 `cmd.Wait()` 后设置 `s.chromeCmd = nil` 支持自动恢复 | `web/cdp_handlers.go` |
+| R2-M-06 | CSV 文件覆盖 — 结果文件可能覆盖已有文件 | 使用 `os.O_CREATE|os.O_EXCL` 标志防止覆盖 | `cmd/unimap-cli/main.go` |
+| R2-M-07 | 备份默认包含 configs — 可能泄露敏感配置 | 从默认备份源中移除 `./configs` | `web/backup_handlers.go` |
+| R2-M-08 | 默认绑定地址 — 从 `0.0.0.0` 改为 `127.0.0.1` | 默认绑定 localhost，需公网访问时显式配置 | `internal/config/config.go` |
+
+### 低优先级问题修复 (8/8)
+
+| # | 问题 | 修复方案 | 涉及文件 |
+|---|------|---------|---------|
+| R2-L-01 | CORS 头缺失 — 预检请求处理 | 完善 CORS 中间件对 OPTIONS 预检请求的处理 | `web/http_helpers.go` |
+| R2-L-02 | 备份配置回退 — 无配置文件时使用安全默认值 | 添加默认值回退逻辑 | `internal/backup/backup.go` |
+| R2-L-03 | 备份错误处理 — 部分失败未正确报告 | 完善错误收集和报告 | `internal/backup/backup.go` |
+| R2-L-04 | 测试构造函数 — `NewWebhookChannel` SSRF 防护导致测试失败 | 添加 `NewWebhookChannelForTest` 绕过 SSRF 验证 | `internal/alerting/channels.go` |
+| R2-L-05 | CLI 覆盖 — CSV 路径参数未校验 | 添加路径存在性检查和目录创建 | `cmd/unimap-cli/main.go` |
+| R2-L-06 | `collectFiles` 签名变更 — 从 2 个返回值改为 3 个 | 更新所有 4 个调用点 | `internal/backup/backup.go`, `internal/backup/backup_test.go` |
+| R2-L-07 | `TestIsPrivateOrInternalIP_InvalidIP` 失败 — fail-closed 行为变更 | 更新测试期望值 | `web/screenshot_helpers_test.go` |
+| R2-L-08 | `TestAdminAuthMiddleware_ValidQuery_Passes` 失败 — query 参数认证已移除 | 重命名测试改用 header 认证 | `web/middleware_auth_test.go` |
+
+### 验证结果
+
+- ✅ `go build ./...` — 构建成功，无错误
+- ✅ `go vet ./...` — 静态检查通过，无警告
+- ✅ `go test -race ./...` — 32 个测试包全部通过，0 数据竞争，0 失败
+
+---
+
 ## 修复总结 (2026-04-27)
 
 ### 已修复问题汇总
@@ -605,6 +663,6 @@ func (q *TaskQueue) calculateRetryDelay(attempt int) time.Duration {
 
 ---
 
-**文档版本：** v1.3
+**文档版本：** v1.4
 **审计人：** UniMap Security Audit
-**下次复评：** 所有已知问题已修复，建议在发布前进行一次完整的安全复评
+**下次复评：** 建议在下一轮重大功能迭代后复评

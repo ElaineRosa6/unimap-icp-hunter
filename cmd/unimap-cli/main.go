@@ -251,9 +251,10 @@ func saveResults(assets []model.UnifiedAsset, path string) error {
 
 // saveResultsCSV 保存为CSV格式
 func saveResultsCSV(assets []model.UnifiedAsset, path string) error {
-	f, err := os.Create(path)
+	// Use O_CREATE|O_EXCL to prevent overwriting existing files
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("file %q already exists, refusing to overwrite: %w", path, err)
 	}
 	defer f.Close()
 

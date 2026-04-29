@@ -305,10 +305,16 @@ func (s *Server) startCDPChrome(baseURL string) error {
 	}
 
 	// Start a goroutine to wait for the process to prevent zombie processes
+	// and clear s.chromeCmd so CDP can auto-recover after process exit.
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			logger.Debugf("Chrome process exited: %v", err)
 		}
+		s.chromeCmdMu.Lock()
+		if s.chromeCmd == cmd.Process {
+			s.chromeCmd = nil
+		}
+		s.chromeCmdMu.Unlock()
 	}()
 
 	s.chromeCmd = cmd.Process
