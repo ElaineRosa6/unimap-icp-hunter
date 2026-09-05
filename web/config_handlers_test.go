@@ -256,7 +256,7 @@ func TestHandleSaveConfig_PersistenceFailureDoesNotPublish(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
 	}
-	if s.config.System.CacheTTL == 7200 {
+	if mgr.GetConfig().System.CacheTTL != 3600 || s.currentConfig().System.CacheTTL != 3600 {
 		t.Fatal("candidate was published after persistence failure")
 	}
 }
