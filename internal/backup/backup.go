@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -80,19 +81,18 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 		}
 	}
 
+	// A configured source is required: never publish a partial archive or let
+	// its retention cleanup remove an older complete recovery point.
+	if len(sourceErrors) > 0 {
+		return nil, fmt.Errorf("collect backup sources: %w", errors.Join(sourceErrors...))
+	}
 	if len(files) == 0 {
-		if len(sourceErrors) > 0 {
-			return nil, fmt.Errorf("no files found to backup, sources failed: %v", sourceErrors)
-		}
 		return nil, fmt.Errorf("no files found to backup")
 	}
 
-	// 写入 tar
-	var tarErrors []error
 	for _, f := range files {
 		if tarErr := addFileToTar(tw, f.path, f.baseDir); tarErr != nil {
-			tarErrors = append(tarErrors, fmt.Errorf("%s: %w", f.path, tarErr))
-			logger.Warnf("Failed to add %s to backup: %v", f.path, tarErr)
+			return nil, fmt.Errorf("add backup file %s: %w", f.path, tarErr)
 		}
 	}
 
@@ -132,11 +132,6 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 	// 清理旧备份
 	if cfg.MaxBackups > 0 {
 		cleanupOldBackups(cfg.OutputDir, cfg.Prefix, cfg.MaxBackups)
-	}
-
-	// Report partial failure if some files failed to add
-	if len(tarErrors) > 0 {
-		return result, fmt.Errorf("backup partially complete: %d/%d files failed: %v", len(tarErrors), len(files)+len(tarErrors), tarErrors)
 	}
 
 	return result, nil

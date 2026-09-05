@@ -123,13 +123,9 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 func (s *Server) buildBackupSources() []string {
 	// 如果配置了自定义源，使用配置的
 	if current := s.currentConfig(); current != nil && len(current.Backup.Sources) > 0 {
-		var sources []string
-		for _, src := range current.Backup.Sources {
-			if dirExists(src) {
-				sources = append(sources, src)
-			}
-		}
-		return sources
+		// Keep explicitly configured sources, including files and missing paths.
+		// Backup must report a missing source, not silently create a subset.
+		return append([]string(nil), current.Backup.Sources...)
 	}
 
 	sources := []string{}
