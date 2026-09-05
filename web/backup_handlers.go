@@ -61,7 +61,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		Prefix:     backupPrefix,
 	}
 
-	result, err := backup.Backup(cfg)
+	result, err := backup.BackupContext(r.Context(), cfg)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "backup_failed", "backup failed", sanitizeError(err.Error()))
 		return

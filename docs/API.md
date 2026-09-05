@@ -180,6 +180,8 @@ SSRF、通知和重启验收。
 | POST | `/api/v1/backup/create` | 创建备份 |
 | GET | `/api/v1/backup/list` | 备份列表 |
 
+备份取消：Web 请求 context 和定时任务 context 已传入归档流程。发布前观察到取消/超时会返回失败、清理临时归档并保留旧恢复点；已经发布的归档不因随后到达的取消回滚。取消在目录遍历与分块读取之间检查，不强制中断正在进行的文件系统调用。SQLite 一致性快照仍待接入，当前活跃库裸文件备份限制未解除。
+
 通知通道列表返回 `id`、`type`、`enabled`，以及编辑所需的非凭据字段 `app_id`、`chat_id`、`allow_private_ip`；不会返回 Webhook URL、签名 secret 或 app secret。编辑既有通道时，POST 请求可设置 `preserve_existing=true`，服务端会在同一配置事务内保留请求中留空的 Webhook URL、secret、app 凭据、chat ID 和 headers；该标志不能用于不存在的通道，也不能用于修改渠道类型。类型变更应删除旧渠道后按新类型创建。新建通道仍必须提供对应类型的全部必填字段。
 
 调度器任务请求的权威字段是 `web/scheduler_handlers.go` 中的创建/更新结构：`name`、`type`、`enabled`、`cron_expr`、`payload`、`timeout_seconds`、`max_retries`，以及可选 `notifications`、`schedule_type`、`run_at`、`delay_seconds`。任务响应额外包含只读 `runtime_status`（`scheduled`、`disabled`、`schedule_error`）和可选 `schedule_error`；`enabled` 仍表示用户期望，不代表任务一定已成功布置。当前工作区定义 23 种已提交任务类型，包含备份任务。

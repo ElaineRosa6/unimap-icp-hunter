@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,17 @@ type BackupResult struct {
 
 // Backup 执行备份
 func Backup(cfg BackupConfig) (*BackupResult, error) {
+	return BackupContext(context.Background(), cfg)
+}
+
+// BackupContext creates an archive while observing cancellation during source
+// collection and copying. Cancellation observed before publication discards the
+// temporary archive and preserves existing recovery points. Cancellation racing
+// with the final rename may arrive after publication; a published backup succeeds.
+func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if cfg.OutputDir == "" {
 		cfg.OutputDir = "./backups"
 	}
@@ -71,7 +83,10 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 	var files []fileWithBase
 	var sourceErrors []error
 	for _, src := range cfg.Sources {
-		srcFiles, baseDir, collectErr := collectFiles(src)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		srcFiles, baseDir, collectErr := collectFilesContext(ctx, src)
 		if collectErr != nil {
 			sourceErrors = append(sourceErrors, fmt.Errorf("source %s: %w", src, collectErr))
 			continue
@@ -91,11 +106,14 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 	}
 
 	for _, f := range files {
-		if tarErr := addFileToTar(tw, f.path, f.baseDir); tarErr != nil {
+		if tarErr := addFileToTarContext(ctx, tw, f.path, f.baseDir); tarErr != nil {
 			return nil, fmt.Errorf("add backup file %s: %w", f.path, tarErr)
 		}
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if closeErr := tw.Close(); closeErr != nil {
 		return nil, fmt.Errorf("finalize tar archive: %w", closeErr)
 	}
@@ -111,6 +129,9 @@ func Backup(cfg BackupConfig) (*BackupResult, error) {
 	uniqueSuffix := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(tmpPath), fmt.Sprintf(".%s_backup_%s_", cfg.Prefix, timestamp)), ".tmp")
 	filename := fmt.Sprintf("%s_backup_%s_%s.tar.gz", cfg.Prefix, timestamp, uniqueSuffix)
 	outputPath := filepath.Join(cfg.OutputDir, filename)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if publishErr := os.Rename(tmpPath, outputPath); publishErr != nil {
 		return nil, fmt.Errorf("publish backup archive: %w", publishErr)
 	}
@@ -181,6 +202,13 @@ func ListBackups(outputDir, prefix string) ([]BackupResult, error) {
 
 // collectFiles 递归收集目录下的所有文件，返回文件列表和基础目录
 func collectFiles(path string) ([]string, string, error) {
+	return collectFilesContext(context.Background(), path)
+}
+
+func collectFilesContext(ctx context.Context, path string) ([]string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, "", err
@@ -192,6 +220,9 @@ func collectFiles(path string) ([]string, string, error) {
 
 	var files []string
 	err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}
@@ -204,7 +235,10 @@ func collectFiles(path string) ([]string, string, error) {
 }
 
 // addFileToTar 将文件添加到 tar
-func addFileToTar(tw *tar.Writer, path string, baseDir string) error {
+func addFileToTarContext(ctx context.Context, tw *tar.Writer, path string, baseDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	relPath, err := filepath.Rel(baseDir, path)
 	if err != nil || !filepath.IsLocal(relPath) || relPath == "." {
 		return fmt.Errorf("backup file is outside its source directory")
@@ -237,7 +271,7 @@ func addFileToTar(tw *tar.Writer, path string, baseDir string) error {
 	if writeErr := tw.WriteHeader(header); writeErr != nil {
 		return writeErr
 	}
-	_, err = io.Copy(tw, f)
+	_, err = io.Copy(tw, contextReader{ctx: ctx, reader: f})
 	return err
 }
 
@@ -262,4 +296,23 @@ func cleanupOldBackups(dir, prefix string, maxBackups int) {
 			logger.Infof("Removed old backup: %s", b.Path)
 		}
 	}
+}
+
+// contextReader intentionally exposes only Read, so io.Copy cannot select a
+// file WriteTo fast path that bypasses cancellation checks. In-flight filesystem
+// syscalls themselves are not interrupted; cancellation is checked when they return.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return 0, ctxErr
+	}
+	return n, err
 }

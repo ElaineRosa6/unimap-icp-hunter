@@ -942,12 +942,12 @@ type BackupRunner struct{}
 
 func NewBackupRunner() *BackupRunner   { return &BackupRunner{} }
 func (r *BackupRunner) Type() TaskType { return TaskBackup }
-func (r *BackupRunner) Execute(_ context.Context, payload *model.TaskPayload) (string, error) {
+func (r *BackupRunner) Execute(ctx context.Context, payload *model.TaskPayload) (string, error) {
 	sources := extractStrings(payload, "sources", []string{})
 	if len(sources) == 0 {
 		return "", fmt.Errorf("%s runner: missing 'sources' in payload", r.Type())
 	}
-	result, err := backup.Backup(backup.BackupConfig{
+	result, err := backup.BackupContext(ctx, backup.BackupConfig{
 		Sources: sources, OutputDir: extractString(payload, "output_dir", ""),
 		Prefix: extractString(payload, "prefix", "unimap"), MaxBackups: extractInt(payload, "max_backups", 7),
 	})
