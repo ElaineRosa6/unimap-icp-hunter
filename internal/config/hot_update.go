@@ -93,8 +93,9 @@ func (h *HotUpdateManager) Start(cfg HotUpdateConfig) error {
 	}
 
 	// 启动监控协程
+	h.stopChan = make(chan struct{})
 	h.running = true
-	go h.monitorLoop(cfg)
+	go h.monitorLoop(cfg, h.stopChan)
 
 	logger.Infof("Hot update manager started with check interval: %v", cfg.CheckInterval)
 	return nil
@@ -121,22 +122,22 @@ func (h *HotUpdateManager) Stop() {
 }
 
 // monitorLoop 监控循环
-func (h *HotUpdateManager) monitorLoop(cfg HotUpdateConfig) {
+func (h *HotUpdateManager) monitorLoop(cfg HotUpdateConfig, stop <-chan struct{}) {
 	ticker := time.NewTicker(cfg.CheckInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			h.checkConfigChanges(cfg)
-		case <-h.stopChan:
+			h.checkConfigChanges(cfg, stop)
+		case <-stop:
 			return
 		}
 	}
 }
 
 // checkConfigChanges 检查配置变化
-func (h *HotUpdateManager) checkConfigChanges(cfg HotUpdateConfig) {
+func (h *HotUpdateManager) checkConfigChanges(cfg HotUpdateConfig, stop <-chan struct{}) {
 	// 重新加载配置文件
 	newConfig := &Config{}
 	data, err := readConfigFile(h.configPath)
@@ -167,6 +168,11 @@ func (h *HotUpdateManager) checkConfigChanges(cfg HotUpdateConfig) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
+	// A read begun by an older monitor must not publish into a restarted run.
+	if !h.running || h.stopChan != stop {
+		return
+	}
+
 	if len(h.configHistory) > 0 {
 		lastVersion := h.configHistory[len(h.configHistory)-1]
 		if newChecksum == lastVersion.Checksum {
@@ -185,7 +191,7 @@ func (h *HotUpdateManager) checkConfigChanges(cfg HotUpdateConfig) {
 
 	// 如果启用自动回滚，启动回滚定时器
 	if cfg.AutoRollback {
-		go h.scheduleRollback(cfg.RollbackTimeout, oldConfig)
+		go h.scheduleRollback(cfg.RollbackTimeout, oldConfig, h.currentVersion, stop)
 	}
 }
 
@@ -213,29 +219,29 @@ func (h *HotUpdateManager) addConfigVersion(config *Config, checksum, changeType
 }
 
 // scheduleRollback 安排回滚
-func (h *HotUpdateManager) scheduleRollback(timeout time.Duration, rollbackConfig *Config) {
-	time.Sleep(timeout)
-
+func (h *HotUpdateManager) scheduleRollback(timeout time.Duration, rollbackConfig *Config, updateVersion int, stop <-chan struct{}) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-stop:
+		return
+	case <-timer.C:
+	}
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
-
-	if !h.running {
+	if !h.running || h.stopChan != stop || h.currentVersion != updateVersion {
 		return
 	}
-
-	// 检查是否需要回滚（如果期间有新的更新，则不回滚）
-	if len(h.configHistory) > 1 {
-		lastVersion := h.configHistory[len(h.configHistory)-1]
-		if lastVersion.ChangeType == "update" {
-			// 执行回滚
-			h.configManager.SetConfig(rollbackConfig)
-			checksum, err := calculateChecksum(rollbackConfig)
-			if err == nil {
-				h.addConfigVersion(rollbackConfig, checksum, "rollback")
-			}
-			logger.Warn("Config auto rollback executed")
-		}
+	if len(h.configHistory) == 0 || h.configHistory[len(h.configHistory)-1].ChangeType != "update" {
+		return
 	}
+	checksum, err := calculateChecksum(rollbackConfig)
+	if err != nil || rollbackConfig == nil {
+		return
+	}
+	h.configManager.SetConfig(rollbackConfig)
+	h.addConfigVersion(rollbackConfig, checksum, "rollback")
+	logger.Warn("Config auto rollback executed")
 }
 
 // GetConfigHistory 获取配置历史
