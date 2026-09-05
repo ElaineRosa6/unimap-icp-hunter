@@ -190,3 +190,14 @@ GitHub 连接恢复，已推送 5fbcfcb2e180deeb130e615056bb9d2d83eb5266，并�
 修复：历史夹具三个同结构转换使用显式类型转换；Go proxy 测试子进程 GOFLAGS=-modcacherw，仅让独立临时模块缓存可写，生产 Docker 的代理与校验策略不变。Windows 上 golangci-lint v1.64.8 复现 3 处 S1016，修改后完整 lint 通过；副本无 Git 元数据，因此该副本 lint 显式 GOFLAGS=-buildvcs=false，不关闭任何 lint 规则。定向历史/proxy 测试重复 5 次通过，并执行全量竞态测试。
 
 本机 WSL Ubuntu 当前无 Go，Windows 验证不代替 Linux 清理复验。上述改动还需提交后的远端运行证明 Linux/macOS、lint 与 Docker 门禁全部通过；持续保留未完成状态，未重跑同一失败提交来掩盖问题。
+
+
+### 第十九轮：镜像成功提示改为运行态验收
+
+364a19d90ba7bd0f83c4416450e3fb4877efbd79 已与远端 master 对齐，ci run 33985769035 的 10 个 job 和 bridge-smoke run 33985769157 均 success。镜像 digest 为 sha256:88e575851f4ede34647768ba20a96afa2c1da940e338b2a4943b88ee4b36bc94；原始状态、Docker 日志与哈希核验见本地 release-364a19d 验证目录。
+
+审查发现原 Verify image 只有两条 echo，不能证明镜像可运行。新增 scripts/ci_image_smoke.py，CI 从 build-push 输出读取 digest，而不是从可变 latest/master 标签取镜像。容器 network=none，无发布端口与宿主挂载；由入口脚本在内部 runtime-config 路径初始化配置。90 秒内检查 /health/ready 的 ok 与构建提交 SHA，检查实际 UID 非 root、配置 mode=600，随后发送正常停止并确认退出码 0。finally 只清理本次创建的容器。
+
+新增 Go 回归拒绝仅 echo、缺少 digest 或提交号绑定的工作流；Python 单元夹具覆盖成功、提前退出、超时、坏 JSON、错版本、root、配置权限、异常退出和非 digest 引用。夹具不等于真实 Docker 执行：本机无 Docker，实际镜像启动由提交后的 CI 执行，验收状态需以对应新 run 为准。
+
+这个步骤位于现有镜像推送之后，失败会使 CI 失败，但不撤回已发布的标签。它不等于生产发布审批、真实测绘引擎访问验收或容器内浏览器截图测试；本轮没有更改生产实例、凭据或定时任务。

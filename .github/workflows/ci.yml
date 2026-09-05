@@ -225,6 +225,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
       - name: Build and push
+        id: image-build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -239,7 +240,14 @@ jobs:
             UNIMAP_GIT_COMMIT=${{ github.sha }}
             UNIMAP_BUILD_TIME=${{ github.event.head_commit.timestamp }}
 
+      - name: Test image verifier
+        run: python3 -m unittest discover -s scripts -p 'test_ci_image_smoke.py' -v
+
       - name: Verify image
+        timeout-minutes: 7
+        env:
+          IMAGE_REPOSITORY: ${{ github.repository }}
+          IMAGE_DIGEST: ${{ steps.image-build.outputs.digest }}
+          EXPECTED_COMMIT: ${{ github.sha }}
         run: |
-          echo "Docker image built and pushed successfully"
-          echo "Image: ghcr.io/${{ github.repository }}"
+          python3 scripts/ci_image_smoke.py "ghcr.io/${IMAGE_REPOSITORY,,}@${IMAGE_DIGEST}" "$EXPECTED_COMMIT"
