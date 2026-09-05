@@ -9,15 +9,15 @@
 - CDP 与 Chrome Extension 双截图引擎，可在 `cdp`、`extension`、`auto` 间切换。
 - Linux/容器可直接使用无 `DISPLAY` 的 Chromium headless；统一路由覆盖截图、浏览器采集、调度与巡检，并限制浏览器会话避免云主机 OOM。
 - 2026-08-02 七引擎 Extension Bridge 均取得真实非空结构化资产；DayDayMap 的 Bridge→CDP 凭据交接取得 10 条资产和截图。Censys CDP 在交接 1 个 Cookie 与 16 项 Web Storage 后被 Cloudflare 挑战拦截，`auto` 路由已实测识别挑战并回退 Bridge，取得 9 条资产和截图。
-- 2026-08-21 的 FOFA/Shodan 原生 CDP 证据仍有效；ZoomEye 当时受站点/SSO 限制。之后 ExtractJS 有调整，截至 2026-09-04 尚无新的 CollectAndCapture CDP 复跑；当前边界见 [当前项目状态](docs/CURRENT_STATUS_2026-09-04.md)。
+- 2026-08-21 的 FOFA/Shodan 原生 CDP 证据仍有效；ZoomEye 当时受站点/SSO 限制。之后 ExtractJS 有调整；本轮项目审查未新增真实站点 CollectAndCapture CDP 复跑证据；当前边界见 [当前项目状态](docs/CURRENT_STATUS_2026-09-06.md)。
 - CDP 浏览器任务采用 URL/DNS 校验、全请求 Fetch 拦截和连接级 loopback 出口代理；可选上游只接受 literal-loopback SOCKS5，并且只向它传递经实时 DNS 复核的固定公网 IP。外部/HTTP 上游代理、远程 Chrome 和未证明受控出口的 Extension 任意 URL 截图失败关闭。
 - 网页巡检：`strict`、`relaxed`、`security`、`balanced`、`precise` 五种模式。
 - 巡检历史：支持 URL、类型、模式、关键词过滤，以及受限的 `limit` / `offset` 分页；详见 [API 文档](docs/API.md)。
 - 调度、通知、分布式节点、备份、Prometheus 指标与操作历史。
   - Web/定时备份支持取消与超时传播，发布前失败保留旧恢复点；五类应用 SQLite 数据库已接入快照，未绑定 SQLite 来源返回错误，归档路径冲突会阻止发布并保留旧备份；嵌套输出目录不会再次入包，保留清理按完整备份文件名隔离，见 [备份运维说明](docs/RUNBOOK.md#9-备份配置或历史记录)。
 
-- 当前发布基线为 `master/e31e03d`；截至 2026-09-04，GitHub Actions 的 ci、bridge-smoke 及 Docker Build & Push 均成功。当前代码与验收边界见 [当前项目状态](docs/CURRENT_STATUS_2026-09-04.md)。
-当前明确未完成项和完成标准见 [本地剩余工作清单](docs/REMAINING_WORK_2026-07-23.md)；当前基线见 [当前项目状态](docs/CURRENT_STATUS_2026-09-04.md)，历史推进顺序见 [2026-08-20 推进计划书](docs/AGENT_CONTINUATION_PLAN_2026-08-20.md)。
+- 发布分支为 `master`；2026-09-06 已核验代码 `f6b3689` 的 CI 与发布镜像冒烟成功。Bridge 的独立验证提交和未完成验收项见 [发布核验快照](docs/CURRENT_STATUS_2026-09-06.md)；此快照不代表后续提交或实时镜像标签状态。
+当前明确未完成项和完成标准见 [本地剩余工作清单](docs/REMAINING_WORK_2026-07-23.md)；当前基线见 [当前项目状态](docs/CURRENT_STATUS_2026-09-06.md)，历史推进顺序见 [2026-08-20 推进计划书](docs/AGENT_CONTINUATION_PLAN_2026-08-20.md)。
 
 ## 与 UniMap v2 的关系
 
