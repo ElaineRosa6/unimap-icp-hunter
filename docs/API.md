@@ -184,6 +184,8 @@ SSRF、通知和重启验收。
 
 归档路径冲突会在快照与发布前被拒绝：不同来源映射到同一条目，或某个文件条目同时成为另一个条目的父目录时，整次备份失败并保留旧恢复点。不会自动重命名条目。需要保留不同子目录内的同名文件时，选择其共同父目录作为来源，或调整为互不冲突的来源；归档仍使用各来源内的相对路径。
 
+输出目录是专用归档区域。若位于某个来源目录之下，收集时排除整个输出子树（包括旧归档、当前临时文件及 SQLite 暂存目录），目录身份匹配也覆盖输出目录的链接别名。显式来源若等于输出目录或位于其内部，整次备份报错并保留旧恢复点，不会静默省略该必需来源。请勿把需要备份的业务文件放入输出目录。
+
 通知通道列表返回 `id`、`type`、`enabled`，以及编辑所需的非凭据字段 `app_id`、`chat_id`、`allow_private_ip`；不会返回 Webhook URL、签名 secret 或 app secret。编辑既有通道时，POST 请求可设置 `preserve_existing=true`，服务端会在同一配置事务内保留请求中留空的 Webhook URL、secret、app 凭据、chat ID 和 headers；该标志不能用于不存在的通道，也不能用于修改渠道类型。类型变更应删除旧渠道后按新类型创建。新建通道仍必须提供对应类型的全部必填字段。
 
 调度器任务请求的权威字段是 `web/scheduler_handlers.go` 中的创建/更新结构：`name`、`type`、`enabled`、`cron_expr`、`payload`、`timeout_seconds`、`max_retries`，以及可选 `notifications`、`schedule_type`、`run_at`、`delay_seconds`。任务响应额外包含只读 `runtime_status`（`scheduled`、`disabled`、`schedule_error`）和可选 `schedule_error`；`enabled` 仍表示用户期望，不代表任务一定已成功布置。当前工作区定义 23 种已提交任务类型，包含备份任务。

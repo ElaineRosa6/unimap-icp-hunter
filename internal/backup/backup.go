@@ -64,6 +64,11 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 		return nil, fmt.Errorf("failed to create backup dir: %w", err)
 	}
 
+	outputBoundary, boundaryErr := newBackupOutputBoundary(cfg.OutputDir)
+	if boundaryErr != nil {
+		return nil, fmt.Errorf("resolve backup output: %w", boundaryErr)
+	}
+
 	// Write to an exclusive sibling and publish only after the archive is complete.
 	timestamp := time.Now().Format("20060102_150405.000000000")
 	tmpFile, err := os.CreateTemp(cfg.OutputDir, fmt.Sprintf(".%s_backup_%s_*.tmp", cfg.Prefix, timestamp))
@@ -86,7 +91,7 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		srcFiles, baseDir, collectErr := collectFilesContext(ctx, src)
+		srcFiles, baseDir, collectErr := collectFilesContextExcluding(ctx, src, outputBoundary)
 		if collectErr != nil {
 			sourceErrors = append(sourceErrors, fmt.Errorf("source %s: %w", src, collectErr))
 			continue
@@ -221,6 +226,15 @@ func collectFiles(path string) ([]string, string, error) {
 }
 
 func collectFilesContext(ctx context.Context, path string) ([]string, string, error) {
+	return collectFilesContextExcluding(ctx, path, nil)
+}
+
+func collectFilesContextExcluding(ctx context.Context, path string, output *backupOutputBoundary) ([]string, string, error) {
+	if output != nil {
+		if err := output.validateSource(path); err != nil {
+			return nil, "", err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
@@ -237,6 +251,15 @@ func collectFilesContext(ctx context.Context, path string) ([]string, string, er
 	err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
+		}
+		if output != nil {
+			excluded, directory := output.excluded(path, info)
+			if excluded {
+				if directory {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		if err != nil {
 			return err
