@@ -172,7 +172,7 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 
 	// 清理旧备份
 	if cfg.MaxBackups > 0 {
-		cleanupOldBackups(cfg.OutputDir, cfg.Prefix, cfg.MaxBackups)
+		cleanupOldBackups(cfg.OutputDir, cfg.Prefix, cfg.MaxBackups, outputPath)
 	}
 
 	return result, nil
@@ -325,7 +325,7 @@ func addNamedFileToTarContext(ctx context.Context, tw *tar.Writer, path string, 
 }
 
 // cleanupOldBackups 清理超过 maxBackups 的旧备份
-func cleanupOldBackups(dir, prefix string, maxBackups int) {
+func cleanupOldBackups(dir, prefix string, maxBackups int, published ...string) {
 	backups, err := ListBackups(dir, prefix)
 	if err != nil {
 		logger.Warnf("Failed to list backups for cleanup: %v", err)
@@ -336,7 +336,28 @@ func cleanupOldBackups(dir, prefix string, maxBackups int) {
 		return
 	}
 
-	// 删除最旧的
+	// Reserve a slot for this publication before sorting the remaining recovery
+	// points by mtime. Clock skew or restored timestamps must not make this
+	// invocation delete the archive it is about to return successfully.
+	if len(published) > 0 {
+		found := false
+		for i, b := range backups {
+			if filepath.Clean(b.Path) == filepath.Clean(published[0]) {
+				backups = append(backups[:i], backups[i+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			// A concurrent cleanup or external filesystem change may have removed
+			// the publication. Do not delete additional recovery points here.
+			return
+		}
+		maxBackups--
+	}
+	if maxBackups < 0 {
+		return
+	}
 	toDelete := backups[maxBackups:]
 	for _, b := range toDelete {
 		if err := os.Remove(b.Path); err != nil {
