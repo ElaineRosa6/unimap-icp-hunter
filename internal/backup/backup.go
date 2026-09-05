@@ -198,11 +198,11 @@ func ListBackups(outputDir, prefix string) ([]BackupResult, error) {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".tar.gz") {
+		if !isManagedBackupName(name, prefix) {
 			continue
 		}
 		info, err := e.Info()
-		if err != nil {
+		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		results = append(results, BackupResult{

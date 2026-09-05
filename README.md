@@ -14,7 +14,7 @@
 - 网页巡检：`strict`、`relaxed`、`security`、`balanced`、`precise` 五种模式。
 - 巡检历史：支持 URL、类型、模式、关键词过滤，以及受限的 `limit` / `offset` 分页；详见 [API 文档](docs/API.md)。
 - 调度、通知、分布式节点、备份、Prometheus 指标与操作历史。
-  - Web/定时备份支持取消与超时传播，发布前失败保留旧恢复点；五类应用 SQLite 数据库已接入快照，未绑定 SQLite 来源返回错误，归档路径冲突会阻止发布并保留旧备份；嵌套输出目录不会再次入包，见 [备份运维说明](docs/RUNBOOK.md#9-备份配置或历史记录)。
+  - Web/定时备份支持取消与超时传播，发布前失败保留旧恢复点；五类应用 SQLite 数据库已接入快照，未绑定 SQLite 来源返回错误，归档路径冲突会阻止发布并保留旧备份；嵌套输出目录不会再次入包，保留清理按完整备份文件名隔离，见 [备份运维说明](docs/RUNBOOK.md#9-备份配置或历史记录)。
 
 - 当前发布基线为 `master/e31e03d`；截至 2026-09-04，GitHub Actions 的 ci、bridge-smoke 及 Docker Build & Push 均成功。当前代码与验收边界见 [当前项目状态](docs/CURRENT_STATUS_2026-09-04.md)。
 当前明确未完成项和完成标准见 [本地剩余工作清单](docs/REMAINING_WORK_2026-07-23.md)；当前基线见 [当前项目状态](docs/CURRENT_STATUS_2026-09-04.md)，历史推进顺序见 [2026-08-20 推进计划书](docs/AGENT_CONTINUATION_PLAN_2026-08-20.md)。
