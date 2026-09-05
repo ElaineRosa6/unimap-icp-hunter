@@ -205,42 +205,38 @@ func collectFiles(path string) ([]string, string, error) {
 
 // addFileToTar 将文件添加到 tar
 func addFileToTar(tw *tar.Writer, path string, baseDir string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-
-	// 使用相对于 baseDir 的路径，避免泄露目录结构
 	relPath, err := filepath.Rel(baseDir, path)
-	if err != nil {
-		relPath = filepath.Base(path)
+	if err != nil || !filepath.IsLocal(relPath) || relPath == "." {
+		return fmt.Errorf("backup file is outside its source directory")
 	}
-	// 清理路径，防止路径遍历攻击
-	relPath = filepath.Clean(relPath)
-	if strings.HasPrefix(relPath, "..") {
-		relPath = filepath.Base(path)
-	}
-
-	header, err := tar.FileInfoHeader(info, "")
+	// Follow only links constrained by the source root. Keep the same handle
+	// for metadata and contents instead of reopening a checked pathname.
+	root, err := os.OpenRoot(baseDir)
 	if err != nil {
 		return err
 	}
-	header.Name = relPath
-
-	if writeErr := tw.WriteHeader(header); writeErr != nil {
-		return writeErr
-	}
-
-	if info.IsDir() {
-		return nil
-	}
-
-	f, err := os.Open(path)
+	defer root.Close()
+	f, err := root.Open(relPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("backup source entry is not a regular file")
+	}
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return err
+	}
+	// Tar member names always use '/', including archives made on Windows.
+	header.Name = filepath.ToSlash(relPath)
+	if writeErr := tw.WriteHeader(header); writeErr != nil {
+		return writeErr
+	}
 	_, err = io.Copy(tw, f)
 	return err
 }
