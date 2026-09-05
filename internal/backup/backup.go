@@ -105,6 +105,10 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 		return nil, fmt.Errorf("no files found to backup")
 	}
 
+	if pathErr := validateArchivePaths(ctx, files); pathErr != nil {
+		return nil, pathErr
+	}
+
 	if cfg.SQLiteSnapshotter != nil {
 		staging, stageErr := os.MkdirTemp(cfg.OutputDir, ".sqlite-snapshots-*")
 		if stageErr != nil {
