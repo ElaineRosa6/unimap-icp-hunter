@@ -201,3 +201,14 @@ GitHub 连接恢复，已推送 5fbcfcb2e180deeb130e615056bb9d2d83eb5266，并�
 新增 Go 回归拒绝仅 echo、缺少 digest 或提交号绑定的工作流；Python 单元夹具覆盖成功、提前退出、超时、坏 JSON、错版本、root、配置权限、异常退出和非 digest 引用。夹具不等于真实 Docker 执行：本机无 Docker，实际镜像启动由提交后的 CI 执行，验收状态需以对应新 run 为准。
 
 这个步骤位于现有镜像推送之后，失败会使 CI 失败，但不撤回已发布的标签。它不等于生产发布审批、真实测绘引擎访问验收或容器内浏览器截图测试；本轮没有更改生产实例、凭据或定时任务。
+
+
+### 第二十轮：截图预览通过符号链接读取根目录外文件
+
+前一轮 e19c6d9 的 10 项 CI 与 Bridge smoke 全通过；新增镜像运行态验收返回 readiness=ok、shutdown=ok，并已核对构建提交。验收证据见 release-e19c6d9。
+
+本轮审查 GET /screenshots/...：原逻辑只有 filepath.Rel 的词法边界校验，随后 os.Stat/os.Open/ServeFile 都跟随符号链接。以临时目录中的公开夹具复现，文件链接与目录链接的绝对/相对四种形式均返回根目录外文件的完整标记，HTTP 200；具有 .png 后缀的目录还返回重定向。请求使用原有受信任 Origin，并非证明未认证攻击者有创建链接能力；漏洞前提是截图树中存在指向外部的链接。
+
+改为 os.OpenRoot(baseDir) 后 root.Open(cleanRelPath)，仅接受普通文件。内容魔数读取、响应体和 Range 使用同一打开句柄，ServeContent 不再按路径重新打开；保留原有 Origin/Referer、扩展名、nosniff、private 缓存策略和历史 JPEG 内容识别行为。
+
+四种越界链接和伪装成图片名的目录修复后均 404；普通 PNG、根目录内的相对链接、Range=206、If-Modified-Since=304、历史 JPEG 与原有错误路径重复 10 次通过。API 文档同步边界约束。全程只读自建夹具，未读取真实目录外文件或修改运行截图。

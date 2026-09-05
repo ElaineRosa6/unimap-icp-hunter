@@ -80,7 +80,7 @@
 | GET | `/api/v1/screenshot/batches/files?batch=...` | 某批次的文件列表；参数名是 `batch` |
 | DELETE | `/api/v1/screenshot/batches/delete?batch=...` | 删除批次 |
 | DELETE | `/api/v1/screenshot/file/delete?batch=...&file=...` | 删除批次中的文件 |
-| GET | `/screenshots/{batch}/{file}` | 图片预览；要求受信任 Origin/Referer，且仅允许图片扩展名 |
+| GET | `/screenshots/{batch}/{file}` | 图片预览；要求受信任 Origin/Referer，仅允许图片扩展名及截图根目录内的普通文件；越界符号链接与目录返回 404 |
 | GET | `/api/v1/screenshot/router/status` | 截图路由状态；返回 `configured_mode`、实际 `current_mode`、`ready`、`cdp_healthy`、`ext_healthy`、优先级与 fallback |
 | POST | `/api/v1/screenshot/set-mode` | JSON：`{"mode":"cdp|extension|auto"}` |
 

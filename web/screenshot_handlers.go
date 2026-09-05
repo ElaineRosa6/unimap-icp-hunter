@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -338,25 +339,39 @@ func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, statErr := os.Stat(absFullPath); statErr != nil {
+	// Resolve every component relative to an open root, including symlinks.
+	// Lexical filepath.Rel checks alone do not constrain filesystem targets.
+	root, err := os.OpenRoot(baseDir)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	file, err := os.Open(absFullPath)
+	defer root.Close()
+	file, err := root.Open(cleanRelPath)
 	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
 		http.NotFound(w, r)
 		return
 	}
 	header := make([]byte, 512)
 	n, _ := file.Read(header)
-	_ = file.Close()
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	if n > 0 {
 		w.Header().Set("Content-Type", http.DetectContentType(header[:n]))
 	}
 
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	http.ServeFile(w, r, absFullPath)
+	// Serve the same validated handle; ServeFile would reopen the pathname.
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
 // handleScreenshot 处理截图请求
