@@ -938,17 +938,28 @@ func (r *DistributedSubmitRunner) Execute(ctx context.Context, payload *model.Ta
 var distributedIDCounter atomic.Int64
 
 // BackupRunner executes scheduled archives of selected application data.
-type BackupRunner struct{}
+type BackupRunner struct{ snapshotter backup.SQLiteSnapshotter }
 
-func NewBackupRunner() *BackupRunner   { return &BackupRunner{} }
+func NewBackupRunner(snapshotters ...backup.SQLiteSnapshotter) *BackupRunner {
+	snapshotter := backup.SQLiteSnapshotterFor()
+	if len(snapshotters) > 0 && snapshotters[0] != nil {
+		snapshotter = snapshotters[0]
+	}
+	return &BackupRunner{snapshotter: snapshotter}
+}
 func (r *BackupRunner) Type() TaskType { return TaskBackup }
 func (r *BackupRunner) Execute(ctx context.Context, payload *model.TaskPayload) (string, error) {
 	sources := extractStrings(payload, "sources", []string{})
 	if len(sources) == 0 {
 		return "", fmt.Errorf("%s runner: missing 'sources' in payload", r.Type())
 	}
+	snapshotter := r.snapshotter
+	if snapshotter == nil {
+		snapshotter = backup.SQLiteSnapshotterFor()
+	}
 	result, err := backup.BackupContext(ctx, backup.BackupConfig{
-		Sources: sources, OutputDir: extractString(payload, "output_dir", ""),
+		SQLiteSnapshotter: snapshotter,
+		Sources:           sources, OutputDir: extractString(payload, "output_dir", ""),
 		Prefix: extractString(payload, "prefix", "unimap"), MaxBackups: extractInt(payload, "max_backups", 7),
 	})
 	if err != nil {

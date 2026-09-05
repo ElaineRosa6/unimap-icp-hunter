@@ -19,6 +19,7 @@ import (
 	"github.com/unimap/project/internal/adapter"
 	"github.com/unimap/project/internal/alerting"
 	"github.com/unimap/project/internal/auth"
+	"github.com/unimap/project/internal/backup"
 	"github.com/unimap/project/internal/collection"
 	"github.com/unimap/project/internal/config"
 	"github.com/unimap/project/internal/distributed"
@@ -78,6 +79,7 @@ type ConnectionManager struct {
 
 // Server Web服务器
 type Server struct {
+	backupSnapshotter   backup.SQLiteSnapshotter
 	port                int
 	httpServer          *http.Server
 	templates           *template.Template
@@ -150,6 +152,7 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 	initHistoryDatabase(srv, cfg)
 	initUserDatabase(srv)
 	initScreenshotBatchDB(srv)
+	initBackupSnapshots(srv)
 
 	// Initialize the final screenshot/Bridge router before constructing task
 	// runners. QueryRunner must receive the combined collect+capture provider,
@@ -262,7 +265,13 @@ func newServerStruct(port int, webRoot string, templates *template.Template,
 		shutdownCancel:    shutdownCancel,
 		revocationStore:   newSessionRevocationStore(),
 	}
-	srv.tamperApp = service.NewTamperAppService(utils.HashStoreDir(), alertManager, srv.tamperRuntimeConfig)
+	persistentTamper, tamperErr := service.NewPersistentTamperAppService(utils.HashStoreDir(), alertManager, srv.tamperRuntimeConfig)
+	if tamperErr != nil {
+		logger.Warnf("persistent tamper history unavailable: %v", tamperErr)
+		srv.tamperApp = service.NewTamperAppService(utils.HashStoreDir(), alertManager, srv.tamperRuntimeConfig)
+	} else {
+		srv.tamperApp = persistentTamper
+	}
 	return srv
 }
 
@@ -568,7 +577,7 @@ func initScheduler(srv *Server, cfg *config.Config, screenshotApp *service.Scree
 	sched.RegisterHandler(scheduler.NewAlertSummaryRunner(alertManager))
 	sched.RegisterHandler(scheduler.NewBaselineRefreshRunner(srv.tamperApp, tamperPageLoader))
 	sched.RegisterHandler(scheduler.NewURLImportRunner(utils.AppDataDir("imports")))
-	sched.RegisterHandler(scheduler.NewBackupRunner())
+	sched.RegisterHandler(scheduler.NewBackupRunner(srv.snapshotSQLite))
 
 	// 低优先级 Runner (ST-17 ~ ST-20)
 	sched.RegisterHandler(scheduler.NewPluginHealthRunner(unifiedSvc))
@@ -1101,6 +1110,11 @@ func (s *Server) shutdownBackgroundServices() {
 
 // shutdownDatabases closes ICP, history, and user databases.
 func (s *Server) shutdownDatabases() {
+	if s.tamperApp != nil {
+		if err := s.tamperApp.Close(); err != nil {
+			logger.Warnf("tamper history DB close error: %v", err)
+		}
+	}
 	if s.icpDB != nil {
 		if err := s.icpDB.Close(); err != nil {
 			logger.Warnf("ICP result DB close error: %v", err)

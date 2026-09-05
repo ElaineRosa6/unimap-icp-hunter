@@ -29,6 +29,13 @@ type CheckRecordPage struct {
 }
 
 func (s *HashStorage) historyIndex() (*sql.DB, error) {
+	if s.historyOwner != nil {
+		return s.historyOwner.database()
+	}
+	return s.openHistoryIndex()
+}
+
+func (s *HashStorage) openHistoryIndex() (*sql.DB, error) {
 	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -49,7 +56,7 @@ func (s *HashStorage) indexCheckRecord(record *CheckRecord) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer s.releaseHistoryIndex(db)
 	payload, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -63,7 +70,7 @@ func (s *HashStorage) listIndexedCheckRecords() (map[string][]*CheckRecord, erro
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer s.releaseHistoryIndex(db)
 	rows, err := db.Query(`SELECT payload FROM check_records ORDER BY timestamp DESC`)
 	if err != nil {
 		return nil, err
@@ -121,7 +128,7 @@ func (s *HashStorage) listIndexedCheckRecordPage(query CheckRecordQuery) (CheckR
 	if err != nil {
 		return CheckRecordPage{}, err
 	}
-	defer db.Close()
+	defer s.releaseHistoryIndex(db)
 
 	where, args := checkRecordWhere(query, true)
 
@@ -213,7 +220,7 @@ func (s *HashStorage) deleteIndexedCheckRecords(url string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer s.releaseHistoryIndex(db)
 	_, err = db.Exec(`DELETE FROM check_records WHERE url = ?`, url)
 	return err
 }

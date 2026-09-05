@@ -55,10 +55,11 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := backup.BackupConfig{
-		Sources:    sources,
-		OutputDir:  backupDir,
-		MaxBackups: maxBackups,
-		Prefix:     backupPrefix,
+		SQLiteSnapshotter: s.snapshotSQLite,
+		Sources:           sources,
+		OutputDir:         backupDir,
+		MaxBackups:        maxBackups,
+		Prefix:            backupPrefix,
 	}
 
 	result, err := backup.BackupContext(r.Context(), cfg)

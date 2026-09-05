@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"sort"
@@ -31,6 +32,7 @@ type TamperRuntimeConfigProvider func() TamperRuntimeConfig
 
 // TamperAppService 封装篡改检测应用层流程。
 type TamperAppService struct {
+	storage               *tamper.HashStorage
 	baseDir               string
 	alertManager          *alerting.Manager
 	runtimeConfigProvider TamperRuntimeConfigProvider
@@ -193,6 +195,7 @@ func (s *TamperAppService) SetBaseline(ctx context.Context, req TamperBaselineRe
 func (s *TamperAppService) ListBaselines() ([]string, error) {
 	detector := tamper.NewDetector(tamper.DetectorConfig{
 		BaseDir:      s.baseDir,
+		Storage:      s.storage,
 		AlertManager: s.alertManager,
 	})
 	urls, err := detector.ListBaselines()
@@ -208,6 +211,7 @@ func (s *TamperAppService) ListBaselines() ([]string, error) {
 func (s *TamperAppService) DeleteBaseline(targetURL string) error {
 	detector := tamper.NewDetector(tamper.DetectorConfig{
 		BaseDir:      s.baseDir,
+		Storage:      s.storage,
 		AlertManager: s.alertManager,
 	})
 	return detector.DeleteBaseline(targetURL)
@@ -217,6 +221,7 @@ func (s *TamperAppService) DeleteBaseline(targetURL string) error {
 func (s *TamperAppService) LoadCheckRecords(url string, limit int) ([]*tamper.CheckRecord, error) {
 	detector := tamper.NewDetector(tamper.DetectorConfig{
 		BaseDir:      s.baseDir,
+		Storage:      s.storage,
 		AlertManager: s.alertManager,
 	})
 	return detector.LoadCheckRecords(url, limit)
@@ -226,6 +231,7 @@ func (s *TamperAppService) LoadCheckRecords(url string, limit int) ([]*tamper.Ch
 func (s *TamperAppService) ListAllCheckRecords() (map[string][]*tamper.CheckRecord, error) {
 	detector := tamper.NewDetector(tamper.DetectorConfig{
 		BaseDir:      s.baseDir,
+		Storage:      s.storage,
 		AlertManager: s.alertManager,
 	})
 	return detector.ListAllCheckRecords()
@@ -235,6 +241,7 @@ func (s *TamperAppService) ListAllCheckRecords() (map[string][]*tamper.CheckReco
 func (s *TamperAppService) GetCheckStats(url string) (tamper.CheckStats, error) {
 	detector := tamper.NewDetector(tamper.DetectorConfig{
 		BaseDir:      s.baseDir,
+		Storage:      s.storage,
 		AlertManager: s.alertManager,
 	})
 	return detector.GetCheckStats(url)
@@ -244,6 +251,7 @@ func (s *TamperAppService) GetCheckStats(url string) (tamper.CheckStats, error) 
 func (s *TamperAppService) DeleteCheckRecords(url string) error {
 	detector := tamper.NewDetector(tamper.DetectorConfig{
 		BaseDir:      s.baseDir,
+		Storage:      s.storage,
 		AlertManager: s.alertManager,
 	})
 	return detector.DeleteCheckRecords(url)
@@ -286,7 +294,10 @@ type HistoryResult struct {
 
 // QueryHistory 查询检测历史记录（带过滤和排序）
 func (s *TamperAppService) QueryHistory(filter HistoryFilter) (*HistoryResult, error) {
-	storage := tamper.NewHashStorage(s.baseDir)
+	storage := s.storage
+	if storage == nil {
+		storage = tamper.NewHashStorage(s.baseDir)
+	}
 	if canPageHistoryInStorage(filter) {
 		page, err := storage.ListCheckRecords(tamper.CheckRecordQuery{
 			URL:       strings.TrimSpace(filter.URLFilter),
@@ -460,6 +471,7 @@ func (s *TamperAppService) newDetector(mode string, pageLoader TamperPageLoader)
 func (s *TamperAppService) detectorConfig(mode string) tamper.DetectorConfig {
 	cfg := tamper.DetectorConfig{
 		BaseDir:       s.baseDir,
+		Storage:       s.storage,
 		DetectionMode: mode,
 		AlertManager:  s.alertManager,
 	}
@@ -470,4 +482,31 @@ func (s *TamperAppService) detectorConfig(mode string) tamper.DetectorConfig {
 		cfg.PortScanTimeout = runtimeCfg.PortScanTimeout
 	}
 	return cfg
+}
+
+// NewPersistentTamperAppService opens a service-owned history database once.
+// The caller must Close it after requests and scheduled work have stopped.
+func NewPersistentTamperAppService(baseDir string, alerts *alerting.Manager, providers ...TamperRuntimeConfigProvider) (*TamperAppService, error) {
+	service := NewTamperAppService(baseDir, alerts, providers...)
+	storage, err := tamper.NewPersistentHashStorage(service.baseDir)
+	if err != nil {
+		return nil, err
+	}
+	service.storage = storage
+	return service, nil
+}
+
+func (s *TamperAppService) Close() error {
+	if s.storage == nil {
+		return nil
+	}
+	return s.storage.Close()
+}
+
+// HistoryDatabase returns a borrowed service-owned connection and its identity.
+func (s *TamperAppService) HistoryDatabase() (*sql.DB, os.FileInfo, error) {
+	if s.storage == nil {
+		return nil, nil, fmt.Errorf("tamper history is not service-owned")
+	}
+	return s.storage.HistoryDatabase()
 }

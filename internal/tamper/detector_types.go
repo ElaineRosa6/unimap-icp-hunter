@@ -288,8 +288,9 @@ type SegmentChange struct {
 
 // HashStorage manages on-disk baseline and check-record persistence.
 type HashStorage struct {
-	baseDir string
-	mu      sync.RWMutex
+	historyOwner *historyDatabaseOwner
+	baseDir      string
+	mu           sync.RWMutex
 }
 
 type cacheEntry struct {
@@ -330,6 +331,8 @@ func (f BrowserPageLoaderFunc) LoadPage(ctx context.Context, targetURL string) (
 
 // DetectorConfig holds configuration for creating a new Detector.
 type DetectorConfig struct {
+	// Storage optionally shares a service-owned store. The service owns its lifetime.
+	Storage            *HashStorage
 	BaseDir            string
 	DetectionMode      string
 	PerformanceMode    string
@@ -682,7 +685,10 @@ func (s *HashStorage) DeleteCheckRecords(url string) error {
 
 // NewDetector creates a new Detector with the given configuration.
 func NewDetector(cfg DetectorConfig) *Detector {
-	storage := NewHashStorage(cfg.BaseDir)
+	storage := cfg.Storage
+	if storage == nil {
+		storage = NewHashStorage(cfg.BaseDir)
+	}
 
 	// 初始化指纹引擎（失败不影响核心功能，仅记录日志）
 	fpEngine, err := fingerprint.NewEngine()
