@@ -26,6 +26,10 @@ type BackupConfig struct {
 	MaxBackups int
 	// Prefix 备份文件名前缀
 	Prefix string
+	// SQLiteSnapshotter optionally binds SQLite files to existing owned connections.
+	// When configured, every detected SQLite file must be snapshotted successfully;
+	// an unknown source must return an error, never fall back to copying raw bytes.
+	SQLiteSnapshotter SQLiteSnapshotter
 }
 
 // BackupResult 备份结果
@@ -76,11 +80,7 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 	tw := tar.NewWriter(gw)
 
 	// 收集所有要备份的文件（带基础目录信息）
-	type fileWithBase struct {
-		path    string
-		baseDir string
-	}
-	var files []fileWithBase
+	var files []backupFile
 	var sourceErrors []error
 	for _, src := range cfg.Sources {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -92,7 +92,7 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 			continue
 		}
 		for _, f := range srcFiles {
-			files = append(files, fileWithBase{path: f, baseDir: baseDir})
+			files = append(files, backupFile{path: f, baseDir: baseDir})
 		}
 	}
 
@@ -105,8 +105,19 @@ func BackupContext(ctx context.Context, cfg BackupConfig) (*BackupResult, error)
 		return nil, fmt.Errorf("no files found to backup")
 	}
 
+	if cfg.SQLiteSnapshotter != nil {
+		staging, stageErr := os.MkdirTemp(cfg.OutputDir, ".sqlite-snapshots-*")
+		if stageErr != nil {
+			return nil, fmt.Errorf("create SQLite staging: %w", stageErr)
+		}
+		defer os.RemoveAll(staging)
+		files, stageErr = prepareSQLiteSnapshots(ctx, files, staging, cfg.SQLiteSnapshotter)
+		if stageErr != nil {
+			return nil, fmt.Errorf("prepare SQLite snapshots: %w", stageErr)
+		}
+	}
 	for _, f := range files {
-		if tarErr := addFileToTarContext(ctx, tw, f.path, f.baseDir); tarErr != nil {
+		if tarErr := addNamedFileToTarContext(ctx, tw, f.path, f.baseDir, f.archiveName); tarErr != nil {
 			return nil, fmt.Errorf("add backup file %s: %w", f.path, tarErr)
 		}
 	}
@@ -236,6 +247,10 @@ func collectFilesContext(ctx context.Context, path string) ([]string, string, er
 
 // addFileToTar 将文件添加到 tar
 func addFileToTarContext(ctx context.Context, tw *tar.Writer, path string, baseDir string) error {
+	return addNamedFileToTarContext(ctx, tw, path, baseDir, "")
+}
+
+func addNamedFileToTarContext(ctx context.Context, tw *tar.Writer, path string, baseDir string, archiveName string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -268,6 +283,13 @@ func addFileToTarContext(ctx context.Context, tw *tar.Writer, path string, baseD
 	}
 	// Tar member names always use '/', including archives made on Windows.
 	header.Name = filepath.ToSlash(relPath)
+	if archiveName != "" {
+		name := archiveName
+		if !filepath.IsLocal(name) || name == "." {
+			return fmt.Errorf("invalid snapshot archive name")
+		}
+		header.Name = filepath.ToSlash(name)
+	}
 	if writeErr := tw.WriteHeader(header); writeErr != nil {
 		return writeErr
 	}
