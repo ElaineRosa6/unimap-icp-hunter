@@ -11,14 +11,15 @@ import (
 
 // HotUpdateManager 配置热更新管理器
 type HotUpdateManager struct {
-	configPath    string
-	configManager *Manager
-	watcher       *fileWatcher
-	mutex         sync.RWMutex
-	configHistory []ConfigVersion
-	maxHistory    int
-	running       bool
-	stopChan      chan struct{}
+	configPath     string
+	configManager  *Manager
+	watcher        *fileWatcher
+	mutex          sync.RWMutex
+	configHistory  []ConfigVersion
+	maxHistory     int
+	currentVersion int // Monotonic identity, independent of retained slice length.
+	running        bool
+	stopChan       chan struct{}
 }
 
 // ConfigVersion 配置版本信息
@@ -180,7 +181,7 @@ func (h *HotUpdateManager) checkConfigChanges(cfg HotUpdateConfig) {
 	// 记录新版本
 	h.addConfigVersion(newConfig, newChecksum, "update")
 
-	logger.Infof("Config hot update completed: version=%d", len(h.configHistory))
+	logger.Infof("Config hot update completed: version=%d", h.currentVersion)
 
 	// 如果启用自动回滚，启动回滚定时器
 	if cfg.AutoRollback {
@@ -194,8 +195,9 @@ func (h *HotUpdateManager) addConfigVersion(config *Config, checksum, changeType
 	if cloned == nil {
 		return
 	}
+	h.currentVersion++
 	version := ConfigVersion{
-		Version:    len(h.configHistory) + 1,
+		Version:    h.currentVersion,
 		Config:     cloned,
 		Timestamp:  time.Now(),
 		Checksum:   checksum,
@@ -242,7 +244,10 @@ func (h *HotUpdateManager) GetConfigHistory() []ConfigVersion {
 	defer h.mutex.RUnlock()
 
 	history := make([]ConfigVersion, len(h.configHistory))
-	copy(history, h.configHistory)
+	for i, version := range h.configHistory {
+		history[i] = version
+		history[i].Config = version.Config.Clone()
+	}
 	return history
 }
 
@@ -251,11 +256,18 @@ func (h *HotUpdateManager) Rollback(version int) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	if version <= 0 || version > len(h.configHistory) {
-		return fmt.Errorf("invalid version: %d", version)
+	var targetVersion ConfigVersion
+	found := false
+	for _, retained := range h.configHistory {
+		if retained.Version == version {
+			targetVersion = retained
+			found = true
+			break
+		}
 	}
-
-	targetVersion := h.configHistory[version-1]
+	if !found {
+		return fmt.Errorf("version not retained: %d", version)
+	}
 	h.configManager.SetConfig(targetVersion.Config)
 
 	checksum, err := calculateChecksum(targetVersion.Config)
@@ -271,5 +283,5 @@ func (h *HotUpdateManager) Rollback(version int) error {
 func (h *HotUpdateManager) GetCurrentVersion() int {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
-	return len(h.configHistory)
+	return h.currentVersion
 }

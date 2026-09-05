@@ -253,8 +253,8 @@ func TestAddConfigVersion_HistoryLimit(t *testing.T) {
 	if len(mgr.configHistory) != 3 {
 		t.Errorf("expected 3 versions (limit), got %d", len(mgr.configHistory))
 	}
-	// Versions should be renumbered
-	if mgr.configHistory[0].Version != 3 {
+	// Retained version identities must survive eviction.
+	if mgr.configHistory[0].Version != 3 || mgr.configHistory[1].Version != 4 || mgr.configHistory[2].Version != 5 {
 		t.Errorf("first version = %d, want 3", mgr.configHistory[0].Version)
 	}
 }
