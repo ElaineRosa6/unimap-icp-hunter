@@ -234,3 +234,14 @@ GitHub 连接恢复，已推送 5fbcfcb2e180deeb130e615056bb9d2d83eb5266，并�
 addFileToTar 先校验相对路径为本地路径，再以 os.OpenRoot(baseDir) 和 root.Open 打开文件，从同一句柄获取元数据并复制内容，不再在检查后重新按路径打开。只接受普通文件，删除越界路径降级为 basename 的逻辑；tar Header.Name 统一 filepath.ToSlash。来源根目录本身仍是用户配置的信任边界；这不是对整个来源树的原子快照。
 
 越界链接现使整次备份失败，不生成新归档并保留旧恢复点；根内相对链接仍可备份，嵌套文件使用斜杠路径。新回归及原有正常备份、失败保留、同秒唯一文件回归重复 10 次通过。全部读取仅使用自建临时夹具，没有读取真实来源目录之外的数据；活跃 SQLite 一致性仍单独待查。
+
+
+### 第二十三轮：SQLite 一致性快照基础组件（尚未接入备份入口）
+
+sqlite-snapshot-audit 用真实 Backup 和临时 WAL 数据库两次复现：原库 1 条已提交记录，裸 db 文件备份返回成功，恢复后 0 条；VACUUM INTO 对照组恢复 1 条。该审计脚本已保存并可重放，未修改实际数据库。
+
+本轮增加 SnapshotSQLite(ctx, existingDB, newDestination)：通过现有 *sql.DB 的连接和 go-sqlite3 Online Backup API 分页复制，不重新打开来源路径。目标文件独占创建，已有文件不覆盖；取消、连接池耗尽、关闭来源、SQLite 忙锁都会返回错误并清理本次目标。完成后 quick_check、关闭目标数据库并同步文件。目标目录由调用方持有，调用方需提供有界 context；不是整个来源目录或多库联合事务快照。
+
+组件回归验证 WAL 中的已提交记录及显式 rowid=42 经“快照→现有 Backup→解包→重新查询”完整保留；源记录未变，含空格/#/% 的目标路径按 URI 转义。取消、池等待超时、关闭来源、防覆盖、实际 EXCLUSIVE 锁等待与失败目录清理通过，套件重复 10 次。无 CGO 构建保留同名入口并明确报错、不创建文件。
+
+注意：本轮仅交付组件，生产 Backup、Web、BackupRunner 尚未使用它，先前裸文件丢 WAL 问题仍未修复。已定位六处应用 SQLite 打开路径（history、auth、batchdb、ICP、tamper 规则库及 check_records）；接下来需要接通连接生命周期、数据库来源识别/sidecar 处理和调用方 context，再以两个实际入口和并发事务恢复测试验收。不能把本轮单组件通过写成生产备份一致性已完成。
