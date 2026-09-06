@@ -155,11 +155,14 @@ async function handleTask(task, token) {
 
       // 滚动到页面底部触发懒加载内容，再滚动回顶部
       try {
-        await chrome.tabs.executeScript(tabId, {
-          code: `
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: async () => {
+            if (!document.body) return;
             window.scrollTo(0, document.body.scrollHeight);
-            setTimeout(() => window.scrollTo(0, 0), 500);
-          `
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            window.scrollTo(0, 0);
+          }
         });
       } catch (e) {
         // 忽略滚动错误

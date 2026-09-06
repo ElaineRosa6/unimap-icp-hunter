@@ -169,3 +169,7 @@ go test -tags live_bridge_e2e ./web -run '^TestLiveAPIScheduledQueryNotification
 ### 0.4.22 设置页连接诊断
 
 重新加载扩展后，点击工具栏 UniMap 图标打开设置页，顶部提供运行版本、最近成功轮询时间与手动刷新按钮。无需寻找另一个弹窗或共享 token。仅成功拉取任务接口后记录 last_poll_at；30秒内标记最近轮询成功，超时标记状态过期（可能执行长任务、后台休眠或断连），不单凭 paired 声明在线。显示采用固定诊断文案，不回显原始错误或凭据。该功能不替代各引擎实测与服务端 readiness。0.4.22 源码与浏览器实际加载版本仍须分别确认。
+
+### 0.4.23 Manifest V3 懒加载滚动修复
+
+采集/截图任务原先调用旧 chrome.tabs.executeScript，MV3 环境下异常被忽略，实际未滚动。现使用 chrome.scripting.executeScript 的函数注入，等待底部停留500ms并返回顶部后再继续截图。保留原有页面等待与注入失败后的尽力执行策略，不新增权限、不改变URL防护。执行真实 background handleTask 的隔离回归证明：修复前仅截图，修复后按顺序滚到底部、回顶部、截图。该测试模拟Chrome API，不代表外部站点漏采或分页问题已全部解决。
