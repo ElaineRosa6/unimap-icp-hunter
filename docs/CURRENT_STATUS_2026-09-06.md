@@ -2,7 +2,15 @@
 
 > 本页记录已完成核验的代码版本，不是实时 HEAD、GitHub 分支或镜像 `latest` 查询。后续代码或文档提交需查看对应工作流；历史报告只证明其日期、提交与测试范围内的事实。
 
-## 已核验发布
+## 后续已核验发布（追加快照）
+
+- `c2acd9de71fc5a1fe36fd5191458e15cb29f1ca0`：[主CI 34013422414](https://github.com/ElaineRosa6/unimap/actions/runs/34013422414) 11/11通过；[bridge-smoke 34013422458](https://github.com/ElaineRosa6/unimap/actions/runs/34013422458) 通过。
+- 两工作流均实际执行39项扩展回归、无失败或跳过，日志artifact已上传。Linux/macOS卡片测试明确PASS；Redis实例3轮通过。
+- 镜像 `ghcr.io/elainerosa6/unimap@sha256:84a9345972b6ab788e34f2cb655eef931bdd5860b7347da05449b625d4e788ed` 的commit与该提交一致，readiness及shutdown为ok。这不是云端用户部署验收。
+- Extension代码版本0.4.19。DayDayMap修复副本CDP实测10资产+PNG；扩展真实加载、活页和Bridge回传尚未验收。其他引擎及运行环境限制见[分路径复验](CDP_EXTENSION_RECHECK_2026-09-06.md)。
+- 以下保留早先f6b3689核验；其中“本轮”只指该历史批次。不要据这些历史段落忽略上述新增证据。
+
+## 早先已核验发布
 
 - 发布分支：`master`；本次已核验代码：`f6b368927536a64c0f3b55e09dddea3b29aabadf`。Go 版本以 `go.mod` 的 `1.26.6` 为准。
 - [CI 33996779465](https://github.com/ElaineRosa6/unimap/actions/runs/33996779465) 成功，10/10 jobs 通过。Linux/macOS 的备份保留隔离、旧版名称兼容和链接保护回归通过。
