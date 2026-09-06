@@ -985,7 +985,7 @@ func (s *Server) buildServerMiddlewareChain(mux http.Handler, rateLimitEnabled b
 			maxAge = s.config.Web.CORS.MaxAge
 		}
 	}
-	handler := securityMiddleware(mux)
+	handler := securityMiddleware(captureMetricRoute(mux))
 	handler = requestIDMiddleware(handler)
 	handler = requestSizeLimitMiddleware(maxBodyBytes)(handler)
 	handler = corsMiddleware(allowedOrigins, methods, headers, exposed, creds, maxAge)(handler)

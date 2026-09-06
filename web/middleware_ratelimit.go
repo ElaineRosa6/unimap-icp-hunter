@@ -196,7 +196,7 @@ func rateLimitMiddleware(next http.Handler) http.Handler {
 		decision := limiter.allowWithState(clientID)
 
 		if !decision.allowed {
-			metrics.IncRateLimitRejected(r.URL.Path)
+			metrics.IncRateLimitRejected(metricRoutePath(r))
 			// 设置限流响应头
 			w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(int64(limiter.rate), 10))
 			w.Header().Set("X-RateLimit-Remaining", "0")
