@@ -48,65 +48,74 @@ func (r *RateLimiter) Stop() {
 	r.mu.Unlock()
 }
 
-// Allow 检查是否允许请求（滑动窗口）
-func (r *RateLimiter) Allow(clientID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-r.window)
-
-	// 过滤掉窗口外的时间戳
-	timestamps := r.requests[clientID]
-	idx := 0
-	for idx < len(timestamps) && timestamps[idx].Before(cutoff) {
-		idx++
-	}
-	if idx > 0 {
-		timestamps = timestamps[idx:]
-	}
-
-	// 检查是否超过限制
-	if len(timestamps) >= r.rate {
-		r.requests[clientID] = timestamps
-		return false
-	}
-
-	// 记录新请求
-	r.requests[clientID] = append(timestamps, now)
-	return true
+// rateLimitDecision is a single atomic request decision and its response state.
+type rateLimitDecision struct {
+	allowed    bool
+	remaining  int
+	resetAt    time.Time
+	retryAfter int64
 }
 
-// GetRemaining 获取客户端剩余请求数
-func (r *RateLimiter) GetRemaining(clientID string) (remaining int, resetAt time.Time) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+// Allow checks and consumes one request slot.
+func (r *RateLimiter) Allow(clientID string) bool {
+	return r.allowWithState(clientID).allowed
+}
 
-	now := time.Now()
-	cutoff := now.Add(-r.window)
-
-	timestamps := r.requests[clientID]
-	// 计算窗口内的请求数
-	count := 0
-	for _, ts := range timestamps {
-		if !ts.Before(cutoff) {
-			count++
-		}
+func activeRateTimestamps(timestamps []time.Time, cutoff time.Time) []time.Time {
+	i := 0
+	for i < len(timestamps) && !timestamps[i].After(cutoff) {
+		i++
 	}
+	return timestamps[i:]
+}
 
-	remaining = r.rate - count
+func retryAfterSeconds(wait time.Duration) int64 {
+	seconds := int64(wait / time.Second)
+	if wait%time.Second > 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
+}
+
+func (r *RateLimiter) allowWithState(clientID string) rateLimitDecision {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Read time inside the lock so concurrently appended timestamps stay ordered.
+	now := time.Now()
+	timestamps := activeRateTimestamps(r.requests[clientID], now.Add(-r.window))
+	allowed := len(timestamps) < r.rate
+	if allowed {
+		timestamps = append(timestamps, now)
+	}
+	r.requests[clientID] = timestamps
+	remaining, resetAt := r.remainingState(timestamps, now)
+	return rateLimitDecision{allowed: allowed, remaining: remaining, resetAt: resetAt, retryAfter: retryAfterSeconds(resetAt.Sub(now))}
+}
+
+// remainingState requires the caller to hold a read or write lock and pass
+// only live timestamps. The reset denotes the next slot becoming available.
+func (r *RateLimiter) remainingState(timestamps []time.Time, now time.Time) (int, time.Time) {
+	remaining := r.rate - len(timestamps)
 	if remaining < 0 {
 		remaining = 0
 	}
-
-	// 计算窗口重置时间（最早记录的过期时间）
+	resetAt := now.Add(r.window)
 	if len(timestamps) > 0 {
 		resetAt = timestamps[0].Add(r.window)
-	} else {
-		resetAt = now.Add(r.window)
 	}
-
 	return remaining, resetAt
+}
+
+// GetRemaining observes a client's live window without consuming a slot.
+func (r *RateLimiter) GetRemaining(clientID string) (int, time.Time) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := time.Now()
+	timestamps := activeRateTimestamps(r.requests[clientID], now.Add(-r.window))
+	return r.remainingState(timestamps, now)
 }
 
 // cleanup 定期清理过期的客户端记录
@@ -183,30 +192,27 @@ func rateLimitMiddleware(next http.Handler) http.Handler {
 		// 使用客户端 IP 作为标识
 		clientID := getClientIP(r)
 
-		// 获取剩余请求数（在 Allow 之前）
-		remaining, resetAt := limiter.GetRemaining(clientID)
+		// Decide and capture response state atomically for this request.
+		decision := limiter.allowWithState(clientID)
 
-		if !limiter.Allow(clientID) {
+		if !decision.allowed {
 			metrics.IncRateLimitRejected(r.URL.Path)
 			// 设置限流响应头
 			w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(int64(limiter.rate), 10))
 			w.Header().Set("X-RateLimit-Remaining", "0")
-			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.UnixMilli(), 10))
-			w.Header().Set("Retry-After", strconv.FormatInt(int64(time.Until(resetAt).Seconds()+0.5), 10))
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(decision.resetAt.UnixMilli(), 10))
+			w.Header().Set("Retry-After", strconv.FormatInt(decision.retryAfter, 10))
 			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests", map[string]int64{
-				"retry_after": int64(time.Until(resetAt).Seconds()) + 1,
+				"retry_after": decision.retryAfter,
 			})
 			return
 		}
 
 		// 请求允许，设置响应头
 		w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(int64(limiter.rate), 10))
-		rem := int64(remaining) - 1
-		if rem < 0 {
-			rem = 0
-		}
+		rem := int64(decision.remaining)
 		w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(rem, 10))
-		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.UnixMilli(), 10))
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(decision.resetAt.UnixMilli(), 10))
 
 		next.ServeHTTP(w, r)
 	})
