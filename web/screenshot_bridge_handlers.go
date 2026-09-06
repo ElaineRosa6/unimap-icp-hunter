@@ -369,6 +369,11 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 		s.touchBridgeToken(token)
 	}
 
+	// An authenticated empty poll is activity too; idle clients must not age out.
+	s.bridge.mu.Lock()
+	s.bridge.LastTaskPullAt = time.Now().Unix()
+	s.bridge.mu.Unlock()
+
 	task, ok := s.bridge.Mock.NextTask()
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -377,10 +382,6 @@ func (s *Server) handleScreenshotBridgeTaskNext(w http.ResponseWriter, r *http.R
 		})
 		return
 	}
-
-	s.bridge.mu.Lock()
-	s.bridge.LastTaskPullAt = time.Now().Unix()
-	s.bridge.mu.Unlock()
 
 	timeoutMS := int(task.Timeout / time.Millisecond)
 	if timeoutMS <= 0 {

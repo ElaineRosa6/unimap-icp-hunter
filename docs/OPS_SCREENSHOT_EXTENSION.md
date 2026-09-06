@@ -173,3 +173,7 @@ go test -tags live_bridge_e2e ./web -run '^TestLiveAPIScheduledQueryNotification
 ### 0.4.23 Manifest V3 懒加载滚动修复
 
 采集/截图任务原先调用旧 chrome.tabs.executeScript，MV3 环境下异常被忽略，实际未滚动。现使用 chrome.scripting.executeScript 的函数注入，等待底部停留500ms并返回顶部后再继续截图。保留原有页面等待与注入失败后的尽力执行策略，不新增权限、不改变URL防护。执行真实 background handleTask 的隔离回归证明：修复前仅截图，修复后按顺序滚到底部、回顶部、截图。该测试模拟Chrome API，不代表外部站点漏采或分页问题已全部解决。
+
+### 空队列轮询与readiness（2026-09-06修复）
+
+0.4.23状态页和服务端活跃客户端均确认在线时，readiness仍可能503：旧服务仅在实际派发任务后更新 last_task_pull_at，长时间空队列使路由的最近活动检查过期。当前代码在本机请求通过Bridge鉴权后、检查队列前更新活动时间；空轮询也计作活动，非本机或鉴权失败请求不刷新。回归实际调用任务handler与ExtensionHealthChecker，证明空闲客户端健康状态恢复且拒绝请求保持过期。此代码修复尚未部署到旧测试进程，不以源码通过声明运行实例已恢复健康；Bridge在线也不等于引擎业务验收通过。
