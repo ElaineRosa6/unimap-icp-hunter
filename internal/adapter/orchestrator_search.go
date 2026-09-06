@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -277,7 +278,11 @@ func (t *PaginatedSearchTask) Execute() error {
 		if stop := t.fetchPaginatedPage(adapter, page); stop {
 			break
 		}
-		time.Sleep(DefaultRateLimitDelay)
+		select {
+		case <-t.ctx.Done():
+			return nil
+		case <-time.After(DefaultRateLimitDelay):
+		}
 	}
 	return nil
 }
@@ -312,8 +317,7 @@ func (t *PaginatedSearchTask) fetchPaginatedPage(adapter EngineAdapter, page int
 func (t *PaginatedSearchTask) sendPaginatedResult(result *model.EngineResult) {
 	select {
 	case t.resultChan <- result:
-	default:
-		logger.CtxErrorf(t.ctx, "Failed to send result: channel full")
+	case <-t.ctx.Done():
 	}
 }
 
@@ -327,33 +331,43 @@ func (o *EngineOrchestrator) SearchEnginesWithPaginationAndContext(ctx context.C
 	if len(queries) == 0 {
 		return nil, fmt.Errorf("no queries provided")
 	}
-
+	if pageSize <= 0 {
+		return nil, fmt.Errorf("page size must be positive")
+	}
+	if maxPages <= 0 {
+		return nil, fmt.Errorf("max pages must be positive")
+	}
+	if maxPages > math.MaxInt/len(queries) {
+		return nil, fmt.Errorf("pagination result count overflows int")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("search cancelled: %w", err)
+	}
 	concurrency := o.GetConcurrency()
+	if concurrency <= 0 {
+		concurrency = 1
+	}
 	if len(queries) < concurrency {
 		concurrency = len(queries)
 	}
-
+	// Buffer only active workers, not every possible page. Collect while tasks
+	// are submitted, otherwise a full task queue and result buffer can deadlock.
+	resultsChan := make(chan *model.EngineResult, concurrency)
 	pool := workerpool.NewPool(concurrency)
 	pool.Start()
-
-	resultsChan := make(chan *model.EngineResult, len(queries)*maxPages)
-	var wg sync.WaitGroup
-
-	for _, q := range queries {
-		wg.Add(1)
-		pool.Submit(&PaginatedSearchTask{
-			orchestrator: o, ctx: ctx, query: q,
-			pageSize: pageSize, maxPages: maxPages,
-			resultChan: resultsChan, wg: &wg,
-		})
-	}
-
 	go func() {
+		var wg sync.WaitGroup
+		for _, q := range queries {
+			if ctx.Err() != nil {
+				break
+			}
+			wg.Add(1)
+			pool.Submit(&PaginatedSearchTask{orchestrator: o, ctx: ctx, query: q, pageSize: pageSize, maxPages: maxPages, resultChan: resultsChan, wg: &wg})
+		}
 		wg.Wait()
 		pool.Stop()
 		close(resultsChan)
 	}()
-
 	return collectPaginatedResults(ctx, resultsChan)
 }
 
