@@ -359,3 +359,10 @@ docker build --build-arg 'GOPROXY=https://goproxy.cn|https://proxy.golang.org|di
 统一查询服务通过 QuerySnapshotCache 一次发布/读取资产及统计、错误信息。内存快照同属一个条目及有效期；Redis 用 `query-snapshot:v1:` 命名空间下单个 JSON envelope 和单次带 TTL 的 SET，读取只执行一次 GET。旧分离资产/元数据键不参与新协议，按原 TTL 回收；首次命中率下降可能增加上游配额消耗，无需清空共享 Redis。
 
 仅支持旧 QueryCache/QueryCacheMetadataCache 的自定义后端跳过服务级查询缓存，查询本身继续执行；引擎资产缓存接口保留。Delete/Clear 清理新快照。Redis 协议本轮以客户端命令拦截 fixture 验证，不代表真实 Redis 服务、网络故障或集群验收。Redis JSON 数值解码沿用原后端语义；内存快照沿用资产类型保留的深复制。回退旧二进制会恢复旧双键读写及其跨代风险。
+
+
+### Redis 实例持续回归门禁
+
+CI 的 Redis Snapshot Integration 使用独立 `redis:7.4` 服务容器及动态主机端口，健康检查通过后运行三轮竞态实例测试；必须出现三条父测试 PASS，缺失地址时失败而非 Skip。Docker 发布依赖该任务，日志作为 redis-integration artifact 保留七天。标签跟随 7.4 补丁版，实际服务版本由测试 INFO 输出记录，不将 YAML 中的版本标签等同于一次成功验收。
+
+本地仅在独立临时实例上设置 UNIMAP_REDIS_FIXTURE_ADDR=127.0.0.1:PORT 后执行 `go test -race ./internal/utils -run '^TestRedisInstanceQuerySnapshot$' -count=3 -v`。可设 UNIMAP_REDIS_FIXTURE_REQUIRED=1 强制地址存在。该测试写入唯一前缀，并测试 Clear/Delete，勿使用共享生产实例；普通开发环境未配置时仍显式 Skip。测试覆盖并发代际、真实 TTL、旧键及无效 envelope 隔离、删除和前缀外 sentinel 保留，不覆盖 TLS/集群/故障切换。

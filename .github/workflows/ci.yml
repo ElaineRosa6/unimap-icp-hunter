@@ -78,6 +78,47 @@ jobs:
           path: coverage.out
           retention-days: 7
 
+  # Isolated real Redis protocol regression; never use a shared service.
+  redis-integration:
+    name: Redis Snapshot Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    services:
+      redis:
+        image: redis:7.4
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run actual Redis snapshot tests
+        shell: bash
+        env:
+          UNIMAP_REDIS_FIXTURE_REQUIRED: "1"
+          UNIMAP_REDIS_FIXTURE_ADDR: 127.0.0.1:${{ job.services.redis.ports['6379'] }}
+        run: |
+          go test -race ./internal/utils -run '^TestRedisInstanceQuerySnapshot$' -count=3 -v | tee redis-integration.log
+          test "$(grep -c '^--- PASS: TestRedisInstanceQuerySnapshot (' redis-integration.log)" -eq 3
+      - name: Preserve Redis test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-integration
+          path: redis-integration.log
+          if-no-files-found: error
+          retention-days: 7
+
   # --- Lint ---
   lint:
     name: Lint
@@ -194,7 +235,7 @@ jobs:
   docker:
     name: Docker Build & Push
     runs-on: ubuntu-latest
-    needs: [test, lint, security, headless-browser, extension-scripts]
+    needs: [test, lint, security, headless-browser, extension-scripts, redis-integration]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     permissions:
       contents: read
