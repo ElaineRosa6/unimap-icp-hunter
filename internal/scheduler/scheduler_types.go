@@ -325,16 +325,17 @@ type PushLogRecord struct {
 
 // Scheduler manages cron-based task scheduling with persistence.
 type Scheduler struct {
-	tasks      map[string]*ScheduledTask
-	cron       *cron.Cron
-	cronIDs    map[string]cron.EntryID
-	handlers   map[TaskType]TaskHandler
-	history    []ExecutionRecord
-	store      schedulerStore
-	stopCh     chan struct{}
-	stopped    bool
-	mu         sync.RWMutex
-	maxHistory int
+	automaticDisabled bool // immutable startup policy
+	tasks             map[string]*ScheduledTask
+	cron              *cron.Cron
+	cronIDs           map[string]cron.EntryID
+	handlers          map[TaskType]TaskHandler
+	history           []ExecutionRecord
+	store             schedulerStore
+	stopCh            chan struct{}
+	stopped           bool
+	mu                sync.RWMutex
+	maxHistory        int
 
 	// 生命周期控制
 	ctx    context.Context

@@ -416,3 +416,7 @@ HTTP 请求计数、耗时及限流拒绝的 `path` 标签使用 ServeMux 匹配
 浏览器采集若报告 rows_found > 0 而 assets 为空，服务层保留采集信封与截图，同时在 browserQueryErrors / errors 返回诊断。API有资产时仍为partial；无资产时为error。rows_found=0的真正空结果不因本条规则报错。
 
 同步 /api/v1/query 使用有限的逐请求写截止时间：浏览器 collect 为60秒任务预算，collect_and_capture（含默认动作）为150秒，纯API查询为5分钟；写截止时间在任务预算后增加15秒响应余量，并考虑更早的调用方context截止时间。普通接口继续使用服务器默认写超时，不全局取消超时。
+
+### 调度启动开关（2026-09-06 修复）
+
+`scheduler.enabled: false` 现在保留显式关闭值，并阻止 cron、一次性和延迟任务自动注册/启动；任务管理和主动执行接口仍可使用。省略此字段的旧 YAML 配置默认启用；代码构造的显式 false 不再被 ApplyDefaults 改回 true。该开关是启动配置，修改后需重启，不宣称热更新会停止已经运行的任务。升级前核对实际配置：旧版本已持久化为 true 的值不会自动推测恢复成 false。

@@ -14,6 +14,7 @@ func (m *Manager) Load() error {
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		var cfg Config
+		cfg.Scheduler.Enabled = true // historical default when no valid document is available
 		m.applyDefaults(&cfg)
 		m.resolveEnv(&cfg)
 		m.SetConfig(&cfg)
@@ -23,6 +24,7 @@ func (m *Manager) Load() error {
 	candidate, err := m.parseConfig(data)
 	if err != nil {
 		var cfg Config
+		cfg.Scheduler.Enabled = true // historical default when no valid document is available
 		m.applyDefaults(&cfg)
 		m.resolveEnv(&cfg)
 		m.SetConfig(&cfg)
@@ -36,6 +38,8 @@ func (m *Manager) Load() error {
 // Startup and hot updates must interpret the same bytes identically.
 func (m *Manager) parseConfig(data []byte) (*Config, error) {
 	var candidate Config
+	// Seed omission defaults before decoding; explicit false must survive.
+	candidate.Scheduler.Enabled = true
 	if err := yaml.Unmarshal(data, &candidate); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}

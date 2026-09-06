@@ -164,7 +164,7 @@ func NewServer(port int, unifiedSvc *service.UnifiedService, orchestrator *adapt
 	srv.notifyRegistry = initNotifySystem(cfg, cfgManager, sched)
 
 	// 所有 handler 注册完毕且数据加载完成后再启动 cron
-	sched.Start()
+	startSchedulerIfEnabled(sched, cfg)
 	srv.scheduler = sched
 
 	return srv, nil
@@ -525,10 +525,10 @@ func initScheduler(srv *Server, cfg *config.Config, screenshotApp *service.Scree
 		maxHistory = cfg.Scheduler.MaxHistory
 	}
 
-	sched := scheduler.NewScheduler(
+	sched := scheduler.NewSchedulerWithAutomaticEnabled(
 		filepath.Join(utils.AppDataDir(), "scheduler_tasks.json"),
 		filepath.Join(utils.AppDataDir(), "scheduler_history.json"),
-		maxHistory)
+		maxHistory, cfg == nil || cfg.Scheduler.Enabled)
 
 	// Shared session health tracker: enables per-engine circuit breaking across
 	// LoginStatusCheckRunner (records success/failure) and QueryRunner (skips

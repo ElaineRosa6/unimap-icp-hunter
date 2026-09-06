@@ -27,6 +27,12 @@ var (
 // NewScheduler creates a new Scheduler. If storePath is non-empty, tasks are
 // persisted to that JSON file.
 func NewScheduler(storePath string, historyPath string, maxHistory int) *Scheduler {
+	return NewSchedulerWithAutomaticEnabled(storePath, historyPath, maxHistory, true)
+}
+
+// NewSchedulerWithAutomaticEnabled fixes automatic scheduling policy for this
+// instance before persisted cron or timer tasks are loaded. Manual runs remain available.
+func NewSchedulerWithAutomaticEnabled(storePath string, historyPath string, maxHistory int, enabled bool) *Scheduler {
 	c := cron.New(cron.WithSeconds())
 	// Delay cron start until caller registers handlers and tasks.
 	// Call s.Start() after setup is complete.
@@ -37,16 +43,17 @@ func NewScheduler(storePath string, historyPath string, maxHistory int) *Schedul
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Scheduler{
-		tasks:         make(map[string]*ScheduledTask),
-		cron:          c,
-		cronIDs:       make(map[string]cron.EntryID),
-		handlers:      make(map[TaskType]TaskHandler),
-		history:       make([]ExecutionRecord, 0),
-		maxHistory:    maxHistory,
-		stopCh:        make(chan struct{}),
-		ctx:           ctx,
-		cancel:        cancel,
-		notifyTimeout: 60 * time.Second, // 默认 60 秒，覆盖慢 DNS 解析场景
+		automaticDisabled: !enabled,
+		tasks:             make(map[string]*ScheduledTask),
+		cron:              c,
+		cronIDs:           make(map[string]cron.EntryID),
+		handlers:          make(map[TaskType]TaskHandler),
+		history:           make([]ExecutionRecord, 0),
+		maxHistory:        maxHistory,
+		stopCh:            make(chan struct{}),
+		ctx:               ctx,
+		cancel:            cancel,
+		notifyTimeout:     60 * time.Second, // 默认 60 秒，覆盖慢 DNS 解析场景
 	}
 
 	if storePath != "" {
@@ -76,6 +83,9 @@ func (s *Scheduler) SetNotificationLogRecorder(fn func(PushLogRecord) error) {
 // Start begins the internal cron scheduler. Call this after registering
 // handlers and loading persisted tasks.
 func (s *Scheduler) Start() {
+	if s.automaticDisabled {
+		return
+	}
 	s.cron.Start()
 }
 
@@ -738,6 +748,12 @@ func normalizeCronExpr(expr string) string {
 // scheduleOneTimeTask mutates task.timer / task.NextRunAt / task.RunAt, which
 // must not race with concurrent readers — hence the write-lock requirement.
 func (s *Scheduler) scheduleTask(task *ScheduledTask) error {
+	if s.automaticDisabled {
+		task.RuntimeStatus = "scheduler_disabled"
+		task.ScheduleError = ""
+		task.NextRunAt = nil
+		return nil
+	}
 	if !task.Enabled {
 		task.RuntimeStatus = "disabled"
 		task.ScheduleError = ""

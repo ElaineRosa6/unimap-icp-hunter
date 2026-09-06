@@ -363,9 +363,6 @@ func (m *Manager) applyMiscDefaults(config *Config) {
 	}
 
 	// 定时任务
-	if !config.Scheduler.Enabled {
-		config.Scheduler.Enabled = true
-	}
 	if config.Scheduler.MaxHistory == 0 {
 		config.Scheduler.MaxHistory = 500
 	}

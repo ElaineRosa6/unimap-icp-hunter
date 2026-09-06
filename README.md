@@ -78,3 +78,7 @@ UNIMAP_CHROME_PATH=/path/to/chrome go test -tags=headless_e2e ./internal/screens
 仅对拥有授权的目标、账户和数据执行查询、截图或巡检。凭证必须通过部署环境或受控配置提供，禁止提交、记录或共享真实 API Key、管理令牌、Bridge token 和 Cookie。
 
 > CDP / 浏览器扩展最新分路径实测（2026-09-06）见 [复验记录](docs/CDP_EXTENSION_RECHECK_2026-09-06.md) 最新追加节。七引擎均已有扩展非空回传记录，但完整字段/分页仍待核验；放行后DayDayMap原生CDP通过，其余原生路径尚未完整验收。扩展源码0.4.21包含Quake域名卡片修复；源码版本、浏览器运行版本、部署及CI状态分别核验。
+
+### 调度启动开关（2026-09-06 修复）
+
+`scheduler.enabled: false` 现在保留显式关闭值，并阻止 cron、一次性和延迟任务自动注册/启动；任务管理和主动执行接口仍可使用。省略此字段的旧 YAML 配置默认启用；代码构造的显式 false 不再被 ApplyDefaults 改回 true。该开关是启动配置，修改后需重启，不宣称热更新会停止已经运行的任务。升级前核对实际配置：旧版本已持久化为 true 的值不会自动推测恢复成 false。
