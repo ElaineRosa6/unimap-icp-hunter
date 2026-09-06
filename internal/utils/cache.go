@@ -161,6 +161,11 @@ func (c *MemoryCache) Get(key string) ([]model.UnifiedAsset, bool) {
 		return nil, false
 	}
 
+	snapshot, valid := cloneCacheAssets(item.assets)
+	if !valid {
+		c.misses++
+		return nil, false
+	}
 	// 更新访问信息
 	c.accessCounter++
 	item.accessFreq++ // 增加访问频率计数
@@ -173,7 +178,7 @@ func (c *MemoryCache) Get(key string) ([]model.UnifiedAsset, bool) {
 	}
 
 	c.hits++
-	return item.assets, true
+	return snapshot, true
 }
 
 // Set 将查询结果存入缓存
@@ -181,6 +186,12 @@ func (c *MemoryCache) Set(key string, assets []model.UnifiedAsset, duration time
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
+	snapshot, valid := cloneCacheAssets(assets)
+	if !valid {
+		delete(c.cache, key)
+		delete(c.metadata, key)
+		return
+	}
 	_, exists := c.cache[key]
 	// 检查缓存大小是否超过限制（覆盖已有 key 不应触发驱逐）
 	if !exists && len(c.cache) >= c.maxSize {
@@ -193,7 +204,7 @@ func (c *MemoryCache) Set(key string, assets []model.UnifiedAsset, duration time
 	// 存入缓存
 	c.accessCounter++
 	c.cache[key] = cacheItem{
-		assets:     assets,
+		assets:     snapshot,
 		expiryTime: time.Now().Add(duration),
 		lastAccess: time.Now(),
 		accessIdx:  c.accessCounter,
@@ -264,7 +275,9 @@ func (c *MemoryCache) GetMulti(keys []string) map[string][]model.UnifiedAsset {
 			if !item.expiryTime.IsZero() && now.After(item.expiryTime) {
 				continue
 			}
-			result[key] = item.assets
+			if snapshot, valid := cloneCacheAssets(item.assets); valid {
+				result[key] = snapshot
+			}
 		}
 	}
 
@@ -280,6 +293,12 @@ func (c *MemoryCache) SetMulti(keyAssets map[string][]model.UnifiedAsset, durati
 	c.accessCounter++
 
 	for key, assets := range keyAssets {
+		snapshot, valid := cloneCacheAssets(assets)
+		if !valid {
+			delete(c.cache, key)
+			delete(c.metadata, key)
+			continue
+		}
 		// Replacing an existing key does not consume another capacity slot.
 		_, exists := c.cache[key]
 		if !exists && len(c.cache) >= c.maxSize {
@@ -288,7 +307,7 @@ func (c *MemoryCache) SetMulti(keyAssets map[string][]model.UnifiedAsset, durati
 
 		delete(c.metadata, key)
 		c.cache[key] = cacheItem{
-			assets:     assets,
+			assets:     snapshot,
 			expiryTime: now.Add(duration),
 			lastAccess: now,
 			accessIdx:  c.accessCounter,
