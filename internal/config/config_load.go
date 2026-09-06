@@ -20,36 +20,32 @@ func (m *Manager) Load() error {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// 解析配置
-	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	candidate, err := m.parseConfig(data)
+	if err != nil {
 		var cfg Config
 		m.applyDefaults(&cfg)
 		m.resolveEnv(&cfg)
 		m.SetConfig(&cfg)
-		return fmt.Errorf("failed to unmarshal config: %w", err)
+		return err
 	}
-
-	// 应用默认值
-	m.applyDefaults(&config)
-
-	// 解析环境变量
-	m.resolveEnv(&config)
-
-	// 解密通知渠道密钥
-	DecryptNotifySecrets(&config)
-
-	// 验证配置
-	if err := m.validate(&config); err != nil {
-		var cfg Config
-		m.applyDefaults(&cfg)
-		m.resolveEnv(&cfg)
-		m.SetConfig(&cfg)
-		return fmt.Errorf("invalid config: %w", err)
-	}
-
-	m.SetConfig(&config)
+	m.SetConfig(candidate)
 	return nil
+}
+
+// parseConfig normalizes and validates a candidate without publishing it.
+// Startup and hot updates must interpret the same bytes identically.
+func (m *Manager) parseConfig(data []byte) (*Config, error) {
+	var candidate Config
+	if err := yaml.Unmarshal(data, &candidate); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	m.applyDefaults(&candidate)
+	m.resolveEnv(&candidate)
+	DecryptNotifySecrets(&candidate)
+	if err := m.validate(&candidate); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+	return &candidate, nil
 }
 
 // resolveEnv 解析配置中的环境变量

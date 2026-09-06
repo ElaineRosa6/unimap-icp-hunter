@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/unimap/project/internal/logger"
-	"gopkg.in/yaml.v3"
 )
 
 // HotUpdateManager 配置热更新管理器
@@ -139,21 +138,15 @@ func (h *HotUpdateManager) monitorLoop(cfg HotUpdateConfig, stop <-chan struct{}
 // checkConfigChanges 检查配置变化
 func (h *HotUpdateManager) checkConfigChanges(cfg HotUpdateConfig, stop <-chan struct{}) {
 	// 重新加载配置文件
-	newConfig := &Config{}
 	data, err := readConfigFile(h.configPath)
 	if err != nil {
 		logger.Errorf("Failed to read config file for hot update: %v", err)
 		return
 	}
 
-	if unmarshalErr := yaml.Unmarshal(data, newConfig); unmarshalErr != nil {
-		logger.Errorf("Failed to parse config file for hot update: %v", unmarshalErr)
-		return
-	}
-
-	// 验证配置
-	if validateErr := validateConfig(newConfig); validateErr != nil {
-		logger.Errorf("Invalid config file for hot update: %v", validateErr)
+	newConfig, parseErr := h.configManager.parseConfig(data)
+	if parseErr != nil {
+		logger.Errorf("Invalid config file for hot update: %v", parseErr)
 		return
 	}
 
