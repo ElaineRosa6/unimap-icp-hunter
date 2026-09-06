@@ -378,3 +378,10 @@ Start 每次建立独立停止通道，monitor 使用捕获通道，文件读取
 在 8c7621a 上，metrics/audit 包装器单独及叠加均阻断 ResponseController.SetWriteDeadline；metrics 在重复显式响应时记错状态，两个包装器均漏记 Write 隐式提交。三次复现，底层直接控制和 audit 首次显式状态对照正常。
 
 两层共用状态记录器，首次最终响应后不再覆盖，Write/FlushError 跟踪隐式 200；1xx 中除 101 外继续等待最终状态。Unwrap 使 ResponseController 可达底层 deadline/hijack 等能力，FlushError 防止刷新绕过状态记录。未直接宣称所有可选接口的类型断言兼容；此处验证控制器协议。Go 1.26.6 本地 net/http 源码用于核对 101 和 Unwrap 行为。
+
+
+### 第三十九轮：内存缓存覆盖与空键容量边界
+
+在 eb4d9ae 上，容量为二的缓存通过 SetMulti 覆盖 hot 时误删 cold，而单条 Set 正常；容量为一且 LFU 候选为空键时未执行淘汰，Size 变为二。两个失败各三次复现。
+
+批量写入逐键判断是否已存在，仅新增键触发淘汰；LFU 使用已有 hasLFU 标记，不以空字符串判断候选有效性。保留原 LFU/LRU 策略、批量 map 无序语义及空键可存取的接口行为。淘汰时仍同时移除该键元数据。未发现非测试 SetMulti 调用，标准查询键也非空，不把接口边界复现描述为线上事故。

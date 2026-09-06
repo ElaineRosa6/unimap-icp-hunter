@@ -264,8 +264,9 @@ func (c *MemoryCache) SetMulti(keyAssets map[string][]model.UnifiedAsset, durati
 	c.accessCounter++
 
 	for key, assets := range keyAssets {
-		// 检查缓存大小，如果超过限制，先删除一些项
-		if len(c.cache) >= c.maxSize {
+		// Replacing an existing key does not consume another capacity slot.
+		_, exists := c.cache[key]
+		if !exists && len(c.cache) >= c.maxSize {
 			c.evictLFU()
 		}
 
@@ -305,7 +306,7 @@ func (c *MemoryCache) evictLFU() {
 		}
 	}
 
-	if lfuKey != "" {
+	if hasLFU {
 		delete(c.cache, lfuKey)
 		delete(c.metadata, lfuKey)
 	}
