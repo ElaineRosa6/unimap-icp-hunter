@@ -53,7 +53,7 @@ func (t *SearchTask) Execute() error {
 	}
 	cacheKey := utils.GenerateCacheKey(t.query.EngineName, t.query.Query, page, t.pageSize)
 
-	if cachedResults, found := t.orchestrator.cache.Get(cacheKey); found {
+	if cachedResults, found := t.orchestrator.getEnabledCachedAssets(t.query.EngineName, cacheKey); found {
 		metrics.IncEngineQuery(t.query.EngineName, "cached")
 		metrics.ObserveEngineQueryDuration(t.query.EngineName, time.Since(startTime))
 		t.orchestrator.RecordEngineSuccess(t.query.EngineName)
@@ -127,7 +127,9 @@ func (t *SearchTask) normalizeAndCache(adapter EngineAdapter, result *model.Engi
 		return
 	}
 	cacheTTL, _ := t.orchestrator.GetEngineCacheTTL(t.query.EngineName)
-	t.orchestrator.cache.Set(utils.GenerateCacheKey(t.query.EngineName, t.query.Query, result.Page, t.pageSize), normalized, cacheTTL)
+	if t.orchestrator.IsCacheEnabledForEngine(t.query.EngineName) {
+		t.orchestrator.cache.Set(utils.GenerateCacheKey(t.query.EngineName, t.query.Query, result.Page, t.pageSize), normalized, cacheTTL)
+	}
 	metrics.IncEngineQuery(t.query.EngineName, "success")
 	metrics.ObserveEngineQueryDuration(t.query.EngineName, time.Since(startTime))
 	t.orchestrator.RecordEngineSuccess(t.query.EngineName)
@@ -282,7 +284,7 @@ func (t *PaginatedSearchTask) Execute() error {
 // fetchPaginatedPage 获取单页结果，返回 true 表示应停止分页
 func (t *PaginatedSearchTask) fetchPaginatedPage(adapter EngineAdapter, page int) bool {
 	cacheKey := utils.GenerateCacheKey(t.query.EngineName, t.query.Query, page, t.pageSize)
-	if cachedResults, found := t.orchestrator.cache.Get(cacheKey); found {
+	if cachedResults, found := t.orchestrator.getEnabledCachedAssets(t.query.EngineName, cacheKey); found {
 		t.sendPaginatedResult(&model.EngineResult{
 			EngineName: t.query.EngineName, Page: page, HasMore: page < t.maxPages,
 			Cached: true, NormalizedData: cachedResults, RawData: []interface{}{}, Total: len(cachedResults),
@@ -301,7 +303,7 @@ func (t *PaginatedSearchTask) fetchPaginatedPage(adapter EngineAdapter, page int
 	normalized, nErr := adapter.Normalize(result)
 	if nErr != nil {
 		logger.CtxWarnf(t.ctx, "Failed to normalize results from %s page %d: %v", t.query.EngineName, page, nErr)
-	} else if len(normalized) > 0 {
+	} else if len(normalized) > 0 && t.orchestrator.IsCacheEnabledForEngine(t.query.EngineName) {
 		cacheTTL, _ := t.orchestrator.GetEngineCacheTTL(t.query.EngineName)
 		t.orchestrator.cache.Set(cacheKey, normalized, cacheTTL)
 	}
@@ -373,4 +375,12 @@ func collectPaginatedResults(ctx context.Context, resultsChan <-chan *model.Engi
 			}
 		}
 	}
+}
+
+// Cache policy is checked at each access, including after an upstream query.
+func (o *EngineOrchestrator) getEnabledCachedAssets(engine, key string) ([]model.UnifiedAsset, bool) {
+	if !o.IsCacheEnabledForEngine(engine) {
+		return nil, false
+	}
+	return o.cache.Get(key)
 }

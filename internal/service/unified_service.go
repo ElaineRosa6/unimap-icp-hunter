@@ -145,12 +145,14 @@ func initOrchestrator(cfg *config.Config, svcCfg serviceConfig, configStrategy *
 		orch.SetConcurrency(cfg.System.MaxConcurrent)
 		orch.SetDefaultCacheTTL(svcCfg.cacheTTL)
 		for engineName, engineCfg := range cfg.Cache.Engines {
+			ttl := svcCfg.cacheTTL
 			if engineCfg.TTL > 0 {
-				orch.SetEngineCacheTTL(engineName, time.Duration(engineCfg.TTL)*time.Second, engineCfg.Enabled)
-				configStrategy.SetEngineConfig(engineName, &utils.SimpleEngineCacheConfig{
-					Enabled: engineCfg.Enabled, TTL: time.Duration(engineCfg.TTL) * time.Second, MaxSize: engineCfg.MaxSize,
-				})
+				ttl = time.Duration(engineCfg.TTL) * time.Second
 			}
+			orch.SetEngineCacheTTL(engineName, ttl, engineCfg.Enabled)
+			configStrategy.SetEngineConfig(engineName, &utils.SimpleEngineCacheConfig{
+				Enabled: engineCfg.Enabled, TTL: ttl, MaxSize: engineCfg.MaxSize,
+			})
 		}
 	}
 	return orch
@@ -246,7 +248,7 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 		return nil, err
 	}
 
-	if len(allAssets) > 0 {
+	if len(allAssets) > 0 && s.queryCacheEnabled(req) {
 		cacheTTL := s.resolveCacheTTL(req)
 		if snapshotCache, ok := s.cache.(utils.QuerySnapshotCache); ok {
 			snapshotCache.SetQuerySnapshot(cacheKey, allAssets, utils.QueryCacheMetadata{
@@ -299,6 +301,9 @@ func (s *UnifiedService) buildQueryCacheKey(req QueryRequest) string {
 
 // handleCachedQueryResult 处理缓存命中逻辑，返回 (响应, true) 表示命中
 func (s *UnifiedService) handleCachedQueryResult(ctx context.Context, req QueryRequest, cacheKey string) (*QueryResponse, bool) {
+	if !s.queryCacheEnabled(req) {
+		return nil, false
+	}
 	snapshotCache, ok := s.cache.(utils.QuerySnapshotCache)
 	if !ok {
 		return nil, false
@@ -799,4 +804,14 @@ func (a *enginePluginAdapter) IsWebOnly() bool {
 	}
 	// 如果引擎插件没有实现IsWebOnly方法，返回默认值
 	return false
+}
+
+// A combined snapshot must not override any participating engine's policy.
+func (s *UnifiedService) queryCacheEnabled(req QueryRequest) bool {
+	for _, engine := range req.Engines {
+		if !s.orchestrator.IsCacheEnabledForEngine(engine) {
+			return false
+		}
+	}
+	return true
 }

@@ -366,3 +366,10 @@ docker build --build-arg 'GOPROXY=https://goproxy.cn|https://proxy.golang.org|di
 CI 的 Redis Snapshot Integration 使用独立 `redis:7.4` 服务容器及动态主机端口，健康检查通过后运行三轮竞态实例测试；必须出现三条父测试 PASS，缺失地址时失败而非 Skip。Docker 发布依赖该任务，日志作为 redis-integration artifact 保留七天。标签跟随 7.4 补丁版，实际服务版本由测试 INFO 输出记录，不将 YAML 中的版本标签等同于一次成功验收。
 
 本地仅在独立临时实例上设置 UNIMAP_REDIS_FIXTURE_ADDR=127.0.0.1:PORT 后执行 `go test -race ./internal/utils -run '^TestRedisInstanceQuerySnapshot$' -count=3 -v`。可设 UNIMAP_REDIS_FIXTURE_REQUIRED=1 强制地址存在。该测试写入唯一前缀，并测试 Clear/Delete，勿使用共享生产实例；普通开发环境未配置时仍显式 Skip。测试覆盖并发代际、真实 TTL、旧键及无效 envelope 隔离、删除和前缀外 sentinel 保留，不覆盖 TLS/集群/故障切换。
+
+
+### 引擎缓存开关一致性（第四十五轮）
+
+`cache.engines.<engine>.enabled=false` 现在分别阻止该引擎单页/分页缓存读写，以及包含该引擎的服务级组合快照读写。初始化不再因 TTL=0 忽略关闭标志，缺省 TTL 单独使用服务默认值；未配置引擎保持默认启用。策略在缓存访问处检查，查询完成准备写入时再检查，不承诺原子撤销已进入缓存调用的在途请求。
+
+关闭不删除已有条目，仍由原 TTL/容量淘汰；重新开启可复用未过期结果。它不是清空缓存操作。修复基于 06ecb79 的单页/分页冷热缓存及配置初始化反例，并增加组合引擎、服务快照写入和重新开启回归。未更改引擎 TTL 返回接口，也未声称 max_size 的逐引擎容量限制已实现。
