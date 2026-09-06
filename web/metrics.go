@@ -13,12 +13,39 @@ import (
 
 type statusRecorder struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode  int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	r.statusCode = code
+	if r.wroteHeader {
+		return
+	}
+	// Delegate validation and informational responses to net/http. A 101 is
+	// final, unlike other 1xx responses (matching the standard server).
 	r.ResponseWriter.WriteHeader(code)
+	if code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols {
+		return
+	}
+	r.statusCode = code
+	r.wroteHeader = true
+}
+
+func (r *statusRecorder) Write(data []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseWriter.Write(data)
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// FlushError allows ResponseController to flush without bypassing status tracking.
+func (r *statusRecorder) FlushError() error {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	return http.NewResponseController(r.ResponseWriter).Flush()
 }
 
 func metricsMiddleware(next http.Handler) http.Handler {

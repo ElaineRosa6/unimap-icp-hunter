@@ -371,3 +371,10 @@ Start 每次建立独立停止通道，monitor 使用捕获通道，文件读取
 在 682c2c7 上，64 个不同拒绝路径在 HTTP 计数、耗时和拒绝指标中各生成 64 组标签，重复三次。HTTP 外层使用共享请求上下文槽接收 mux 匹配模板，避免中间件 WithContext 复制请求后丢失 Pattern；限流内层直接使用已匹配模板。未匹配/路由前拒绝归为 unmatched，非标准方法归为 OTHER。
 
 此修复针对 Web 入口 HTTP 标签，不宣称所有业务指标或限流客户端 map 已具备容量上限；指标帮助函数仍要求内部调用者传入低基数标签。
+
+
+### 第三十八轮：响应包装器状态与连接控制透传
+
+在 8c7621a 上，metrics/audit 包装器单独及叠加均阻断 ResponseController.SetWriteDeadline；metrics 在重复显式响应时记错状态，两个包装器均漏记 Write 隐式提交。三次复现，底层直接控制和 audit 首次显式状态对照正常。
+
+两层共用状态记录器，首次最终响应后不再覆盖，Write/FlushError 跟踪隐式 200；1xx 中除 101 外继续等待最终状态。Unwrap 使 ResponseController 可达底层 deadline/hijack 等能力，FlushError 防止刷新绕过状态记录。未直接宣称所有可选接口的类型断言兼容；此处验证控制器协议。Go 1.26.6 本地 net/http 源码用于核对 101 和 Unwrap 行为。

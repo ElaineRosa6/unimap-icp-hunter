@@ -50,17 +50,5 @@ func auditMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// auditResponseWriter 包装 ResponseWriter 以捕获状态码
-type auditResponseWriter struct {
-	http.ResponseWriter
-	statusCode  int
-	wroteHeader bool
-}
-
-func (w *auditResponseWriter) WriteHeader(code int) {
-	if !w.wroteHeader {
-		w.statusCode = code
-		w.wroteHeader = true
-	}
-	w.ResponseWriter.WriteHeader(code)
-}
+// auditResponseWriter shares the same response semantics as metrics.
+type auditResponseWriter = statusRecorder
