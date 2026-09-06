@@ -69,6 +69,22 @@ func TestRedisInstanceQuerySnapshot(t *testing.T) {
 		}
 		wg.Wait()
 	})
+	t.Run("engine_page", func(t *testing.T) {
+		key := "engine-page-fixture"
+		c.Set(key, []model.UnifiedAsset{{Title: "legacy"}}, time.Minute)
+		if _, hit := GetEnginePageSnapshot(c, key); hit {
+			t.Fatal("legacy page read")
+		}
+		SetEnginePageSnapshot(c, key, &model.EngineResult{EngineName: "fixture", Page: 3, Total: 37, HasMore: false}, []model.UnifiedAsset{{Title: "page"}}, time.Minute)
+		got, hit := GetEnginePageSnapshot(c, key)
+		if !hit || got.Page != 3 || got.Total != 37 || got.HasMore || got.NormalizedData[0].Title != "page" {
+			t.Fatalf("page envelope changed: %+v hit=%v", got, hit)
+		}
+		c.Delete(key)
+		if _, hit := GetEnginePageSnapshot(c, key); hit {
+			t.Fatal("Delete left page envelope")
+		}
+	})
 	t.Run("ttl", func(t *testing.T) {
 		write("ttl", "ttl", 300*time.Millisecond)
 		remaining, err := c.client.PTTL(c.ctx, c.querySnapshotKey("ttl")).Result()

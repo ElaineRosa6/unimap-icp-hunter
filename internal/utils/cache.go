@@ -46,8 +46,9 @@ type QueryCacheMetadataCache interface {
 }
 
 type QueryCacheMetadata struct {
-	EngineStats map[string]int `json:"engine_stats"`
-	Errors      []string       `json:"errors"`
+	EnginePage  *EnginePageMetadata `json:"engine_page,omitempty"`
+	EngineStats map[string]int      `json:"engine_stats"`
+	Errors      []string            `json:"errors"`
 }
 
 // CacheStats 缓存统计信息
@@ -221,6 +222,8 @@ func (c *MemoryCache) Delete(key string) {
 
 	delete(c.cache, key)
 	delete(c.metadata, key)
+	delete(c.cache, enginePageCacheKey(key))
+	delete(c.metadata, enginePageCacheKey(key))
 }
 
 // Clear 清空缓存
@@ -617,7 +620,7 @@ func (c *RedisCache) SetQueryMetadata(key string, metadata QueryCacheMetadata, d
 // Delete 从缓存中删除查询结果
 func (c *RedisCache) Delete(key string) {
 	fullKey := c.prefix + key
-	c.client.Del(c.ctx, fullKey, fullKey+":query-metadata", c.querySnapshotKey(key))
+	c.client.Del(c.ctx, fullKey, fullKey+":query-metadata", c.querySnapshotKey(key), c.querySnapshotKey(enginePageCacheKey(key)))
 }
 
 func cloneQueryCacheMetadata(metadata QueryCacheMetadata) QueryCacheMetadata {
@@ -625,7 +628,12 @@ func cloneQueryCacheMetadata(metadata QueryCacheMetadata) QueryCacheMetadata {
 	for engine, count := range metadata.EngineStats {
 		stats[engine] = count
 	}
-	return QueryCacheMetadata{EngineStats: stats, Errors: append([]string(nil), metadata.Errors...)}
+	result := QueryCacheMetadata{EngineStats: stats, Errors: append([]string(nil), metadata.Errors...)}
+	if metadata.EnginePage != nil {
+		page := *metadata.EnginePage
+		result.EnginePage = &page
+	}
+	return result
 }
 
 // Clear 清空缓存

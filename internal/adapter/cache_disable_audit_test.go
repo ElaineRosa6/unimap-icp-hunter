@@ -80,3 +80,12 @@ func TestAuditEngineCacheDisabled(t *testing.T) {
 		}
 	}
 }
+
+func (c *disableAuditCache) GetQuerySnapshot(k string) ([]model.UnifiedAsset, utils.QueryCacheMetadata, bool) {
+	c.reads++
+	return c.MemoryCache.GetQuerySnapshot(k)
+}
+func (c *disableAuditCache) SetQuerySnapshot(k string, v []model.UnifiedAsset, m utils.QueryCacheMetadata, d time.Duration) {
+	c.writes++
+	c.MemoryCache.SetQuerySnapshot(k, v, m, d)
+}
