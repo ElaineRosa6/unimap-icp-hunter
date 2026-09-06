@@ -115,7 +115,9 @@ func (c *MemoryCache) GetQueryMetadata(key string) (QueryCacheMetadata, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	item, ok := c.metadata[key]
-	if !ok || time.Now().After(item.expiryTime) {
+	assets, hasAssets := c.cache[key]
+	now := time.Now()
+	if !ok || !hasAssets || !now.Before(item.expiryTime) || !now.Before(assets.expiryTime) {
 		delete(c.metadata, key)
 		return QueryCacheMetadata{}, false
 	}
@@ -125,7 +127,19 @@ func (c *MemoryCache) GetQueryMetadata(key string) (QueryCacheMetadata, bool) {
 func (c *MemoryCache) SetQueryMetadata(key string, metadata QueryCacheMetadata, duration time.Duration) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	c.metadata[key] = metadataItem{metadata: cloneQueryCacheMetadata(metadata), expiryTime: time.Now().Add(duration)}
+	// Metadata belongs to a live asset entry. A concurrent eviction between the
+	// caller's Set and SetQueryMetadata must not create an orphan.
+	assets, exists := c.cache[key]
+	now := time.Now()
+	if !exists || !now.Before(assets.expiryTime) || duration <= 0 {
+		delete(c.metadata, key)
+		return
+	}
+	expiry := now.Add(duration)
+	if assets.expiryTime.Before(expiry) {
+		expiry = assets.expiryTime
+	}
+	c.metadata[key] = metadataItem{metadata: cloneQueryCacheMetadata(metadata), expiryTime: expiry}
 }
 
 // Get 从缓存中获取查询结果
@@ -142,6 +156,7 @@ func (c *MemoryCache) Get(key string) ([]model.UnifiedAsset, bool) {
 	// 检查是否过期
 	if time.Now().After(item.expiryTime) {
 		delete(c.cache, key)
+		delete(c.metadata, key)
 		c.misses++
 		return nil, false
 	}
@@ -173,6 +188,8 @@ func (c *MemoryCache) Set(key string, assets []model.UnifiedAsset, duration time
 		c.evictLFU()
 	}
 
+	// Replacing assets invalidates metadata belonging to the previous result.
+	delete(c.metadata, key)
 	// 存入缓存
 	c.accessCounter++
 	c.cache[key] = cacheItem{
@@ -269,6 +286,7 @@ func (c *MemoryCache) SetMulti(keyAssets map[string][]model.UnifiedAsset, durati
 			c.evictLFU()
 		}
 
+		delete(c.metadata, key)
 		c.cache[key] = cacheItem{
 			assets:     assets,
 			expiryTime: now.Add(duration),
@@ -356,6 +374,13 @@ func (c *MemoryCache) cleanupExpired() {
 		}
 	}
 
+	// Metadata can expire before its assets; sweep it independently as well.
+	for key, item := range c.metadata {
+		assets, exists := c.cache[key]
+		if !exists || !now.Before(item.expiryTime) || !now.Before(assets.expiryTime) {
+			delete(c.metadata, key)
+		}
+	}
 	c.lastCleanup = now
 }
 
