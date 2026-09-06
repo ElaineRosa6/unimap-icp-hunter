@@ -408,3 +408,11 @@ ICP 备案查询任务：按 `queries` 中的名称逐条查询 `type`（逗号�
 ### HTTP 指标标签
 
 HTTP 请求计数、耗时及限流拒绝的 `path` 标签使用 ServeMux 匹配的路由模板，不再使用原始 URL；动态 ID 与静态资源后缀收敛到注册模式。未匹配及路由前拒绝统一标记 `unmatched`；非标准 HTTP 方法统一标记 `OTHER`。标准方法分别计数。旧看板若依赖具体资源路径需改按模板查询；此次调整不改变业务 URL。进程中旧标签序列需待进程重启后消失。
+
+### 浏览器查询降级诊断（2026-09-06）
+
+`/api/v1/query` 保留服务层 API 失败诊断。浏览器成功返回资产但 API 失败时返回 `partial`，与查询历史口径一致；仅打开标签页或空采集不抑制错误。采集成功与 API 成功应分别核验，不以总资产数替代 `browserCollectedData` 数量。
+
+浏览器采集若报告 rows_found > 0 而 assets 为空，服务层保留采集信封与截图，同时在 browserQueryErrors / errors 返回诊断。API有资产时仍为partial；无资产时为error。rows_found=0的真正空结果不因本条规则报错。
+
+同步 /api/v1/query 使用有限的逐请求写截止时间：浏览器 collect 为60秒任务预算，collect_and_capture（含默认动作）为150秒，纯API查询为5分钟；写截止时间在任务预算后增加15秒响应余量，并考虑更早的调用方context截止时间。普通接口继续使用服务器默认写超时，不全局取消超时。

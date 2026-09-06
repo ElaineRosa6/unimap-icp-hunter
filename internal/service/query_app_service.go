@@ -643,6 +643,14 @@ func (s *QueryAppService) RunBrowserQueryAsync(
 			}(engine)
 		}
 		wg.Wait()
+		// Validate collection diagnostics after all producers have completed.
+		// Keep the original envelope and screenshot for troubleshooting, and do
+		// not mistake successful API assets for a successful DOM extraction.
+		for _, collected := range outcome.CollectedResults {
+			if collected.RowsFound > 0 && len(collected.Assets) == 0 {
+				outcome.Errors = append(outcome.Errors, fmt.Sprintf("browser collection for %s reported %d DOM rows but returned no structured assets", collected.Engine, collected.RowsFound))
+			}
+		}
 		resultCh <- outcome
 	}()
 

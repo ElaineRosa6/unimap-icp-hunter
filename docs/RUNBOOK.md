@@ -403,3 +403,15 @@ SearchEnginesWithPaginationAndContext 在启动工作池之前检查非空查询
 主CI及bridge-smoke在语法检查后执行 `npm ci --include=dev --ignore-scripts --no-audit --no-fund`，再运行 `node --test --test-reporter=tap test/*.test.mjs`。扩展日志artifact名为 `extension-regression-<workflow>`，保存7天；测试非零退出阻止该任务通过，主CI镜像发布继续依赖extension-scripts。绿色日志只证明自动回归，不证明真实浏览器扩展或Bridge业务闭环。
 
 扩展测试锁文件原先被全局模式忽略；现仅为该目录增加Git例外并提交锁文件，包下载地址使用npm官方源，保留完整性校验。
+
+### CDP / Extension 复验补充（2026-09-06）
+
+当前分路径实测见 `CDP_EXTENSION_RECHECK_2026-09-06.md` 最新追加节。用户 Chrome 网络可用并不证明独立 CDP 的 guarded 出口可用。导航错误、登录页、挑战页均不算业务通过；不要通过关闭 SSRF 防护解决连接失败。扩展更新后需在管理页重新加载并确认版本，再验证真实回调；不要求用户共享令牌。
+
+Windows CDP 预检：配置或环境变量指向 Chrome 默认 User Data 根目录时，启动前返回 non-default user data directory 错误；另选 Profile 1 不改变根目录。专用目录与临时目录保留原有行为，不迁移已有登录数据。此预检不表示交互登录窗口已可启动，也不替代各引擎真实验收。
+
+### 查询完成但客户端EOF的排查
+
+若历史已落盘而同步查询客户端约60秒后断开，检查HTTP写截止时间是否短于查询任务预算。查询handler现在单独设置任务预算加15秒响应余量，保留父context更早截止时间；普通路由仍为60秒写超时。真实本地HTTP回归将通用写超时缩至50ms、采集延迟200ms：修复前EOF，修复后收到完整JSON错误响应。该回归验证传输机制，不等于外部API联网或浏览器登录成功；网关/反向代理仍需独立匹配超时。
+
+写超时修复另有资产与SQLite联动回归：本地模拟浏览器延迟200ms返回域名资产、服务通用WriteTimeout为50ms，API不可用。禁用逐请求deadline能力的对照组出现EOF但数据库已存partial/1条；修复组收到HTTP 200、partial及完整资产JSON，数据库内容一致。两组连续3次验证，均使用独立临时数据库，不访问外部站点。此证据不替代实际外部引擎与运行服务部署验收。

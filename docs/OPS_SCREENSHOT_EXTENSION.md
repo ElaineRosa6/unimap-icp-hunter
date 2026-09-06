@@ -155,3 +155,13 @@ go test -tags live_bridge_e2e ./web -run '^TestLiveAPIScheduledQueryNotification
 - 修改 Bridge API、token 或回调协议前，先更新扩展与服务端，再执行 `go test -race ./...`。
 - 将模式切回 CDP：`POST /api/v1/screenshot/set-mode`，JSON 为 `{"mode":"cdp"}`。
 - 扩展问题不能通过恢复旧 `/api/...` shim 解决；调用方必须迁移到 `/api/v1/...`。
+
+### 0.4.20 本地修复及验收边界
+
+识别专用登录标题与 `Just a moment...` / Cloudflare 挑战标题；collect 和 collect_and_capture 都通过失败回调报告 login_required 或 browser_challenge，不把验证页当空成功。重新加载后才能使用更新；源码回归42项通过不替代活页验证。2026-09-06 的真实0.4.19七引擎结果见 `CDP_EXTENSION_RECHECK_2026-09-06.md`，其中Quake登录、Shodan验证仍待处理。
+
+### 0.4.21 Quake 域名卡片修复（本地待加载）
+
+2026-09-06 已登录活页 DOM 的10张结果卡片，其 div.ip span.copy_btn 的 data-clipboard-text 为完整域名，而IP被站点遮蔽。旧提取器仅识别该字段的IPv4，导致无Hostname详情的域名卡片丢失。Extension与原生CDP脚本现在保留合法可见域名为host，ip保持空，不解析DNS、不推测遮蔽IP、不请求资产链接。原有IPv4路径与Hostname详情保留。
+
+回归先失败后通过，Node共44项通过（包含直接执行Go内嵌Quake提取脚本的测试）。这是活页DOM定位与固定fixture验证；0.4.21仍待浏览器重新加载后的任务回传验收，不等同于独立CDP已登录成功。

@@ -262,6 +262,9 @@ func (m *Manager) newAllocatorWithProxy(ctx context.Context, proxyOverride strin
 		logger.Warnf("Remote Chrome debugger not available at %s, falling back to local Chrome", remoteURL)
 	}
 
+	if err := m.validateLocalChromeDataDir(); err != nil {
+		return nil, nil, err
+	}
 	chromePath, err := ResolveChromePath(m.chromePath)
 	if err != nil {
 		return nil, nil, err
@@ -322,4 +325,43 @@ func isRemoteDebuggerAvailable(remoteURL string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// validateLocalChromeDataDir catches the default-directory restriction before
+// starting a browser. Chrome 136+ ignores CDP switches for this directory even
+// when a different profile-directory is selected. Never migrate user sessions.
+func (m *Manager) validateLocalChromeDataDir() error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	dir := strings.TrimSpace(m.userDataDir)
+	if dir == "" {
+		dir = strings.TrimSpace(os.Getenv("UNIMAP_CHROME_USER_DATA_DIR"))
+	}
+	if dir == "" {
+		return nil
+	} // chromedp allocates a fresh temporary directory.
+	canonical := func(path string) string {
+		path, err := filepath.Abs(path)
+		if err != nil {
+			return ""
+		}
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
+		return filepath.Clean(path)
+	}
+	candidates := []string{}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		candidates = append(candidates, filepath.Join(local, "Google", "Chrome", "User Data"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "AppData", "Local", "Google", "Chrome", "User Data"))
+	}
+	for _, candidate := range candidates {
+		if strings.EqualFold(canonical(dir), canonical(candidate)) {
+			return fmt.Errorf("Chrome CDP requires a non-default user data directory; selecting another profile in the default Chrome directory is insufficient")
+		}
+	}
+	return nil
 }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Unimap Screenshot Bridge",
-  "version": "0.4.19",
+  "version": "0.4.21",
   "description": "Browser extension bridge for screenshot task execution and structured data collection from cyber space search engines.",
   "action": {
     "default_title": "Unimap Screenshot Bridge",

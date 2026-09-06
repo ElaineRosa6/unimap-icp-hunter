@@ -595,6 +595,11 @@ export async function extractEngineAssets(tabId) {
         const bodyText = (document.body?.innerText || "").toLowerCase();
         const loginRequired = /登录|登陆|请先登录|login|sign in|signin|unauthorized/.test(bodyText + " " + title.toLowerCase());
 
+        // Dedicated interstitial titles are not empty search results.
+        if (/^just a moment(?:\.\.\.)?$/i.test(title.trim()) || /^attention required!?\s*\|\s*cloudflare$/i.test(title.trim())) {
+          return { items: [], total: 0, has_more: false, title, engine: eng, is_login_wall: false, browser_challenge: true, extraction_method: "browser_challenge" };
+        }
+
         // Check for login wall first
         if (isLoginWallFn(document)) {
           return { items: [], total: 0, has_more: false, title, engine: eng, is_login_wall: true, extraction_method: "login_wall" };
@@ -842,6 +847,10 @@ export async function extractEngineAssets(tabId) {
             if (endpointMatch) {
               item.ip = endpointMatch[1];
               if (!item.port && endpointMatch[2]) item.port = parseInt(endpointMatch[2], 10) || 0;
+            } else if (/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(endpoint)) {
+              // Quake's visible card header can be a domain while the IP is masked.
+              // Preserve that domain without inventing or resolving the hidden IP.
+              if (!item.host) item.host = endpoint.toLowerCase();
             }
             row.querySelectorAll(".item").forEach((detail) => {
               const label = (detail.querySelector(".label")?.textContent || "").trim().toLowerCase();
@@ -949,7 +958,10 @@ export async function extractEngineAssets(tabId) {
         return { items, total, has_more: hasMore, title, engine: eng, is_login_wall: false, row_selector_used: rowSelectorUsed, rows_found: rows.length, extraction_method: "selector" };
 
         function isLoginWallFn(doc) {
-          const text = doc.body.textContent.toLowerCase();
+          const pageTitle = (doc.title || "").trim();
+          // Anchor to a dedicated login title; a navigation login link is not a wall.
+          if (/^(?:登录|登陆|登入|log in|login|sign in)(?:\s*[-–—|:]|$)/i.test(pageTitle)) return true;
+          const text = (doc.body?.textContent || "").toLowerCase();
           const loginKeywords = [
             "请登录", "请先登录", "login required", "sign in to continue",
             "session expired", "please log in"

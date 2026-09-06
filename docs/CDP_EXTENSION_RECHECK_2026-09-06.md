@@ -47,3 +47,37 @@ Node测试以linkedom执行提取函数并模拟chrome.scripting，不能替代�
 剩余外部输入：操作者核对当前任务网络权限；提供遮蔽token的扩展详情与状态页，确认0.4.19加载和Bridge连接；受控云端页面/DNS接口。输入齐备前，不以离线回归或CI替代真实活页、Bridge回传、图片送达。
 
 证据追加目录：`cdp-four-current`、`zoomeye-url-diagnosis`、`egress-live-diagnosis`、`release-c2acd9d`，均位于上述工作区外审查目录。
+
+## 追加：用户 Chrome 实际 Bridge 复验（本节更新上文待确认项）
+
+用户截图确认已加载 0.4.19；本地隔离服务启动后自动配对，Bridge 在线、回调 HTTP 200。未修改原配置；测试实例禁用调度与通知。
+
+| 引擎 | 扩展真实采集数量 | 截图/落盘 | 结论 |
+|---|---:|---|---|
+| DayDayMap | 10 | PNG + 10 条落盘 | 采集截图链路通过 |
+| FOFA | 10 | PNG + 合并 API 后 20 条落盘 | 扩展非空通过，不把 API 数量算作扩展数量 |
+| Hunter | 9 | PNG + 合并 API 后 19 条落盘 | 非空通过；页面显示10行，截断CDN地址行及完整字段仍需核验 |
+| ZoomEye | 10 | PNG + 10 条落盘 | .org 活页非空通过 |
+| Censys | 100 | PNG + 100 条落盘 | 非空且端点无重复；页面数量与 page_size=10 并不等价，完整分页语义未验收 |
+| Quake | 0 | 登录页 PNG，API另返回10条 | 扩展业务未通过，不能用API结果替代 |
+| Shodan | 0 | Just a moment... 挑战页 PNG | 扩展业务未通过 |
+
+本轮原生 CDP 七引擎全部运行：FOFA 导航超时，其余为 ERR_TUNNEL_CONNECTION_FAILED，未进入结果提取。独立 headless Chrome 与用户已登录 Chrome 是不同会话；未绕过 guarded 出口、替换网络身份或修改防火墙。此前 DayDayMap CDP 成功仍只代表此前运行。本轮不宣称 CDP 全绿。
+
+本地待发布修复：Web 响应保留服务层 API 错误，避免 success 与历史 partial 不一致；扩展 0.4.20 增加专用登录标题、挑战页识别，并通过现有失败回调报告 login_required / browser_challenge。新增回归先失败后通过，扩展共42项无跳过。0.4.20 仍需用户重新加载后活页确认，不把源码版本等同于正在运行的版本。
+
+证据目录：工作区外 unimap-review-20260906/bridge-live-server、cdp-all-current、round51。通知未发送，云端配置未动。全引擎完整验收尚未完成。
+
+修复后服务实时复跑DayDayMap：扩展仍回传10条及PNG，历史新增10条；接口与历史均为partial，并如实保留DayDayMap API凭据错误。健康检查200、Bridge在线、队列归零、通知记录0。该结果证明服务端状态修复，未证明0.4.20已在浏览器重新加载。
+
+## 最新追加：登录后复测与域名卡片
+
+Quake在用户登录后回传3条，Shodan回传10条，均有结果页PNG及落盘，原登录/挑战结论仅适用于前次运行。Quake活页随后确认10个卡片标题为域名，原IPv4解析遗漏；CDP与扩展已修复，源码版本0.4.21，44项Node回归通过。当前Bridge再测命中10行却回传0条，尚未确认加载修复，不能宣称活页修复完成。服务层新增有行无资产诊断，避免API的10条结果掩盖采集问题。
+
+火绒日志已证实all.exe一次TCP连接被拦截。固定程序经用户放行后、用户退出火绒后各复跑一次：DayDayMap均10条通过；Hunter/Quake登录页、Shodan/Censys挑战、FOFA空响应、ZoomEye空白/0条仍未通过。默认Chrome根目录中的Profile 1不是独立CDP目录；新增Windows启动前预检。交互CDP登录窗口启动仍受工具策略限制，不改变防护或通过其他通道绕过。
+
+### 服务与传输层后续核验
+
+后续Quake任务在SQLite中保存10条浏览器来源域名资产，IP均为空；历史为partial。HTTP客户端在约60秒收到连接关闭，因此不把该次判作HTTP完整交付通过。服务端保留API连接权限拒绝诊断，健康检查200，Bridge队列清空。
+
+查询handler的逐请求写截止时间修复已通过真实本地HTTP+SQLite对照：对照组资产已存但客户端EOF，修复组完整收到HTTP 200/partial及相同资产，重复3次。该超时修复尚未部署至运行服务；不得以本地fixture通过宣称外部HTTP复验完成。

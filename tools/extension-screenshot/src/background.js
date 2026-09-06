@@ -184,7 +184,7 @@ async function handleTask(task, token) {
       const assets = await extractEngineAssets(tabId);
 
       // Handle login wall detection
-      if (assets.is_login_wall) {
+      if (assets.is_login_wall || assets.browser_challenge) {
         const durationMs = Math.max(1, Date.now() - startedAt);
         const wallResult = {
           request_id: requestId,
@@ -192,15 +192,16 @@ async function handleTask(task, token) {
           image_path: "",
           image_data: "",
           duration_ms: durationMs,
-          error_code: "login_required",
-          error: `login wall detected on ${assets.engine || "unknown"}`,
+          error_code: assets.browser_challenge ? "browser_challenge" : "login_required",
+          error: `${assets.browser_challenge ? "browser challenge" : "login wall"} detected on ${assets.engine || "unknown"}`,
           collected_data: "",
           structured_collected_data: {
             title: assets.title || "",
             items: [],
             total: 0,
             has_more: false,
-            is_login_wall: true,
+            is_login_wall: !!assets.is_login_wall,
+            browser_challenge: !!assets.browser_challenge,
             engine: assets.engine
           }
         };
@@ -255,7 +256,7 @@ async function handleTask(task, token) {
       const assets = await extractEngineAssets(tabId);
 
       // Handle login wall detection
-      if (assets.is_login_wall) {
+      if (assets.is_login_wall || assets.browser_challenge) {
         const durationMs = Math.max(1, Date.now() - startedAt);
         const wallResult2 = {
           request_id: requestId,
@@ -263,15 +264,16 @@ async function handleTask(task, token) {
           image_path: "",
           image_data: "",
           duration_ms: durationMs,
-          error_code: "login_required",
-          error: `login wall detected on ${assets.engine || "unknown"}`,
+          error_code: assets.browser_challenge ? "browser_challenge" : "login_required",
+          error: `${assets.browser_challenge ? "browser challenge" : "login wall"} detected on ${assets.engine || "unknown"}`,
           collected_data: "",
           structured_collected_data: {
             title: assets.title || "",
             items: [],
             total: 0,
             has_more: false,
-            is_login_wall: true,
+            is_login_wall: !!assets.is_login_wall,
+            browser_challenge: !!assets.browser_challenge,
             engine: assets.engine
           }
         };

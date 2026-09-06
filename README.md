@@ -76,3 +76,5 @@ UNIMAP_CHROME_PATH=/path/to/chrome go test -tags=headless_e2e ./internal/screens
 ## 合规与安全
 
 仅对拥有授权的目标、账户和数据执行查询、截图或巡检。凭证必须通过部署环境或受控配置提供，禁止提交、记录或共享真实 API Key、管理令牌、Bridge token 和 Cookie。
+
+> CDP / 浏览器扩展最新分路径实测（2026-09-06）见 [复验记录](docs/CDP_EXTENSION_RECHECK_2026-09-06.md) 最新追加节。七引擎均已有扩展非空回传记录，但完整字段/分页仍待核验；放行后DayDayMap原生CDP通过，其余原生路径尚未完整验收。扩展源码0.4.21包含Quake域名卡片修复；源码版本、浏览器运行版本、部署及CI状态分别核验。

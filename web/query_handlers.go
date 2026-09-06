@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -98,31 +99,11 @@ func buildQueryAPIPayload(query string, engines []string, resp *service.QueryRes
 		collection.NormalizeAssets(browserOutcome.CollectedResults[i].Engine, browserOutcome.CollectedResults[i].Assets)
 	}
 
-	// Build set of engines that browser query successfully handled
-	browserOK := make(map[string]bool)
-	for _, e := range browserOutcome.OpenedEngines {
-		browserOK[strings.ToLower(e)] = true
-	}
-	for _, cr := range browserOutcome.CollectedResults {
-		browserOK[strings.ToLower(cr.Engine)] = true
-	}
-
-	// Filter API errors: suppress errors for engines where browser query succeeded
+	// Preserve service diagnostics so HTTP status agrees with persisted history.
+	// Opening a tab or receiving an empty collection is not API recovery.
 	combinedErrors := []string{}
 	if resp != nil {
-		for _, e := range resp.Errors {
-			lower := strings.ToLower(e)
-			suppressed := false
-			for eng := range browserOK {
-				if strings.Contains(lower, "engine "+eng) && browserAction != "" {
-					suppressed = true
-					break
-				}
-			}
-			if !suppressed {
-				combinedErrors = append(combinedErrors, e)
-			}
-		}
+		combinedErrors = appendUniqueStrings(combinedErrors, resp.Errors)
 	}
 	combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.Errors)
 	combinedErrors = appendUniqueStrings(combinedErrors, browserOutcome.AutoCaptureErrors)
@@ -227,6 +208,25 @@ func (s *Server) handleAPIQuery(w http.ResponseWriter, r *http.Request) {
 	browserQueryID := fmt.Sprintf("query_%d", time.Now().UnixNano())
 	browserAction := strings.TrimSpace(r.FormValue("browser_action"))
 	browserEnabled := parseBoolValue(r.FormValue("browser_query"))
+
+	// A query may legitimately outlive the server's general 60s write timeout.
+	// Extend only this validated request, keeping an explicit finite deadline.
+	queryBudget := service.QueryExecutionTimeout
+	if browserEnabled {
+		if browserAction == "" {
+			browserAction = "collect_and_capture"
+		}
+		queryBudget = service.BrowserQueryWaitTimeoutForAction(browserAction)
+	}
+	queryDeadline := time.Now().Add(queryBudget)
+	if parentDeadline, ok := r.Context().Deadline(); ok && parentDeadline.Before(queryDeadline) {
+		queryDeadline = parentDeadline
+	}
+	// Allow bounded time to encode and flush a success or timeout response.
+	if deadlineErr := http.NewResponseController(w).SetWriteDeadline(queryDeadline.Add(15 * time.Second)); deadlineErr != nil && !errors.Is(deadlineErr, http.ErrNotSupported) {
+		writeAPIError(w, http.StatusInternalServerError, "query_deadline_failed", "failed to configure query response deadline", nil)
+		return
+	}
 
 	var resp *service.QueryResponse
 	var browserOutcome browserQueryOutcome

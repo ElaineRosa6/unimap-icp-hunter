@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,5 +318,36 @@ func TestValidateBrowserQueryWorkflow_EmptyEnvelopeIsIncomplete(t *testing.T) {
 	}, true)
 	if err == nil || !strings.Contains(err.Error(), "no structured assets") {
 		t.Fatalf("empty collection envelope should be incomplete, got %v", err)
+	}
+}
+
+type emptyRowsCombinedRouter struct{ stubBrowserRouter }
+
+func (r *emptyRowsCombinedRouter) CollectAndCaptureSearchEngineResult(ctx context.Context, engine, query, id string) ([]collection.CollectResult, string, error) {
+	results, err := r.CollectSearchEngineResult(ctx, engine, query, id)
+	return results, "/tmp/evidence.png", err
+}
+func TestRunBrowserQueryAsyncReportsUnextractedRows(t *testing.T) {
+	for _, action := range []string{"collect", "collect_and_capture"} {
+		for _, rows := range []int{0, 10} {
+			t.Run(fmt.Sprintf("%s/rows=%d", action, rows), func(t *testing.T) {
+				router := &emptyRowsCombinedRouter{stubBrowserRouter{collectResults: map[string][]collection.CollectResult{"quake": {{Engine: "quake", RowsFound: rows, ExtractionMethod: "selector"}}}}}
+				svc := NewQueryAppService(nil, nil)
+				out := <-svc.RunBrowserQueryAsync(context.Background(), `port="80"`, []string{"quake"}, true, action, "rows-check", false, nil, nil, func(p string) string { return p }, router, nil)
+				if len(out.CollectedResults) != 1 {
+					t.Fatalf("lost collection evidence: %#v", out)
+				}
+				if rows == 0 && len(out.Errors) != 0 {
+					t.Fatalf("genuine zero results must remain valid: %v", out.Errors)
+				}
+				if rows > 0 && (len(out.Errors) != 1 || !strings.Contains(out.Errors[0], "10 DOM rows")) {
+					t.Fatalf("missing extraction diagnostic: %v", out.Errors)
+				}
+				merged := mergeBrowserQueryResponse(&QueryResponse{Assets: []model.UnifiedAsset{{IP: "192.0.2.1"}}}, out)
+				if rows > 0 && len(merged.Errors) == 0 {
+					t.Fatal("API assets masked browser extraction failure")
+				}
+			})
+		}
 	}
 }

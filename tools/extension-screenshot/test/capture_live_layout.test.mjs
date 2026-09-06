@@ -204,3 +204,44 @@ test("ENGINE_SELECTORS do not put generic result>div ahead of engine rows", () =
   assert.equal(ENGINE_SELECTORS.zoomeye.row.includes("[class*='result'] > div"), false);
   assert.equal(ENGINE_SELECTORS.daydaymap.row.includes("[class*='result'] > div"), false);
 });
+
+test("Quake dedicated login title is a login wall", async () => {
+  const result = await extractFromHTML('<html><head><title>登录 - 360网络空间资产测绘</title></head><body><input type="password"><button>登录</button></body></html>', 'https://quake.360.net/quake/#/searchResult');
+  assert.equal(result.is_login_wall, true);
+  assert.equal(result.items.length, 0);
+});
+
+test("Shodan challenge page is not an empty successful collection", async () => {
+  const result = await extractFromHTML('<html><head><title>Just a moment...</title></head><body>Verify you are human</body></html>', 'https://www.shodan.io/search?query=port%3A80');
+  assert.equal(result.browser_challenge, true);
+  assert.equal(result.extraction_method, 'browser_challenge');
+  assert.equal(result.items.length, 0);
+});
+
+test("Login link on a result page does not mark the page as a login wall", async () => {
+  const result = await extractFromHTML('<html><head><title>Search results</title></head><body><a>登录</a><div class="hsxa-meta-data-item"><span class="hsxa-host">203.0.113.8</span><span class="hsxa-port">80</span></div></body></html>', 'https://fofa.info/result');
+  assert.equal(result.is_login_wall, false);
+  assert.equal(result.items.length, 1);
+});
+
+test("Quake preserves visible domain card headers when the IP is masked", async () => {
+  const cards = Array.from({length:10}, (_,i)=>`<div class="item-container"><div class="ip"><span class="copy_btn" data-clipboard-text="asset${i}.example.test">asset${i}.example.test</span></div><span class="port">80</span><span class="server-protocol">http</span><span>122.*.*.*</span></div>`).join('');
+  const result = await extractFromHTML('<html><body>'+cards+'</body></html>', 'https://quake.360.net/quake/#/searchResult');
+  assert.equal(result.items.length,10);
+  assert.equal(result.items[0].host,'asset0.example.test');
+  assert.equal(result.items[0].ip || '', '');
+  assert.equal(result.items[0].port,80);
+});
+
+test("Quake CDP script preserves visible domain headers without fabricating IPs", async () => {
+  const {readFileSync} = await import('node:fs');
+  const {runInNewContext} = await import('node:vm');
+  const source = readFileSync(new URL('../../../internal/screenshot/dom_selectors.go',import.meta.url),'utf8');
+  const script = source.match(/const extractQuakeJS = `([\s\S]*?)`/)[1];
+  const {document} = parseHTML('<html><body><div class="item-container"><div class="ip"><span class="copy_btn" data-clipboard-text="asset.example.test">asset.example.test</span></div><span class="port">80</span></div></body></html>');
+  const result = JSON.parse(runInNewContext(script,{document}));
+  assert.equal(result.assets.length,1);
+  assert.equal(result.assets[0].host,'asset.example.test');
+  assert.equal(result.assets[0].ip || '', '');
+  assert.equal(result.assets[0].port,80);
+});

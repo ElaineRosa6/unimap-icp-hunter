@@ -416,6 +416,9 @@ const extractQuakeJS = `
       if (v4) {
         asset.ip = v4[1];
         if (v4[2]) asset.port = parseInt(v4[2], 10) || 0;
+      } else if (/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(clipText)) {
+        // Keep the visible domain when the site masks the IP.
+        asset.host = clipText.toLowerCase();
       }
     }
     // Port from span.port

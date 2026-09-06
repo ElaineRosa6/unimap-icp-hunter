@@ -1006,3 +1006,20 @@ func TestHandleGetAdminToken_WrongMethod(t *testing.T) {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }
+func TestBuildQueryAPIPayloadPreservesEngineFailure(t *testing.T) {
+	for _, count := range []int{0, 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			assets := make([]model.UnifiedAsset, count)
+			resp := &service.QueryResponse{Assets: assets, Errors: []string{"engine daydaymap: API unavailable"}}
+			outcome := browserQueryOutcome{Enabled: true, OpenedEngines: []string{"daydaymap"}, CollectedResults: []collection.CollectResult{{Engine: "daydaymap", Assets: assets}}}
+			payload := buildQueryAPIPayload(`port="80"`, []string{"daydaymap"}, resp, outcome, "collect_and_capture", true)
+			want := "error"
+			if count > 0 {
+				want = "partial"
+			}
+			if payload.Status != want || len(payload.Errors) != 1 || payload.Errors[0] != resp.Errors[0] {
+				t.Fatalf("status=%s errors=%v; want %s with preserved API diagnostic", payload.Status, payload.Errors, want)
+			}
+		})
+	}
+}
