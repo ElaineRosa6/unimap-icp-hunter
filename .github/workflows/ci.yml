@@ -181,6 +181,27 @@ jobs:
             node --check "$f"
           done
 
+      - name: Install extension test dependencies
+        working-directory: tools/extension-screenshot
+        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+
+      - name: Run extension regression tests
+        working-directory: tools/extension-screenshot
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-reporter=tap test/*.test.mjs | tee extension-tests.log
+
+      - name: Preserve extension test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-regression-${{ github.workflow }}
+          path: tools/extension-screenshot/extension-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
+
   # --- Real headless browser smoke test (no DISPLAY/Xvfb) ---
   headless-browser:
     name: Headless Browser E2E

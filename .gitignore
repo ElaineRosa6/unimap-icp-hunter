@@ -194,3 +194,6 @@ artifacts/
 
 # Local one-off verification output
 /tmp_*
+
+# Reproducible extension regression dependencies in CI
+!/tools/extension-screenshot/package-lock.json

@@ -452,3 +452,10 @@ SearchEnginesWithPaginationAndContext 在启动工作池之前检查非空查询
 ## 第48轮：DayDayMap卡片提取（双路径）
 
 当前卡片URL布局导致CDP零资产，实测与固定页面已复现。CDP和Extension同步补卡片标题解析；修复副本CDP获得10资产及PNG，扩展39项自动测试通过。Extension版本升为0.4.19供实机区分，实际加载和Bridge回传尚待验收，详见[分路径复验](CDP_EXTENSION_RECHECK_2026-09-06.md)。
+
+
+## 第49轮：扩展回归进入CI
+
+主CI与bridge-smoke此前仅做扩展语法检查，未执行39项Node回归。新增锁文件安装（显式dev依赖、禁用安装脚本）、完整测试、pipefail和始终保存测试日志。保留主CI的extension-scripts镜像依赖。此门禁覆盖模拟DOM/扩展API回归，不代替用户Chrome加载、活页或Bridge端到端验收。
+
+扩展测试锁文件原先被全局模式忽略；现仅为该目录增加Git例外并提交锁文件，包下载地址使用npm官方源，保留完整性校验。

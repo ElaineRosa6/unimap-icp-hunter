@@ -396,3 +396,10 @@ SearchEnginesWithPaginationAndContext 在启动工作池之前检查非空查询
 ### DayDayMap卡片结果与扩展验收
 
 2026-09-06补充：出现结果页PNG非空但资产0条时，先检查当前卡片布局和提取诊断，不因截图成功判采集成功。CDP及Extension 0.4.19支持卡片标题IP端点；扩展加载版本、活页与Bridge回传须独立验收，不能以Node测试或CDP替代。见[分路径复验](CDP_EXTENSION_RECHECK_2026-09-06.md)。
+
+
+### 扩展自动回归门禁
+
+主CI及bridge-smoke在语法检查后执行 `npm ci --include=dev --ignore-scripts --no-audit --no-fund`，再运行 `node --test --test-reporter=tap test/*.test.mjs`。扩展日志artifact名为 `extension-regression-<workflow>`，保存7天；测试非零退出阻止该任务通过，主CI镜像发布继续依赖extension-scripts。绿色日志只证明自动回归，不证明真实浏览器扩展或Bridge业务闭环。
+
+扩展测试锁文件原先被全局模式忽略；现仅为该目录增加Git例外并提交锁文件，包下载地址使用npm官方源，保留完整性校验。
