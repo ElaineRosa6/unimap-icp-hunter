@@ -503,6 +503,7 @@ export const ENGINE_SELECTORS = {
     // table tbody tr also matches the hidden ant-table-measure-row (no assets).
     // Columns: 序号, IP, 域名/访问链接, 端口, 服务, 传输...
     row: [
+      ".ant-pro-card > .ant-pro-card-header .ant-pro-card-title",
       "tr.ant-table-row",
       ".ant-table-row",
       "[class*='table-row']",
@@ -722,6 +723,27 @@ export async function extractEngineAssets(tabId) {
         const seenKeys = new Set();
         rows.forEach((row) => {
           if (String(row.className || "").includes("measure-row")) return;
+          if (eng === "daydaymap" && row.matches(".ant-pro-card-title")) {
+            for (const node of row.querySelectorAll("span, a")) {
+              const text = node.textContent.trim();
+              if (!/^https?:\/\//i.test(text) || /\s/.test(text)) continue;
+              try {
+                const endpoint = new URL(text);
+                if (endpoint.username || endpoint.password) continue;
+                const ip = endpoint.hostname.replace(/^\[|\]$/g, "");
+                const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && ip.split(".").every(part => Number(part) <= 255);
+                const ipv6 = endpoint.hostname.startsWith("[") && ip.includes(":");
+                if (!ipv4 && !ipv6) continue;
+                const port = endpoint.port ? Number(endpoint.port) : (endpoint.protocol === "https:" ? 443 : 80);
+                if (port < 1 || port > 65535) continue;
+                const key = endpoint.protocol + "|" + ip + "|" + port;
+                if (seenKeys.has(key)) continue;
+                seenKeys.add(key);
+                items.push({ip, port, protocol: endpoint.protocol.slice(0, -1)});
+              } catch { /* Not an asset endpoint URL. */ }
+            }
+            return;
+          }
           const cells = row.querySelectorAll("td");
           const item = {};
           const cellConfig = engineSelectors.cells;

@@ -664,7 +664,39 @@ const extractDayDayMapJS = `
     } catch(e) { continue; }
   }
   var assets = [];
-  for (var i = 0; i < rows.length; i++) {
+  // Current card view puts the endpoint URL in the card title, not an IP cell.
+  // Scope to card headers: arbitrary page links and nested response tables are
+  // not asset rows. Preserve distinct ports while deduplicating repeated titles.
+  var cardTitles = document.querySelectorAll('.ant-pro-card > .ant-pro-card-header .ant-pro-card-title');
+  var seenEndpoints = {};
+  for (var ct = 0; ct < cardTitles.length; ct++) {
+    var titleNodes = cardTitles[ct].querySelectorAll('span, a');
+    for (var cn = 0; cn < titleNodes.length; cn++) {
+      var endpointText = titleNodes[cn].textContent.trim();
+      if (!/^https?:\/\//i.test(endpointText) || /\s/.test(endpointText)) continue;
+      try {
+        var endpoint = new URL(endpointText);
+        if (endpoint.username || endpoint.password) continue;
+        var endpointIP = endpoint.hostname.replace(/^\[|\]$/g, '');
+        var ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(endpointIP) && endpointIP.split('.').every(function(part) { return Number(part) <= 255; });
+        var ipv6 = endpoint.hostname.charAt(0) === '[' && endpointIP.indexOf(':') >= 0;
+        if (!ipv4 && !ipv6) continue;
+        var endpointPort = endpoint.port ? Number(endpoint.port) : (endpoint.protocol === 'https:' ? 443 : 80);
+        if (endpointPort < 1 || endpointPort > 65535) continue;
+        var endpointKey = endpoint.protocol + '|' + endpointIP + '|' + endpointPort;
+        if (seenEndpoints[endpointKey]) continue;
+        seenEndpoints[endpointKey] = true;
+        assets.push({ip: endpointIP, port: endpointPort, protocol: endpoint.protocol.slice(0, -1), source: 'daydaymap'});
+      } catch (e) { continue; }
+    }
+  }
+  if (assets.length > 0) {
+    rows = cardTitles;
+    rowSelectorUsed = '.ant-pro-card > .ant-pro-card-header .ant-pro-card-title';
+  }
+  var cardView = assets.length > 0;
+
+  for (var i = 0; !cardView && i < rows.length; i++) {
     var row = rows[i];
     if ((row.className || '').indexOf('measure-row') >= 0) continue;
     var asset = {};
