@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -360,31 +359,14 @@ func (c *MemoryCache) cleanupExpired() {
 	c.lastCleanup = now
 }
 
-// GenerateCacheKey 生成缓存键
+// GenerateCacheKey hashes the exact adapter request, without interpreting engine
+// syntax. Case and whitespace (including inside literals) can affect results.
 func GenerateCacheKey(engineName, query string, page, pageSize int) string {
-	// 规范化查询字符串
-	normalizedQuery := normalizeQuery(query)
-
-	// 组合查询参数
-	cacheKey := fmt.Sprintf("%s:%s:%d:%d", engineName, normalizedQuery, page, pageSize)
-
-	// 使用MD5生成哈希值作为缓存键
+	// Length prefixes preserve field boundaries even when values contain colons.
+	// A version tag isolates entries created by the old lossy normalization.
+	cacheKey := fmt.Sprintf("query-v2:%d:%s:%d:%s:%d:%d", len(engineName), engineName, len(query), query, page, pageSize)
 	hash := md5.Sum([]byte(cacheKey))
 	return hex.EncodeToString(hash[:])
-}
-
-// normalizeQuery 规范化查询字符串
-func normalizeQuery(query string) string {
-	// 去除首尾空白
-	query = strings.TrimSpace(query)
-
-	// 转换为小写
-	query = strings.ToLower(query)
-
-	// 去除多余的空白
-	query = strings.Join(strings.Fields(query), " ")
-
-	return query
 }
 
 // RedisCache Redis缓存实现

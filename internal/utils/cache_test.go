@@ -292,23 +292,3 @@ func TestGenerateCacheKey_DifferentInputs(t *testing.T) {
 		t.Error("Different pages should produce different keys")
 	}
 }
-
-func TestNormalizeQuery(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"  Domain=\"test\"  ", "domain=\"test\""},
-		{"DOMAIN=\"TEST\"", "domain=\"test\""},
-		{"ip=\"1.1.1.1\"  AND  port=\"80\"", "ip=\"1.1.1.1\" and port=\"80\""},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			if got := normalizeQuery(tt.input); got != tt.want {
-				t.Errorf("normalizeQuery() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
