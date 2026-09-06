@@ -352,3 +352,10 @@ docker build --build-arg 'GOPROXY=https://goproxy.cn|https://proxy.golang.org|di
 引擎编排器的单页、分页缓存使用版本化键，包含引擎名、完整查询字节、页码与页大小。缓存层不再转小写或折叠空白；完全相同请求仍可命中，格式不同但语义相同的请求也可能分别占用缓存。
 
 升级后旧 Redis 查询结果键不再命中，按原 TTL 自然过期，无需清空共享 Redis。首次查询可能增加上游请求量，应观察配额与命中率。回退旧二进制会恢复旧键算法及其误命中风险。此变更不修改统一查询服务自己的缓存键协议，也不是 Redis 实机验收。
+
+
+## 完整查询快照缓存（2026-09-06）
+
+统一查询服务通过 QuerySnapshotCache 一次发布/读取资产及统计、错误信息。内存快照同属一个条目及有效期；Redis 用 `query-snapshot:v1:` 命名空间下单个 JSON envelope 和单次带 TTL 的 SET，读取只执行一次 GET。旧分离资产/元数据键不参与新协议，按原 TTL 回收；首次命中率下降可能增加上游配额消耗，无需清空共享 Redis。
+
+仅支持旧 QueryCache/QueryCacheMetadataCache 的自定义后端跳过服务级查询缓存，查询本身继续执行；引擎资产缓存接口保留。Delete/Clear 清理新快照。Redis 协议本轮以客户端命令拦截 fixture 验证，不代表真实 Redis 服务、网络故障或集群验收。Redis JSON 数值解码沿用原后端语义；内存快照沿用资产类型保留的深复制。回退旧二进制会恢复旧双键读写及其跨代风险。

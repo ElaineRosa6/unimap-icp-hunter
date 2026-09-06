@@ -82,11 +82,12 @@ type metadataItem struct {
 
 // cacheItem 缓存项
 type cacheItem struct {
-	assets     []model.UnifiedAsset
-	expiryTime time.Time
-	lastAccess time.Time
-	accessIdx  uint64
-	accessFreq int // 访问频率计数
+	queryMetadata *QueryCacheMetadata
+	assets        []model.UnifiedAsset
+	expiryTime    time.Time
+	lastAccess    time.Time
+	accessIdx     uint64
+	accessFreq    int // 访问频率计数
 }
 
 // NewMemoryCache 创建内存缓存
@@ -170,11 +171,12 @@ func (c *MemoryCache) Get(key string) ([]model.UnifiedAsset, bool) {
 	c.accessCounter++
 	item.accessFreq++ // 增加访问频率计数
 	c.cache[key] = cacheItem{
-		assets:     item.assets,
-		expiryTime: item.expiryTime,
-		lastAccess: time.Now(),
-		accessIdx:  c.accessCounter,
-		accessFreq: item.accessFreq,
+		assets:        item.assets,
+		queryMetadata: item.queryMetadata,
+		expiryTime:    item.expiryTime,
+		lastAccess:    time.Now(),
+		accessIdx:     c.accessCounter,
+		accessFreq:    item.accessFreq,
 	}
 
 	c.hits++
@@ -615,7 +617,7 @@ func (c *RedisCache) SetQueryMetadata(key string, metadata QueryCacheMetadata, d
 // Delete 从缓存中删除查询结果
 func (c *RedisCache) Delete(key string) {
 	fullKey := c.prefix + key
-	c.client.Del(c.ctx, fullKey, fullKey+":query-metadata")
+	c.client.Del(c.ctx, fullKey, fullKey+":query-metadata", c.querySnapshotKey(key))
 }
 
 func cloneQueryCacheMetadata(metadata QueryCacheMetadata) QueryCacheMetadata {

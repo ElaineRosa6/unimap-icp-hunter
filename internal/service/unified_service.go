@@ -248,9 +248,8 @@ func (s *UnifiedService) Query(ctx context.Context, req QueryRequest) (*QueryRes
 
 	if len(allAssets) > 0 {
 		cacheTTL := s.resolveCacheTTL(req)
-		s.cache.Set(cacheKey, allAssets, cacheTTL)
-		if metadataCache, ok := s.cache.(utils.QueryCacheMetadataCache); ok {
-			metadataCache.SetQueryMetadata(cacheKey, utils.QueryCacheMetadata{
+		if snapshotCache, ok := s.cache.(utils.QuerySnapshotCache); ok {
+			snapshotCache.SetQuerySnapshot(cacheKey, allAssets, utils.QueryCacheMetadata{
 				EngineStats: engineStats,
 				Errors:      queryErrors,
 			}, cacheTTL)
@@ -300,16 +299,12 @@ func (s *UnifiedService) buildQueryCacheKey(req QueryRequest) string {
 
 // handleCachedQueryResult 处理缓存命中逻辑，返回 (响应, true) 表示命中
 func (s *UnifiedService) handleCachedQueryResult(ctx context.Context, req QueryRequest, cacheKey string) (*QueryResponse, bool) {
-	cachedAssets, found := s.cache.Get(cacheKey)
+	snapshotCache, ok := s.cache.(utils.QuerySnapshotCache)
+	if !ok {
+		return nil, false
+	}
+	cachedAssets, metadata, found := snapshotCache.GetQuerySnapshot(cacheKey)
 	if !found {
-		return nil, false
-	}
-	metadataCache, ok := s.cache.(utils.QueryCacheMetadataCache)
-	if !ok {
-		return nil, false
-	}
-	metadata, ok := metadataCache.GetQueryMetadata(cacheKey)
-	if !ok {
 		return nil, false
 	}
 	metrics.ObserveCacheLookup(s.cacheBackend, "hit")
