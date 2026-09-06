@@ -26,6 +26,13 @@
 <body>
   <h1>Unimap Screenshot Bridge</h1>
 
+  <section class="card" aria-label="Bridge connection status">
+    <h2 style="font-size:16px;margin-bottom:12px">连接状态 / Connection status</h2>
+    <p id="bridgeStatus" role="status" aria-live="polite" style="white-space:pre-line;margin-bottom:12px">正在读取本机状态…</p>
+    <button class="btn-primary" id="refreshStatusBtn" type="button">刷新状态 / Refresh</button>
+    <p class="hint" style="margin-top:12px">此处仅显示诊断，不展示凭据。无需登录 Chrome 同步账号；站点登录与 Bridge 配对分别核验。</p>
+  </section>
+
   <div class="card">
     <label for="apiBaseURL">Loopback API Base URL</label>
     <p class="hint">

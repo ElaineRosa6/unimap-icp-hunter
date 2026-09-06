@@ -433,8 +433,8 @@ async function bridgeLoop() {
         }
       }
 
-      await saveRuntimeState({ paired: true });
       const task = await pollTaskOnce(token);
+      await saveRuntimeState({ paired: true, last_poll_at: Date.now() });
       if (task && task.request_id && task.url) {
         await handleTask(task, token);
       }
@@ -476,3 +476,8 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 bridgeLoop();
+
+// Toolbar entry point for connection diagnostics and pairing settings.
+chrome.action.onClicked.addListener(() => {
+  chrome.runtime.openOptionsPage();
+});

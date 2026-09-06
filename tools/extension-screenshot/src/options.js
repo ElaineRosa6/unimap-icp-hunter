@@ -1,3 +1,4 @@
+import { renderBridgeStatus } from "./status.js";
 import { normalizeLoopbackAPIBaseURL } from "./bridge_url.js";
 import { loadAPIBaseURL, saveAPIBaseURL } from "./storage.js";
 
@@ -61,3 +62,15 @@ if (inspectMode === "1" || inspectMode === "2" || inspectMode === "ddm") {
     document.body.prepend(el);
   });
 }
+
+async function refreshBridgeStatus() {
+  const element = document.getElementById("bridgeStatus");
+  try {
+    const data = await chrome.storage.local.get(["bridgeRuntimeState"]);
+    renderBridgeStatus(element, chrome.runtime.getManifest().version, data.bridgeRuntimeState || {});
+  } catch {
+    element.textContent = "状态读取失败，请重新加载扩展后再试。";
+  }
+}
+document.getElementById("refreshStatusBtn").addEventListener("click", refreshBridgeStatus);
+refreshBridgeStatus();

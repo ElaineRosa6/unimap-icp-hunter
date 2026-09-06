@@ -165,3 +165,7 @@ go test -tags live_bridge_e2e ./web -run '^TestLiveAPIScheduledQueryNotification
 2026-09-06 已登录活页 DOM 的10张结果卡片，其 div.ip span.copy_btn 的 data-clipboard-text 为完整域名，而IP被站点遮蔽。旧提取器仅识别该字段的IPv4，导致无Hostname详情的域名卡片丢失。Extension与原生CDP脚本现在保留合法可见域名为host，ip保持空，不解析DNS、不推测遮蔽IP、不请求资产链接。原有IPv4路径与Hostname详情保留。
 
 回归先失败后通过，Node共44项通过（包含直接执行Go内嵌Quake提取脚本的测试）。这是活页DOM定位与固定fixture验证；0.4.21仍待浏览器重新加载后的任务回传验收，不等同于独立CDP已登录成功。
+
+### 0.4.22 设置页连接诊断
+
+重新加载扩展后，点击工具栏 UniMap 图标打开设置页，顶部提供运行版本、最近成功轮询时间与手动刷新按钮。无需寻找另一个弹窗或共享 token。仅成功拉取任务接口后记录 last_poll_at；30秒内标记最近轮询成功，超时标记状态过期（可能执行长任务、后台休眠或断连），不单凭 paired 声明在线。显示采用固定诊断文案，不回显原始错误或凭据。该功能不替代各引擎实测与服务端 readiness。0.4.22 源码与浏览器实际加载版本仍须分别确认。
